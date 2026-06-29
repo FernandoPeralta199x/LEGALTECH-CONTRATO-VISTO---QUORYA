@@ -23,9 +23,9 @@
 | **A** | **Auth/Users** (login + CRUD + forgot/reset + `jwt_authorizer`; signup→viewer; reset token hasheado/atômico; anti-timing; sem PII) | ✅ concluída+endurecida (**45 testes**) |
 | 3 | `clients` (catálogo compartilhado, RBAC writer, sem RLS) | ✅ concluída+endurecida (**61 testes**) |
 | 4 | `documents` (S3 presigned + RLS por `uploaded_by`) | ✅ concluída+endurecida (**69 testes**) |
-| 5 | `search` / RAG (pgvector + embeddings, RLS na busca) | ✅ concluída (**74 testes**), Codex revisando |
-| 6 | services + remover código morto + requirements (boto3/openai; tirar FastAPI) | ✅ concluída (**74 testes**), Codex revisando |
-| **E2E** | **GATE antes do deploy:** E2E completo → loop (corrigir→E2E) **até zerar erros** → varredura final (migração completa, sem código morto, qualidade) | roadmap |
+| 5 | `search` / RAG (pgvector + embeddings, RLS na busca) | ✅ concluída+endurecida (**74 testes**) |
+| 6 | services + remover código morto + requirements (boto3/openai; tirar FastAPI) | ✅ concluída (código morto **zerado**) |
+| **E2E** | **GATE antes do deploy:** E2E da cadeia real ✅ (loop zerado) + varredura: migração 100% (28 fns), **sem código morto**, sem legado/`str(e)` — `health` migrado | ✅ **79 testes**; auditoria de qualidade (Codex) |
 | 7 | hardening + **deploy AWS** (só após E2E verde + autorização) | roadmap |
 
 ### O que já foi feito (commits locais, branch `feat/migracao-fase-0-1`)
@@ -155,6 +155,21 @@ Aplicado o default mais seguro; confirmar com o usuário:
    **não** vê documentos de outro; `assigned_to` do case **não** concede acesso. Se o
    produto for colaborativo (equipe/organização compartilha o case), rever as RLS
    policies (ex.: visível se o case for visível / por organização).
-6. **Services não-integrados** (`cache`, `analytics`, `rate_limit`, `webhooks`): sem
-   handler/endpoint, usam `db` legado/`str(e)`. Decidir na E2E: **remover** (código
-   morto) ou **integrar na Fase 7** (rate_limit/webhooks são úteis p/ hardening/infra).
+6. ~~Services não-integrados~~ ✅ **resolvido na Fase 6**: `cache`/`analytics`/
+   `rate_limit`/`webhooks` foram **removidos** (código morto). Se a Fase 7 precisar de
+   rate limiting/webhooks, reimplementar alinhado (não herdar o código antigo).
+
+## Auditoria de qualidade (E2E — passo 3)
+
+**Migração completa ✅:** 28 funções do `serverless.yml` com handler; **zero** resíduo
+FastAPI/SQLAlchemy/Mangum; `health` migrado; schema real respeitado; pgvector cosine.
+**Código morto ✅ zerado:** removidos `users_new`, `decorators`, `audit`, `cache`,
+`analytics`, `rate_limit`, `webhooks`, `exceptions`, `validators`, `Database`/`db`
+legado, `verify_token` e helpers não-usados. **Sem `str(e)` ao cliente; sem PII em log.**
+**Consistência (forte):** todos os handlers seguem o mesmo padrão (`enforce_production_safety`
+no import; `@require_user`+RBAC; `tenant_tx` p/ tabelas com RLS e `simple_tx` p/ as sem;
+Pydantic 2 `extra="forbid"`; `_valid_uuid`; erro sanitizado `type(e).__name__`+`pgcode`).
+**79 testes** no PG18 (unit por fase + **E2E da cadeia real** login→authorizer→handlers).
+**Melhoria menor (opcional):** `_parse_body`/`_valid_uuid`/`_fmt` repetem entre handlers
+(trade-off aceitável em Lambda; extraível p/ util). **Pendente:** auditoria de qualidade
+externa do Codex (bateu limite de uso; refazer depois).
