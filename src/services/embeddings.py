@@ -35,7 +35,11 @@ class EmbeddingsService:
 
     def _openai(self, text: str):
         import openai  # import tardio: só quando o backend real é usado
-        client = openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        client = openai.OpenAI(
+            api_key=os.environ["OPENAI_API_KEY"],
+            timeout=float(os.getenv("OPENAI_TIMEOUT", "10")),
+            max_retries=int(os.getenv("OPENAI_MAX_RETRIES", "2")),
+        )
         resp = client.embeddings.create(model=self.model, input=text)
         return resp.data[0].embedding
 

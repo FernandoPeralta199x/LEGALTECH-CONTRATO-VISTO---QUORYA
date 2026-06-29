@@ -263,6 +263,8 @@ validar no PG18 → commit. Repetir para create/get/list/update/delete de cada u
 | `authorizers/jwt_authorizer.py` | logava `email`(PII)/`str(e)` → sanitizado; context sem email | **A ✅** |
 | auth: **revogação/versionamento de sessão** (token obsoleto após demote/delete/reset/troca de senha) | **7** |
 | auth: **rate limiting / brute-force** (signup/login/forgot/reset; avaliar `services/rate_limit.py` + API GW/WAF) | **7** |
+| deploy: backends por stage (`EMBEDDINGS_BACKEND=openai`+`OPENAI_API_KEY` via SSM; `STORAGE_BACKEND=s3`; `EMAIL_BACKEND=ses`) + safety p/ chave OpenAI ausente | **7** |
+| RAG: pipeline assíncrono de **ingestão** (chunking/embeddings/status/idempotência) sem endpoint hoje; validar índice vetorial com `EXPLAIN ANALYZE` em volume | **7** |
 | auth: **auditoria persistente** de role/status/delete/reset (hoje só CloudWatch) | **6** |
 | `utils/auth.py` | decorator `require_role` legado com lógica furada (não usado) → remover | **6** |
 | `serverless.yml` | authorizer não plugado; `JWT_SECRET` hardcoded; `ENVIRONMENT` hardcoded | **1/A ✅** |
