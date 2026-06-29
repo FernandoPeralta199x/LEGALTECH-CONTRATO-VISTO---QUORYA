@@ -28,6 +28,8 @@ def enforce_production_safety():
         violations.append("EMAIL_BACKEND=log/mock em ambiente produtivo (sem envio real)")
     if os.getenv("STORAGE_BACKEND", "local") in ("local", "mock"):
         violations.append("STORAGE_BACKEND=local/mock em ambiente produtivo (sem S3 real)")
+    if os.getenv("EMBEDDINGS_BACKEND", "mock") == "mock":
+        violations.append("EMBEDDINGS_BACKEND=mock em ambiente produtivo (embeddings falsos)")
 
     if violations:
         message = f"BOOT BLOQUEADO ({environment}): " + "; ".join(violations)

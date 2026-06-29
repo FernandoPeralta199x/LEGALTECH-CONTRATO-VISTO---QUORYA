@@ -142,6 +142,7 @@ functions:
           path: search
           method: post
           cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
 
   # TIER 1 - Users
   createUser:
