@@ -187,6 +187,15 @@ def tenant_tx(user_id: str, role: str):
       `authorizer.context`. Erros **nunca** retornam `str(e)`; logs sem PII.
 - [ ] **1.4** **Role de app não-owner** (sem `BYPASSRLS`) — a RLS só vale se o app
       não for owner. Documentar criação do role + grants mínimos.
+- [ ] **1.4.1** **Completar as policies RLS (DDL — alinhar com o dev).**
+      *Validado na Fase 0:* hoje só existe `case_owner_access` **FOR SELECT** em
+      `cases`; não há policy de INSERT/UPDATE/DELETE em `cases`, e
+      `case_results`/`documents` têm RLS habilitada **sem nenhuma policy** → com
+      role não-owner, escrita é **negada** (`new row violates row-level security
+      policy`). Criar policies `FOR INSERT/UPDATE/DELETE` (ex.: `WITH CHECK
+      (created_by = current_setting('app.user_id')::uuid OR
+      current_setting('app.user_role')='admin')`) para `cases`, e policies de
+      SELECT + escrita para `case_results`/`documents`. Versionar como migration.
 - [ ] **1.5** `serverless.yml`: associar o **JWT Authorizer** às rotas a migrar;
       `JWT_SECRET_KEY` via **SSM** (não hardcoded).
 - [ ] **1.6** **Teste de RLS** (role não-owner): A não vê `case` de B; admin vê;
@@ -255,6 +264,8 @@ validar no PG18 → commit. Repetir para create/get/list/update/delete de cada u
 | `authorizers/jwt_authorizer.py` | loga `email` (PII) | 1 |
 | `utils/auth.py` | fallback de segredo `'sua-chave-secreta-aqui'` | 1 |
 | transversal | falta `statement_timeout` / idempotência de POST / limite de concorrência | 1-2 |
+| **banco (RLS)** | só `case_owner_access` FOR SELECT em `cases`; sem policy de INSERT/UPDATE/DELETE; `case_results`/`documents` com RLS **sem policy** → escrita negada p/ role não-owner (**validado na Fase 0**) | 1 |
+| `test_connection.py` | prints com emoji quebram no console cp1252 (Windows) → usar `PYTHONIOENCODING=utf-8`/ASCII | baixa |
 
 ---
 
