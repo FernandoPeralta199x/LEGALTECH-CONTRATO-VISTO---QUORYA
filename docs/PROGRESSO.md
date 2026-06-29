@@ -20,7 +20,7 @@
 | 0 | Ambiente local (PG18 + role não-owner) | ✅ concluída |
 | 1 | Fundação RLS-aware + policies + auditoria | ✅ concluída (**13 testes**), revisada pelo Codex |
 | 2 | `cases` + `case_results` (RLS-aware + authorizer + **RBAC viewer** + **INSERT atômico**) | ✅ concluída (**25 testes**), revisada+endurecida (Codex) |
-| **A** | **Auth/Users** (login + CRUD + forgot/reset + `jwt_authorizer`; signup→viewer; sem PII; código morto removido) | ✅ concluída (**42 testes**), Codex revisando |
+| **A** | **Auth/Users** (login + CRUD + forgot/reset + `jwt_authorizer`; signup→viewer; reset token hasheado/atômico; anti-timing; sem PII) | ✅ concluída+endurecida (**45 testes**) |
 | 3 | `clients` | ⏳ próxima |
 | 4 | `documents` (S3) | roadmap |
 | 5 | `search` / RAG | roadmap |

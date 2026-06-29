@@ -258,10 +258,14 @@ validar no PG18 → commit. Repetir para create/get/list/update/delete de cada u
 | `handlers/clients.py` + schema | colunas inexistentes (`name`, `cpf_cnpj`, `type`, `created_by`) | 3 |
 | `services/rag.py` | INSERT em `content`/`ON CONFLICT(document_id)` inexistentes | 5 |
 | `services/audit.py` | coluna `status` inexistente em `audit.audit_log`/`data_access_log` | 6 |
-| `handlers/users.py` | importa `src.services.email` inexistente; defaults de segredo inseguros | **A** |
-| `handlers/users_new.py` | código morto / duplicado de auth → remover | **A** |
-| `authorizers/jwt_authorizer.py` | shape do context (corrigido na Fase 2 no consumidor); **ainda loga `email` (PII)** → sanitizar | **A** |
-| `serverless.yml` | authorizer não plugado; `JWT_SECRET` hardcoded | 1/dev |
+| `handlers/users.py` | email inexistente; defaults inseguros; escalada via signup; PII em log; reset token em claro; timing | **A ✅** |
+| `handlers/users_new.py` | código morto / duplicado de auth | **A ✅ (removido)** |
+| `authorizers/jwt_authorizer.py` | logava `email`(PII)/`str(e)` → sanitizado; context sem email | **A ✅** |
+| auth: **revogação/versionamento de sessão** (token obsoleto após demote/delete/reset/troca de senha) | **7** |
+| auth: **rate limiting / brute-force** (signup/login/forgot/reset; avaliar `services/rate_limit.py` + API GW/WAF) | **7** |
+| auth: **auditoria persistente** de role/status/delete/reset (hoje só CloudWatch) | **6** |
+| `utils/auth.py` | decorator `require_role` legado com lógica furada (não usado) → remover | **6** |
+| `serverless.yml` | authorizer não plugado; `JWT_SECRET` hardcoded; `ENVIRONMENT` hardcoded | **1/A ✅** |
 | `utils/safety.py` | usa `APP_ENV`, mas o yml define `ENVIRONMENT` → trava nunca ativa | 1 |
 | `schemas/*` | Pydantic 2 com `Field(..., regex=...)` (deve ser `pattern=`) → schemas quebram | 2/3 |
 | múltiplos handlers | retornam `str(e)` ao cliente (vaza detalhe interno) | 1-2 |
