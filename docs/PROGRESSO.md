@@ -23,8 +23,8 @@
 | **A** | **Auth/Users** (login + CRUD + forgot/reset + `jwt_authorizer`; signup→viewer; reset token hasheado/atômico; anti-timing; sem PII) | ✅ concluída+endurecida (**45 testes**) |
 | 3 | `clients` (catálogo compartilhado, RBAC writer, sem RLS) | ✅ concluída+endurecida (**61 testes**) |
 | 4 | `documents` (S3 presigned + RLS por `uploaded_by`) | ✅ concluída+endurecida (**69 testes**) |
-| 5 | `search` / RAG (pgvector + embeddings) | ⏳ próxima |
-| 6 | services + remover código morto | roadmap |
+| 5 | `search` / RAG (pgvector + embeddings, RLS na busca) | ✅ concluída (**74 testes**), Codex revisando |
+| 6 | services + remover código morto + requirements (boto3/openai; tirar FastAPI) | ⏳ próxima |
 | **E2E** | **GATE antes do deploy:** E2E completo → loop (corrigir→E2E) **até zerar erros** → varredura final (migração completa, sem código morto, qualidade) | roadmap |
 | 7 | hardening + **deploy AWS** (só após E2E verde + autorização) | roadmap |
 
