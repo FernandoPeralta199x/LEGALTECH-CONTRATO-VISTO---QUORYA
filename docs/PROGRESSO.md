@@ -24,7 +24,7 @@
 | 3 | `clients` (catálogo compartilhado, RBAC writer, sem RLS) | ✅ concluída+endurecida (**61 testes**) |
 | 4 | `documents` (S3 presigned + RLS por `uploaded_by`) | ✅ concluída+endurecida (**69 testes**) |
 | 5 | `search` / RAG (pgvector + embeddings, RLS na busca) | ✅ concluída (**74 testes**), Codex revisando |
-| 6 | services + remover código morto + requirements (boto3/openai; tirar FastAPI) | ⏳ próxima |
+| 6 | services + remover código morto + requirements (boto3/openai; tirar FastAPI) | ✅ concluída (**74 testes**), Codex revisando |
 | **E2E** | **GATE antes do deploy:** E2E completo → loop (corrigir→E2E) **até zerar erros** → varredura final (migração completa, sem código morto, qualidade) | roadmap |
 | 7 | hardening + **deploy AWS** (só após E2E verde + autorização) | roadmap |
 
@@ -155,3 +155,6 @@ Aplicado o default mais seguro; confirmar com o usuário:
    **não** vê documentos de outro; `assigned_to` do case **não** concede acesso. Se o
    produto for colaborativo (equipe/organização compartilha o case), rever as RLS
    policies (ex.: visível se o case for visível / por organização).
+6. **Services não-integrados** (`cache`, `analytics`, `rate_limit`, `webhooks`): sem
+   handler/endpoint, usam `db` legado/`str(e)`. Decidir na E2E: **remover** (código
+   morto) ou **integrar na Fase 7** (rate_limit/webhooks são úteis p/ hardening/infra).
