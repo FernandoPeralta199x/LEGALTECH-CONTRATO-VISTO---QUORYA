@@ -14,7 +14,7 @@ provider:
     DB_NAME: contrato_visto
     ENVIRONMENT: dev
     LOG_LEVEL: INFO
-    JWT_SECRET_KEY: sua-chave-secreta-aqui
+    JWT_SECRET_KEY: ${ssm:/contrato-visto/jwt_secret}
 
   iamRoleStatements:
     - Effect: Allow
@@ -38,6 +38,10 @@ provider:
       Resource: "*"
 
 functions:
+  # JWT Authorizer (protege rotas autenticadas; injeta user_id/email/role)
+  jwtAuthorizer:
+    handler: src/authorizers/jwt_authorizer.authorize
+
   # TIER 1 - Health
   health:
     handler: src/handlers/health.health_check
@@ -59,6 +63,7 @@ functions:
           path: cases
           method: post
           cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
 
   getCase:
     handler: src/handlers/cases.get_case
@@ -69,6 +74,7 @@ functions:
           path: cases/{caseId}
           method: get
           cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
 
   listCases:
     handler: src/handlers/cases.list_cases
@@ -79,6 +85,7 @@ functions:
           path: cases
           method: get
           cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
 
   updateCase:
     handler: src/handlers/cases.update_case
@@ -89,6 +96,7 @@ functions:
           path: cases/{caseId}
           method: put
           cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
 
   deleteCase:
     handler: src/handlers/cases.delete_case
@@ -99,6 +107,7 @@ functions:
           path: cases/{caseId}
           method: delete
           cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
 
   # TIER 1 - Documents
   uploadDocument:
@@ -269,6 +278,7 @@ functions:
           path: case-results
           method: post
           cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
 
   getCaseResult:
     handler: src/handlers/case_results.get_case_result
@@ -279,6 +289,7 @@ functions:
           path: case-results/{resultId}
           method: get
           cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
 
   listCaseResults:
     handler: src/handlers/case_results.list_case_results
@@ -289,6 +300,7 @@ functions:
           path: case-results
           method: get
           cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
 
   updateCaseResult:
     handler: src/handlers/case_results.update_case_result
@@ -299,6 +311,7 @@ functions:
           path: case-results/{resultId}
           method: put
           cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
 
   deleteCaseResult:
     handler: src/handlers/case_results.delete_case_result
@@ -309,8 +322,15 @@ functions:
           path: case-results/{resultId}
           method: delete
           cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
 
 custom:
+  # Config reutilizável do JWT Authorizer (referência: ${self:custom.jwtAuthorizer})
+  jwtAuthorizer:
+    name: jwtAuthorizer
+    type: token
+    identitySource: method.request.header.Authorization
+    resultTtlInSeconds: 0
   pythonRequirements:
     dockerizePip: true 
     slim: true

@@ -18,7 +18,7 @@
 |------|--------|--------|
 | 0 | Ambiente local (PG18 + role não-owner) | ✅ concluída |
 | 1 | Fundação RLS-aware + policies + auditoria | ✅ concluída (**13 testes**), revisada pelo Codex |
-| 2 | `cases` + `case_results` | ⏳ próxima |
+| 2 | `cases` + `case_results` (handlers RLS-aware + authorizer nas rotas) | ✅ concluída (20 testes) |
 | 3 | `clients` | roadmap |
 | 4 | `documents` (S3) | roadmap |
 | 5 | `search` / RAG | roadmap |
