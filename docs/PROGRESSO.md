@@ -165,7 +165,13 @@ legado, `verify_token` e helpers não-usados. **Sem `str(e)` ao cliente; sem PII
 **Consistência (forte):** todos os handlers seguem o mesmo padrão (`enforce_production_safety`
 no import; `@require_user`+RBAC; `tenant_tx` p/ tabelas com RLS e `simple_tx` p/ as sem;
 Pydantic 2 `extra="forbid"`; `_valid_uuid`; erro sanitizado `type(e).__name__`+`pgcode`).
-**79 testes** no PG18 (unit por fase + **E2E da cadeia real** login→authorizer→handlers).
-**Melhoria menor (opcional):** `_parse_body`/`_valid_uuid`/`_fmt` repetem entre handlers
-(trade-off aceitável em Lambda; extraível p/ util). **Pendente:** auditoria de qualidade
-externa do Codex (bateu limite de uso; refazer depois).
+**81 testes** no PG18 (unit por fase + **E2E da cadeia real** login→authorizer→handlers).
+
+### Auditoria de qualidade do Codex (29/06) — concluída
+Nota geral: *"bem programado no núcleo"*. Achados **incorporados**: Alta-01 (package
+exclui `.env`/`.venv`/`docs` — não vaza secrets), Alta-03 (mascarar PII p/ viewer),
+Média-04 (`search` checa case antes do embedding), Média-07 (paginação em
+`case_results`/`list_users`), Baixa-08 (checksum CPF/CNPJ), Baixa-09/C (DRY: helpers
+extraídos p/ `utils/lambda_io.py`). **Diferidos p/ Fase 7** (prontidão de produção):
+**Alta-02** revogação/versionamento de sessão; **Média-05** confirmação pós-upload
+(`HeadObject`/checksum/limite); **Média-06** backends reais por stage via SSM.
