@@ -139,25 +139,21 @@ o usuário.**
 > correção → corrigir → E2E, **em loop até zerar**; (3) varredura final de migração
 > completa, código morto e qualidade do código.
 
-## Decisões de produto pendentes (resolver no gate E2E / antes do deploy)
+## Decisões de produto (resolvidas com o usuário em 29/06)
 
-Aplicado o default mais seguro; confirmar com o usuário:
-1. **Signup público** cria `viewer` (Fase A). Se o onboarding for admin-only,
-   restringir `create_user` ao authorizer + admin.
-2. **`viewer` vê PII completa** de clients (`document_number`/email/phone/endereço)
-   em get/list (Fase 3). Se proibido por LGPD/negócio, mascarar p/ viewer.
-3. **`get_client` retorna inativos** (soft-deleted) a qualquer autenticado se souber
-   o UUID. Confirmar se é intencional.
-4. **Sem checksum de CPF/CNPJ** (só tamanho/tipo). Avaliar validar dígito verificador
-   (LegalTech). Auditoria de escrita de `clients` (sem trigger) → avaliar na Fase 6.
-5. **Modelo de visibilidade (cases/case_results/documents)** — **decisão importante:**
-   hoje é por **dono** (`created_by`/`uploaded_by`) + admin. Um colega que vê o case
-   **não** vê documentos de outro; `assigned_to` do case **não** concede acesso. Se o
-   produto for colaborativo (equipe/organização compartilha o case), rever as RLS
-   policies (ex.: visível se o case for visível / por organização).
-6. ~~Services não-integrados~~ ✅ **resolvido na Fase 6**: `cache`/`analytics`/
-   `rate_limit`/`webhooks` foram **removidos** (código morto). Se a Fase 7 precisar de
-   rate limiting/webhooks, reimplementar alinhado (não herdar o código antigo).
+1. **Signup** → **mantido público criando `viewer`** (decisão do usuário). Sem mudança.
+2. **PII p/ viewer** → **MASCARAR `document_number`** para `viewer` (analyst/admin veem
+   completo). **A IMPLEMENTAR** em `clients` (get/list). [LGPD]
+3. **`get` de inativos** → **mantido visível** (não ocultar). Sem mudança.
+4. **Checksum CPF/CNPJ** → **VALIDAR dígito verificador** no schema. **A IMPLEMENTAR**
+   em `client_schemas`.
+5. **Modelo de visibilidade** → **opção 1: por dono + admin (atual)** — sem mudança de
+   RLS. *Obs.: o usuário pediu revisar o relatório pendente do Codex (auditoria de
+   qualidade) antes de fechar este item.*
+6. ~~Services não-integrados~~ ✅ removidos na Fase 6 (código morto).
+
+**A implementar agora (decisão A):** mascaramento de PII p/ viewer + checksum CPF/CNPJ.
+Depois: melhoria DRY (C). Antes, revisar o laudo de qualidade do Codex.
 
 ## Auditoria de qualidade (E2E — passo 3)
 
