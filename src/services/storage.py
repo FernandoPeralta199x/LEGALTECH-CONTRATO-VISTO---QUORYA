@@ -12,6 +12,7 @@ Config: ``STORAGE_BACKEND``, ``DOCUMENTS_BUCKET``, ``PRESIGNED_EXPIRES`` (s),
 ``AWS_REGION``.
 """
 import os
+import re
 
 
 class StorageService:
@@ -22,8 +23,12 @@ class StorageService:
 
     @staticmethod
     def build_key(case_id: str, doc_id: str, file_name: str) -> str:
-        """Chave S3 do objeto. `file_name` é só rótulo final; o caminho usa IDs."""
-        safe_name = os.path.basename(str(file_name)).replace("/", "_").replace("\\", "_")
+        """Chave S3 do objeto. `file_name` é só rótulo final; o caminho usa IDs.
+
+        Sanitiza o nome (sem traversal/separadores); usa fallback se ficar vazio.
+        """
+        base = os.path.basename(str(file_name)).replace("\\", "/").split("/")[-1]
+        safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", base).strip("._") or "arquivo"
         return f"cases/{case_id}/documents/{doc_id}/{safe_name}"
 
     def object_url(self, key: str) -> str:

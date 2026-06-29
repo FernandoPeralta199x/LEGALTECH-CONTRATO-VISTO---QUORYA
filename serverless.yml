@@ -15,6 +15,7 @@ provider:
     ENVIRONMENT: ${self:provider.stage}
     LOG_LEVEL: INFO
     JWT_SECRET_KEY: ${ssm:/contrato-visto/jwt_secret}
+    DOCUMENTS_BUCKET: contrato-visto-documents-${self:provider.stage}
 
   iamRoleStatements:
     - Effect: Allow
@@ -25,7 +26,7 @@ provider:
       Action:
         - s3:GetObject
         - s3:PutObject
-      Resource: "*"
+      Resource: "arn:aws:s3:::${self:provider.environment.DOCUMENTS_BUCKET}/*"
     - Effect: Allow
       Action:
         - ssm:GetParameter
