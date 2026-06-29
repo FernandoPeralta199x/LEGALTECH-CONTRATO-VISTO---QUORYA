@@ -1,5 +1,8 @@
 service: contrato-visto-api
 
+plugins:
+  - serverless-python-requirements
+
 provider:
   name: aws
   runtime: python3.11

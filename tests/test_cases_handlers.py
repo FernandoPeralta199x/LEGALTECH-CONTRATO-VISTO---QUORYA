@@ -171,3 +171,54 @@ def test_create_case_invalid_client_returns_400(client_id):
         None,
     )
     assert resp["statusCode"] == 400  # client_id inexistente
+
+
+# ── case_results: get / list / update / delete + RLS ─────────────────────────
+def _make_result(user_id, case_id, risk="low"):
+    return cr_h.create_case_result(
+        _event(user_id, body={"case_id": case_id, "result_type": "due_diligence",
+                              "findings": {"score": 1}, "risk_level": risk}), None)
+
+
+def test_case_result_get_list(client_id):
+    a = str(uuid.uuid4())
+    case_id = _data(_make_case(a, client_id))["id"]
+    rid = _data(_make_result(a, case_id))["id"]
+
+    assert cr_h.get_case_result(_event(a, path={"resultId": rid}), None)["statusCode"] == 200
+    listed = _data(cr_h.list_case_results(_event(a, query={"caseId": case_id}), None))
+    assert len(listed) == 1 and listed[0]["id"] == rid
+
+
+def test_case_result_update_and_delete(client_id):
+    a = str(uuid.uuid4())
+    case_id = _data(_make_case(a, client_id))["id"]
+    rid = _data(_make_result(a, case_id))["id"]
+
+    assert cr_h.update_case_result(
+        _event(a, path={"resultId": rid}, body={"risk_level": "high"}), None
+    )["statusCode"] == 200
+    assert cr_h.delete_case_result(_event(a, path={"resultId": rid}), None)["statusCode"] == 200
+    assert cr_h.get_case_result(_event(a, path={"resultId": rid}), None)["statusCode"] == 404
+
+
+def test_case_result_isolation_and_rbac(client_id):
+    a, b = str(uuid.uuid4()), str(uuid.uuid4())
+    case_id = _data(_make_case(a, client_id))["id"]
+    rid = _data(_make_result(a, case_id))["id"]
+
+    # B não é dono do resultado (RLS case_results por created_by) → 404
+    assert cr_h.get_case_result(_event(b, path={"resultId": rid}), None)["statusCode"] == 404
+    # admin vê
+    assert cr_h.get_case_result(_event(b, role="admin", path={"resultId": rid}),
+                                None)["statusCode"] == 200
+    # viewer não escreve
+    assert cr_h.update_case_result(
+        _event(a, role="viewer", path={"resultId": rid}, body={"risk_level": "high"}),
+        None)["statusCode"] == 403
+
+
+def test_case_result_get_nonexistent_404(client_id):
+    a = str(uuid.uuid4())
+    assert cr_h.get_case_result(_event(a, path={"resultId": str(uuid.uuid4())}),
+                                None)["statusCode"] == 404
