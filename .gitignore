@@ -1,0 +1,10 @@
+venv
+.venv
+env
+.env
+.serverless/
+node_modules/
+.python-version
+*.bak
+*.*nok
+*._nok*

@@ -1,0 +1,134 @@
+import json
+import jwt
+import os
+import logging
+
+from src.utils.safety import enforce_production_safety
+
+# 🚀 EXECUTA IMEDIATAMENTE NO COLD START (Fase Init da Lambda)
+# Se falhar aqui, o container morre antes de expor qualquer dado!
+enforce_production_safety()
+
+logger = logging.getLogger()
+
+JWT_SECRET = os.getenv('JWT_SECRET_KEY')
+if not JWT_SECRET:
+    raise RuntimeError("Variável de ambiente JWT_SECRET_KEY não configurada. Boot interrompido.")
+    
+def authorize(event, context):
+    """
+    JWT Authorizer para API Gateway
+    Valida token ANTES da Lambda de negócio ser executada
+    
+    Input:
+    {
+      "type": "TOKEN",
+      "authorizationToken": "Bearer eyJhbGc...",
+      "methodArn": "arn:aws:execute-api:..."
+    }
+    
+    Output (Sucesso):
+    {
+      "principalId": "user-id",
+      "policyDocument": { ... Allow ... },
+      "context": { user_id, email, role }
+    }
+    
+    Output (Erro):
+    {
+      "principalId": "user",
+      "policyDocument": { ... Deny ... },
+      "context": { error: "..." }
+    }
+    """
+    
+    token = event.get('authorizationToken', '')
+    
+    # ✅ Validar formato do token
+    if not token.startswith('Bearer '):
+        logger.warning(json.dumps({
+            "event": "AUTH_TOKEN_MALFORMED",
+            "reason": "Token não começa com 'Bearer '",
+            "methodArn": event.get('methodArn')
+        }))
+        return deny_access('Malformed token')
+    
+    # Extrair token sem "Bearer "
+    token = token.replace('Bearer ', '').strip()
+    
+    try:
+        # ✅ VALIDAR JWT NO API GATEWAY (antes da Lambda de negócio)
+        payload = jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
+        
+        logger.info(json.dumps({
+            "event": "AUTH_TOKEN_VALID",
+            "user_id": payload['user_id'],
+            "email": payload['email'],
+            "role": payload['role'],
+            "methodArn": event.get('methodArn')
+        }))
+        
+        # ✅ Se OK, retornar política de PERMISSÃO + dados do usuário
+        return {
+            'principalId': payload['user_id'],  # ID único (obrigatório)
+            'policyDocument': {
+                'Version': '2012-10-17',
+                'Statement': [
+                    {
+                        'Action': 'execute-api:Invoke',
+                        'Effect': 'Allow',  # ← Permite acesso
+                        'Resource': event['methodArn']
+                    }
+                ]
+            },
+            'context': {
+                'user_id': payload['user_id'],
+                'email': payload['email'],
+                'role': payload['role']
+            }
+        }
+    
+    except jwt.ExpiredSignatureError:
+        logger.warning(json.dumps({
+            "event": "AUTH_TOKEN_EXPIRED",
+            "methodArn": event.get('methodArn')
+        }))
+        return deny_access('Token expirado')
+    
+    except jwt.InvalidTokenError as e:
+        logger.warning(json.dumps({
+            "event": "AUTH_TOKEN_INVALID",
+            "reason": str(e),
+            "methodArn": event.get('methodArn')
+        }))
+        return deny_access('Token inválido')
+    
+    except Exception as e:
+        logger.error(json.dumps({
+            "event": "AUTH_ERROR",
+            "reason": str(e),
+            "methodArn": event.get('methodArn')
+        }))
+        return deny_access('Erro interno na autorização')
+
+def deny_access(message):
+    """
+    Negar acesso (API Gateway retorna 401 Unauthorized)
+    Lambda de negócio NUNCA executa
+    """
+    return {
+        'principalId': 'user',
+        'policyDocument': {
+            'Version': '2012-10-17',
+            'Statement': [
+                {
+                    'Action': 'execute-api:Invoke',
+                    'Effect': 'Deny',  # ← Nega acesso
+                    'Resource': '*'
+                }
+            ]
+        },
+        'context': {
+            'error': message
+        }
+    }

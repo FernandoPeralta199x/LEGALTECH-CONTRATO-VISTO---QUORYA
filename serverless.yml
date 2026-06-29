@@ -1,0 +1,333 @@
+service: contrato-visto-api
+
+provider:
+  name: aws
+  runtime: python3.11
+  region: sa-east-1
+  stage: dev
+  
+  environment:
+    PYTHONPATH: /var/task:/opt/python
+    DB_HOST: ${ssm:/contrato-visto/db_host}
+    DB_USER: ${ssm:/contrato-visto/db_user}
+    DB_PASS: ${ssm:/contrato-visto/db_pass}
+    DB_NAME: contrato_visto
+    ENVIRONMENT: dev
+    LOG_LEVEL: INFO
+    JWT_SECRET_KEY: sua-chave-secreta-aqui
+
+  iamRoleStatements:
+    - Effect: Allow
+      Action:
+        - rds:DescribeDBInstances
+      Resource: "*"
+    - Effect: Allow
+      Action:
+        - s3:GetObject
+        - s3:PutObject
+      Resource: "*"
+    - Effect: Allow
+      Action:
+        - ssm:GetParameter
+      Resource: "arn:aws:ssm:sa-east-1:*:parameter/contrato-visto/*"
+    - Effect: Allow
+      Action:
+        - logs:CreateLogGroup
+        - logs:CreateLogStream
+        - logs:PutLogEvents
+      Resource: "*"
+
+functions:
+  # TIER 1 - Health
+  health:
+    handler: src/handlers/health.health_check
+    timeout: 10
+    memorySize: 128
+    events:
+      - http:
+          path: health
+          method: get
+          cors: true
+
+  # TIER 1 - Cases
+  createCase:
+    handler: src/handlers/cases.create_case
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: cases
+          method: post
+          cors: true
+
+  getCase:
+    handler: src/handlers/cases.get_case
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: cases/{caseId}
+          method: get
+          cors: true
+
+  listCases:
+    handler: src/handlers/cases.list_cases
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: cases
+          method: get
+          cors: true
+
+  updateCase:
+    handler: src/handlers/cases.update_case
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: cases/{caseId}
+          method: put
+          cors: true
+
+  deleteCase:
+    handler: src/handlers/cases.delete_case
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: cases/{caseId}
+          method: delete
+          cors: true
+
+  # TIER 1 - Documents
+  uploadDocument:
+    handler: src/handlers/documents.upload_document
+    timeout: 10
+    memorySize: 512
+    events:
+      - http:
+          path: documents
+          method: post
+          cors: true
+
+  getDocument:
+    handler: src/handlers/documents.get_document
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: documents/{docId}
+          method: get
+          cors: true
+
+  searchClauses:
+    handler: src/handlers/search.search_clauses
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: search
+          method: post
+          cors: true
+
+  # TIER 1 - Users
+  createUser:
+    handler: src/handlers/users.create_user
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: users
+          method: post
+          cors: true
+
+  login:
+    handler: src/handlers/users.login
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: users/login
+          method: post
+          cors: true
+
+  getUser:
+    handler: src/handlers/users.get_user
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: users/{userId}
+          method: get
+          cors: true
+
+  listUsers:
+    handler: src/handlers/users.list_users
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: users
+          method: get
+          cors: true
+
+  updateUser:
+    handler: src/handlers/users.update_user
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: users/{userId}
+          method: put
+          cors: true
+
+  deleteUser:
+    handler: src/handlers/users.delete_user
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: users/{userId}
+          method: delete
+          cors: true
+
+  forgotPassword:
+    handler: src/handlers/users.forgot_password
+    events:
+      - http:
+          path: users/forgot-password
+          method: post
+          cors: true
+  
+  resetPassword:
+    handler: src/handlers/users.reset_password
+    events:
+      - http:
+          path: users/reset-password
+          method: post
+          cors: true
+
+  # TIER 1 - Clients
+  createClient:
+    handler: src/handlers/clients.create_client
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: clients
+          method: post
+          cors: true
+
+  getClient:
+    handler: src/handlers/clients.get_client
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: clients/{clientId}
+          method: get
+          cors: true
+
+  listClients:
+    handler: src/handlers/clients.list_clients
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: clients
+          method: get
+          cors: true
+
+  updateClient:
+    handler: src/handlers/clients.update_client
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: clients/{clientId}
+          method: put
+          cors: true
+
+  deleteClient:
+    handler: src/handlers/clients.delete_client
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: clients/{clientId}
+          method: delete
+          cors: true
+
+  # TIER 2 - Case Results
+  createCaseResult:
+    handler: src/handlers/case_results.create_case_result
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: case-results
+          method: post
+          cors: true
+
+  getCaseResult:
+    handler: src/handlers/case_results.get_case_result
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: case-results/{resultId}
+          method: get
+          cors: true
+
+  listCaseResults:
+    handler: src/handlers/case_results.list_case_results
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: case-results
+          method: get
+          cors: true
+
+  updateCaseResult:
+    handler: src/handlers/case_results.update_case_result
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: case-results/{resultId}
+          method: put
+          cors: true
+
+  deleteCaseResult:
+    handler: src/handlers/case_results.delete_case_result
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: case-results/{resultId}
+          method: delete
+          cors: true
+
+custom:
+  pythonRequirements:
+    dockerizePip: true 
+    slim: true
+    useStaticCache: true
+    useDownloadCache: true
+    cacheLocation: '.serverless/.cache'
+    layer: false
+    slimPatterns:
+      - '**/*.egg-info*'
+      - '**/__pycache__*'
+      - '**/*.dist-info*'
+      - '**/tests/**'
+
+package:
+  individually: false
+  patterns:
+    - '!node_modules/**'
+    - '!venv/**'
+    - '!.git/**'
+    - '!tests/**'
