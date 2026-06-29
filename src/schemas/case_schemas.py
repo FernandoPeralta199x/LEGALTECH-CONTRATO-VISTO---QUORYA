@@ -1,66 +1,49 @@
-from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any
-from datetime import datetime
+"""Schemas de cases/case_results (Pydantic 2). Alinhados ao schema real do banco
+`contrato_visto`. Usa `pattern=` (não `regex=`, removido no Pydantic 2)."""
+from typing import Any, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
+
+CASE_TYPE_PATTERN = "^(due_diligence_party|due_diligence_asset|contract_analysis)$"
+CASE_STATUS_PATTERN = "^(open|in_progress|completed|closed)$"
+PRIORITY_PATTERN = "^(low|normal|high|urgent)$"
+RISK_LEVEL_PATTERN = "^(low|medium|high|critical)$"
+
 
 class CaseCreate(BaseModel):
-    """Schema para criar caso"""
-    client_id: str
-    case_type: str = Field(..., regex="^(due_diligence_party|due_diligence_asset|contract_analysis)$")
-    description: Optional[str] = None
-    
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "client_id": "550e8400-e29b-41d4-a716-446655440000",
-                "case_type": "contract_analysis",
-                "description": "Análise de contrato de compra e venda"
-            }
-        }
+    model_config = ConfigDict(extra="forbid")
 
-class CaseResponse(BaseModel):
-    """Schema de resposta de caso"""
-    id: str
     client_id: str
-    case_type: str
-    status: str
-    created_at: str
+    case_type: str = Field(..., pattern=CASE_TYPE_PATTERN)
+    priority: str = Field(default="normal", pattern=PRIORITY_PATTERN)
+    description: Optional[str] = None  # gravado em cases.metadata (jsonb)
+
 
 class CaseUpdate(BaseModel):
-    """Schema para atualizar caso"""
-    status: Optional[str] = Field(None, regex="^(open|in_progress|completed|closed)$")
-    description: Optional[str] = None
+    model_config = ConfigDict(extra="forbid")
+
+    status: Optional[str] = Field(default=None, pattern=CASE_STATUS_PATTERN)
+    priority: Optional[str] = Field(default=None, pattern=PRIORITY_PATTERN)
+    assigned_to: Optional[str] = None
+
 
 class CaseResultCreate(BaseModel):
-    """Schema para criar resultado de análise"""
+    model_config = ConfigDict(extra="forbid")
+
     case_id: str
-    result_type: str = Field(..., description="Ex: due_diligence, risk_analysis")
-    findings: Dict[str, Any] = Field(..., description="Dados da análise em JSON")
-    risk_level: str = Field(..., regex="^(low|medium|high|critical)$")
+    result_type: str = Field(..., max_length=50)
+    result_title: Optional[str] = Field(default=None, max_length=255)
+    findings: dict[str, Any] = Field(default_factory=dict)  # -> result_data (jsonb)
+    risk_level: str = Field(..., pattern=RISK_LEVEL_PATTERN)
+    confidence_score: Optional[float] = Field(default=None, ge=0, le=1)
+    summary_text: Optional[str] = None
+    detailed_findings: Optional[str] = None
+    recommendations: Optional[str] = None
+
+
+class CaseResultUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    risk_level: Optional[str] = Field(default=None, pattern=RISK_LEVEL_PATTERN)
     summary_text: Optional[str] = None
     recommendations: Optional[str] = None
-    
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "case_id": "550e8400-e29b-41d4-a716-446655440000",
-                "result_type": "due_diligence",
-                "findings": {
-                    "company_status": "active",
-                    "debts": 0,
-                    "legal_issues": []
-                },
-                "risk_level": "low",
-                "summary_text": "Empresa sem riscos detectados",
-                "recommendations": "Prosseguir com operação"
-            }
-        }
-
-class CaseResultResponse(BaseModel):
-    """Schema de resposta de resultado"""
-    id: str
-    case_id: str
-    result_type: str
-    findings: Dict[str, Any]
-    risk_level: str
-    status: str
-    created_at: str

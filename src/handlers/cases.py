@@ -1,183 +1,214 @@
+"""Handlers Lambda de `cases` (migração FastAPI→Serverless, Fase 2).
+
+Protegidos pelo JWT Authorizer (via @require_user) e isolados por RLS via
+tenant_tx (app.user_id/app.user_role). Alinhados ao schema real: `cases` NÃO tem
+`updated_at`; `created_by` é gravado para a policy de RLS. Erros internos não
+vazam ao cliente.
+"""
 import json
 import logging
-from src.services.database import db
-from src.utils.helpers import success_response, error_response, generate_uuid, get_timestamp
+import uuid
+
+from psycopg2.extras import Json
+from pydantic import ValidationError
+
+from src.schemas.case_schemas import CaseCreate, CaseUpdate
+from src.services.database import tenant_tx
+from src.utils.context import require_user
+from src.utils.helpers import error_response, success_response
 from src.utils.safety import enforce_production_safety
 
-# 🚀 EXECUTA IMEDIATAMENTE NO COLD START (Fase Init da Lambda)
-# Se falhar aqui, o container morre antes de expor qualquer dado!
 enforce_production_safety()
-
 logger = logging.getLogger()
 
+
+def _fmt(err: ValidationError) -> str:
+    return ", ".join(
+        f"{(e['loc'][0] if e['loc'] else '?')}: {e['msg']}" for e in err.errors()
+    )
+
+
+def _parse_body(event):
+    try:
+        return json.loads(event.get("body") or "{}"), None
+    except json.JSONDecodeError:
+        return None, error_response(400, "Corpo JSON inválido")
+
+
+def _valid_uuid(value):
+    try:
+        return str(uuid.UUID(str(value)))
+    except (ValueError, TypeError):
+        return None
+
+
+@require_user
 def create_case(event, context):
-    """Criar novo caso"""
+    user = event["user"]
+    body, err = _parse_body(event)
+    if err:
+        return err
     try:
-        body = json.loads(event.get('body', '{}'))
+        data = CaseCreate(**body)
+    except ValidationError as e:
+        return error_response(400, f"Validação falhou: {_fmt(e)}")
 
-        # ✅ VALIDAR CAMPOS OBRIGATÓRIOS
-        required_fields = ['client_id', 'case_type']
-        for field in required_fields:
-            if field not in body:
-                return error_response(400, f'Campo obrigatório: {field}')
+    client_id = _valid_uuid(data.client_id)
+    if not client_id:
+        return error_response(400, "client_id inválido")
+    metadata = {"description": data.description} if data.description else None
 
-        case_id = generate_uuid()
-        created_at = get_timestamp()
-
-        # ✅ CONTEXT MANAGER garante desconexão mesmo em caso de erro
-        with db as database:
-            query = """
-            INSERT INTO public.cases (id, client_id, case_type, status, created_at)
-            VALUES (%s, %s, %s, %s, %s)
-            """
-            database.execute_update(query, (
-                case_id,
-                body['client_id'],
-                body['case_type'],
-                'open',
-                created_at
-            ))
-
-        logger.info(json.dumps({
-            "event": "CASE_CREATED",
-            "case_id": case_id,
-            "client_id": body['client_id'],
-            "case_type": body['case_type']
-        }))
-
-        return success_response(201, 'Caso criado com sucesso', {
-            'case_id': case_id,
-            'status': 'open',
-            'created_at': created_at
-        })
-
-    except Exception as e:
-        logger.error(json.dumps({
-            "event": "CASE_CREATE_ERROR",
-            "reason": str(e)
-        }))
-        return error_response(500, f'Erro ao criar caso: {str(e)}')
-
-def get_case(event, context):
-    """Obter caso por ID"""
     try:
-        case_id = event['pathParameters']['caseId']
-
-        if not case_id:
-            return error_response(400, 'caseId é obrigatório')
-
-        # ✅ CONTEXT MANAGER
-        with db as database:
-            query = """
-            SELECT id, client_id, case_type, status, created_at, updated_at
-            FROM public.cases
-            WHERE id = %s
-            """
-            result = database.execute_query_one(query, (case_id,))
-
-        if not result:
-            return error_response(404, 'Caso não encontrado')
-
-        return success_response(200, 'Caso encontrado', dict(result))
-
-    except Exception as e:
-        logger.error(json.dumps({
-            "event": "CASE_GET_ERROR",
-            "case_id": event.get('pathParameters', {}).get('caseId'),
-            "reason": str(e)
-        }))
-        return error_response(500, f'Erro ao obter caso: {str(e)}')
-
-def list_cases(event, context):
-    """Listar todos os casos"""
-    try:
-        # ✅ CONTEXT MANAGER
-        with db as database:
-            query = """
-            SELECT id, client_id, case_type, status, created_at
-            FROM public.cases
-            ORDER BY created_at DESC
-            LIMIT 100
-            """
-            results = database.execute_query(query)
-
-        return success_response(200, f'{len(results)} casos encontrados', [dict(r) for r in results])
-
-    except Exception as e:
-        logger.error(json.dumps({
-            "event": "CASE_LIST_ERROR",
-            "reason": str(e)
-        }))
-        return error_response(500, f'Erro ao listar casos: {str(e)}')
-
-def update_case(event, context):
-    """Atualizar caso"""
-    try:
-        case_id = event['pathParameters']['caseId']
-        body = json.loads(event.get('body', '{}'))
-
-        fields_to_update = []
-        values = []
-
-        if 'status' in body:
-            fields_to_update.append('status = %s')
-            values.append(body['status'])
-
-        if not fields_to_update:
-            return error_response(400, 'Nenhum campo para atualizar')
-
-        fields_to_update.append('updated_at = %s')
-        values.append(get_timestamp())
-        values.append(case_id)
-
-        # ✅ CONTEXT MANAGER
-        with db as database:
-            query = f"""
-            UPDATE public.cases
-            SET {', '.join(fields_to_update)}
-            WHERE id = %s
-            """
-            database.execute_update(query, tuple(values))
-
-        logger.info(json.dumps({
-            "event": "CASE_UPDATED",
-            "case_id": case_id,
-            "fields": list(body.keys())
-        }))
-
-        return success_response(200, 'Caso atualizado com sucesso')
-
-    except Exception as e:
-        logger.error(json.dumps({
-            "event": "CASE_UPDATE_ERROR",
-            "case_id": event.get('pathParameters', {}).get('caseId'),
-            "reason": str(e)
-        }))
-        return error_response(500, f'Erro ao atualizar caso: {str(e)}')
-
-def delete_case(event, context):
-    """Deletar caso"""
-    try:
-        case_id = event['pathParameters']['caseId']
-
-        # ✅ CONTEXT MANAGER
-        with db as database:
-            database.execute_update(
-                "DELETE FROM public.cases WHERE id = %s",
-                (case_id,)
+        with tenant_tx(user["user_id"], user["role"]) as cur:
+            cur.execute(
+                "INSERT INTO public.cases"
+                " (client_id, case_type, priority, created_by, metadata)"
+                " VALUES (%s, %s, %s, %s, %s)"
+                " RETURNING id, status, created_at",
+                (client_id, data.case_type, data.priority, user["user_id"],
+                 Json(metadata) if metadata else None),
             )
-
-        logger.info(json.dumps({
-            "event": "CASE_DELETED",
-            "case_id": case_id
-        }))
-
-        return success_response(200, 'Caso deletado com sucesso')
-
+            row = cur.fetchone()
     except Exception as e:
-        logger.error(json.dumps({
-            "event": "CASE_DELETE_ERROR",
-            "case_id": event.get('pathParameters', {}).get('caseId'),
-            "reason": str(e)
-        }))
-        return error_response(500, f'Erro ao deletar caso: {str(e)}')
+        logger.error(json.dumps({"event": "CASE_CREATE_ERROR", "reason": str(e)}))
+        return error_response(500, "Erro ao criar caso")
+
+    logger.info(json.dumps({
+        "event": "CASE_CREATED", "case_id": str(row["id"]),
+        "created_by": user["user_id"],
+    }))
+    return success_response(201, "Caso criado com sucesso", {
+        "id": str(row["id"]), "status": row["status"],
+        "created_at": str(row["created_at"]),
+    })
+
+
+@require_user
+def get_case(event, context):
+    user = event["user"]
+    case_id = _valid_uuid((event.get("pathParameters") or {}).get("caseId"))
+    if not case_id:
+        return error_response(400, "caseId inválido")
+    try:
+        with tenant_tx(user["user_id"], user["role"]) as cur:
+            cur.execute(
+                "SELECT id, client_id, case_type, status, priority, created_by,"
+                " assigned_to, created_at, completed_at FROM public.cases"
+                " WHERE id = %s",
+                (case_id,),
+            )
+            row = cur.fetchone()
+    except Exception as e:
+        logger.error(json.dumps({"event": "CASE_GET_ERROR", "reason": str(e)}))
+        return error_response(500, "Erro ao obter caso")
+    if not row:
+        return error_response(404, "Caso não encontrado")
+    return success_response(200, "Caso encontrado", _serialize(row))
+
+
+@require_user
+def list_cases(event, context):
+    user = event["user"]
+    params = event.get("queryStringParameters") or {}
+    try:
+        page = max(int(params.get("page", 1)), 1)
+        page_size = min(max(int(params.get("page_size", 50)), 1), 100)
+    except (ValueError, TypeError):
+        return error_response(400, "page/page_size inválidos")
+    offset = (page - 1) * page_size
+    try:
+        # A RLS já filtra os casos visíveis ao usuário (não filtramos por mão).
+        with tenant_tx(user["user_id"], user["role"]) as cur:
+            cur.execute(
+                "SELECT id, client_id, case_type, status, priority, created_by,"
+                " assigned_to, created_at, completed_at FROM public.cases"
+                " ORDER BY created_at DESC LIMIT %s OFFSET %s",
+                (page_size, offset),
+            )
+            rows = cur.fetchall()
+    except Exception as e:
+        logger.error(json.dumps({"event": "CASE_LIST_ERROR", "reason": str(e)}))
+        return error_response(500, "Erro ao listar casos")
+    return success_response(
+        200, f"{len(rows)} casos encontrados", [_serialize(r) for r in rows]
+    )
+
+
+@require_user
+def update_case(event, context):
+    user = event["user"]
+    case_id = _valid_uuid((event.get("pathParameters") or {}).get("caseId"))
+    if not case_id:
+        return error_response(400, "caseId inválido")
+    body, err = _parse_body(event)
+    if err:
+        return err
+    try:
+        data = CaseUpdate(**body)
+    except ValidationError as e:
+        return error_response(400, f"Validação falhou: {_fmt(e)}")
+
+    fields, values = [], []
+    if data.status is not None:
+        fields.append("status = %s")
+        values.append(data.status)
+    if data.priority is not None:
+        fields.append("priority = %s")
+        values.append(data.priority)
+    if data.assigned_to is not None:
+        assigned = _valid_uuid(data.assigned_to)
+        if not assigned:
+            return error_response(400, "assigned_to inválido")
+        fields.append("assigned_to = %s")
+        values.append(assigned)
+    if not fields:
+        return error_response(400, "Nenhum campo para atualizar")
+    values.append(case_id)
+
+    try:
+        with tenant_tx(user["user_id"], user["role"]) as cur:
+            cur.execute(
+                f"UPDATE public.cases SET {', '.join(fields)} WHERE id = %s",
+                tuple(values),
+            )
+            updated = cur.rowcount
+    except Exception as e:
+        logger.error(json.dumps({"event": "CASE_UPDATE_ERROR", "reason": str(e)}))
+        return error_response(500, "Erro ao atualizar caso")
+    if not updated:
+        return error_response(404, "Caso não encontrado")
+    logger.info(json.dumps({"event": "CASE_UPDATED", "case_id": case_id}))
+    return success_response(200, "Caso atualizado com sucesso")
+
+
+@require_user
+def delete_case(event, context):
+    user = event["user"]
+    case_id = _valid_uuid((event.get("pathParameters") or {}).get("caseId"))
+    if not case_id:
+        return error_response(400, "caseId inválido")
+    try:
+        with tenant_tx(user["user_id"], user["role"]) as cur:
+            cur.execute("DELETE FROM public.cases WHERE id = %s", (case_id,))
+            deleted = cur.rowcount
+    except Exception as e:
+        logger.error(json.dumps({"event": "CASE_DELETE_ERROR", "reason": str(e)}))
+        return error_response(500, "Erro ao deletar caso")
+    if not deleted:
+        return error_response(404, "Caso não encontrado")
+    logger.info(json.dumps({"event": "CASE_DELETED", "case_id": case_id}))
+    return success_response(200, "Caso deletado com sucesso")
+
+
+def _serialize(row) -> dict:
+    return {
+        "id": str(row["id"]),
+        "client_id": str(row["client_id"]),
+        "case_type": row["case_type"],
+        "status": row["status"],
+        "priority": row["priority"],
+        "created_by": str(row["created_by"]) if row["created_by"] else None,
+        "assigned_to": str(row["assigned_to"]) if row["assigned_to"] else None,
+        "created_at": str(row["created_at"]) if row["created_at"] else None,
+        "completed_at": str(row["completed_at"]) if row["completed_at"] else None,
+    }
