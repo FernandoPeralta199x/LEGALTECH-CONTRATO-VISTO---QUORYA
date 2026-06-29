@@ -119,6 +119,7 @@ functions:
           path: documents
           method: post
           cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
 
   getDocument:
     handler: src/handlers/documents.get_document
@@ -129,6 +130,7 @@ functions:
           path: documents/{docId}
           method: get
           cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
 
   searchClauses:
     handler: src/handlers/search.search_clauses
