@@ -20,8 +20,8 @@
 | 0 | Ambiente local (PG18 + role não-owner) | ✅ concluída |
 | 1 | Fundação RLS-aware + policies + auditoria | ✅ concluída (**13 testes**), revisada pelo Codex |
 | 2 | `cases` + `case_results` (RLS-aware + authorizer + **RBAC viewer** + **INSERT atômico**) | ✅ concluída (**25 testes**), revisada+endurecida (Codex) |
-| **A** | **Auth/Users** (login + CRUD + forgot/reset + `jwt_authorizer` + remover código morto/defaults inseguros/PII) — **entrou no escopo** (decisão do usuário em 29/06; antes era do outro dev) | ⏳ próxima |
-| 3 | `clients` | roadmap |
+| **A** | **Auth/Users** (login + CRUD + forgot/reset + `jwt_authorizer`; signup→viewer; sem PII; código morto removido) | ✅ concluída (**42 testes**), Codex revisando |
+| 3 | `clients` | ⏳ próxima |
 | 4 | `documents` (S3) | roadmap |
 | 5 | `search` / RAG | roadmap |
 | 6 | services + remover código morto | roadmap |
@@ -53,6 +53,23 @@
 - `tests/test_cases_handlers.py` + `test_context.py`: **25 testes** no total, todos
   passam no PG18 (inclui viewer bloqueado/leitura, shape achatado/aninhado, client
   inexistente).
+
+**Fase A (Auth/Users) — concluída (Codex revisando):**
+- `handlers/users.py`: reescrito (handlers nativos). `public.users`/`password_resets`
+  NÃO têm RLS → `simple_tx`. Signup PÚBLICO cria sempre `viewer` (corrige escalada de
+  privilégio); `login` via `create_access_token` (JWT HS256 + exp, sem segredo padrão);
+  RBAC: get (dono/admin), list/delete (admin), update (dono→name; role/status só admin);
+  forgot/reset com `NOW()+INTERVAL`. Nunca loga PII (email/token) nem `str(e)`.
+- `services/database.py`: `simple_tx` (transação sem RLS p/ tabelas globais).
+- `services/email.py` (novo): backend SES (boto3) ou `log` (dev, sem expor token).
+- `utils/auth.py`: `create_access_token`; `utils/context.py`: `require_role`.
+- `schemas/user_schemas.py`: Pydantic 2; role corrigido (era `manager`, faltava
+  `viewer`); signup sem `role` (`extra=forbid`); `UserUpdateSchema`; senha ≥8.
+- `authorizers/jwt_authorizer.py`: não loga mais `email` (PII); erros sanitizados.
+- `utils/safety.py`: bloqueia `EMAIL_BACKEND=log/mock` em produção.
+- `serverless.yml`: authorizer nas rotas protegidas de `users`; públicas: signup/login/
+  forgot/reset. Removido `handlers/users_new.py` (código morto).
+- `tests/test_users_handlers.py` (16) + ajuste `test_safety` → **42 testes** no PG18.
 
 ### Achados validados na prática (PG18)
 - Policies RLS de **escrita** não existiam → criadas.
@@ -104,10 +121,12 @@ o usuário.**
 ## Próximos passos
 1. ~~Fase 1 + laudo Codex~~ ✅. ~~Fase 2 + laudo Codex~~ ✅ (25 testes). Decisão
    Mangum vs nativo: **nativo** (definido pelo usuário).
-2. **Fase A — Auth/Users** (entrou no escopo): migrar `handlers/users.py`
-   (login/CRUD/forgot/reset) e `jwt_authorizer.py` ao schema real (`public.users`,
-   id `varchar(36)`); remover `users_new.py` e defaults inseguros; **não logar PII**
-   (email); plugar authorizer nas rotas `users` (exceto `login`); validar o fluxo
-   login→token→rota protegida.
-3. Fases 3–7 (clients, documents, RAG, services, hardening/deploy). Deploy real na
-   AWS só com autorização (conta em `us-east-1`; o yml usa `sa-east-1` — alinhar).
+2. ~~Fase A — Auth/Users~~ ✅ (42 testes; Codex revisando). **Ponto a confirmar com
+   o usuário:** signup é público criando `viewer` — se o onboarding for admin-only,
+   restringir `create_user` ao authorizer + admin.
+3. **Fase 3 — `clients`** (⏳ próxima, encadeamento automático): realinhar
+   `handlers/clients.py` + `client_schemas.py` ao schema real (`legal_name`,
+   `document_number`, `document_type`); `clients.py` importa `validate_tenant_access`
+   inexistente (corrigir). Sem RLS → `simple_tx`.
+4. Fases 4–7 (documents+S3, RAG, services, hardening/deploy). Deploy real na AWS só
+   com autorização (conta em `us-east-1`; o yml usa `sa-east-1` — alinhar).
