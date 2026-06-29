@@ -1,8 +1,7 @@
-"""Utilitários de JWT (emissão e verificação). HS256.
+"""Emissão de JWT (HS256) para o login.
 
-Os handlers protegidos NÃO revalidam o token aqui: o JWT Authorizer valida no API
-Gateway e injeta o contexto (ver `src/utils/context.py`). `verify_token` fica como
-utilitário para validação fora do authorizer, se necessário.
+Os handlers protegidos NÃO revalidam o token: o JWT Authorizer valida no API
+Gateway e injeta o contexto (ver `src/utils/context.py`).
 """
 import os
 from datetime import datetime, timedelta, timezone
@@ -19,14 +18,3 @@ def create_access_token(payload: dict) -> str:
     now = datetime.now(timezone.utc)
     claims = {**payload, "iat": now, "exp": now + timedelta(hours=_TOKEN_TTL_HOURS)}
     return jwt.encode(claims, secret_key, algorithm="HS256")
-
-
-def verify_token(token):
-    """Valida um JWT HS256. Fail-closed: sem segredo configurado, retorna ``None``."""
-    secret_key = os.getenv("JWT_SECRET_KEY")
-    if not secret_key:
-        return None
-    try:
-        return jwt.decode(token, secret_key, algorithms=["HS256"])
-    except jwt.InvalidTokenError:
-        return None

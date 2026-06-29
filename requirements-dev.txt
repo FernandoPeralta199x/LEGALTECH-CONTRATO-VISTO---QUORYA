@@ -1,0 +1,5 @@
+# Dependências de desenvolvimento/testes locais (não vão para o pacote Lambda).
+-r requirements.txt
+
+pytest==9.0.3
+python-dotenv==1.2.2   # carrega .env nos testes (conftest.py)
