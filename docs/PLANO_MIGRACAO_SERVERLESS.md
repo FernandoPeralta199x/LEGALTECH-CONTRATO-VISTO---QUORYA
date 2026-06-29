@@ -142,7 +142,7 @@ def tenant_tx(user_id: str, role: str):
 | **4** | `documents` (S3 presigned + metadados) | Fase 1 | eu |
 | **5** | `search` / RAG (pgvector + embeddings OpenAI) | Fase 4 | eu |
 | **6** | Services alinhados (`audit`, `webhooks`, `cache`) + remover código morto (`users_new`, auth duplicado) | — | eu |
-| **E2E** | **Teste de ponta a ponta de TODO o programa (GATE obrigatório antes do deploy)**: fluxos completos signup→login→authorizer→clients/cases/case_results/documents/search; RLS + RBAC + isolamento entre usuários. **Pedido explícito do usuário (29/06).** | Fases A–6 | eu |
+| **E2E** | **GATE de qualidade antes do deploy (3 passos):** (1) **E2E de TODO o programa** (signup→login→authorizer→clients/cases/case_results/documents/search; RLS+RBAC+isolamento); (2) havendo erro → **plano de correção → corrigir → E2E de novo, em LOOP até ZERAR**; (3) **varredura final**: migração 100% feita (sem resíduo FastAPI) + **sem código morto** + **qualidade do código**. **Usar skills.** Pedido do usuário (29/06). | Fases A–6 | eu |
 | **7** | Hardening pós-MVP + **deploy AWS**: RDS Proxy sizing + monitorar *pinning*, reserved concurrency, CORS/IAM por ambiente, remover `fastapi/uvicorn`. **Só após E2E verde e com autorização explícita.** | E2E | eu (infra exige conta AWS) |
 
 > **Ajuste pós-revisão do Codex:** itens de segurança que estavam na Fase 7

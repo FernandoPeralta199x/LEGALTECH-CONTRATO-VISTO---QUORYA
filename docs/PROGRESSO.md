@@ -25,7 +25,7 @@
 | 4 | `documents` (S3 presigned + metadados; RLS por case) | ⏳ próxima |
 | 5 | `search` / RAG | roadmap |
 | 6 | services + remover código morto | roadmap |
-| **E2E** | **Teste ponta-a-ponta de TODO o programa** (GATE antes do deploy — pedido do usuário) | roadmap |
+| **E2E** | **GATE antes do deploy:** E2E completo → loop (corrigir→E2E) **até zerar erros** → varredura final (migração completa, sem código morto, qualidade) | roadmap |
 | 7 | hardening + **deploy AWS** (só após E2E verde + autorização) | roadmap |
 
 ### O que já foi feito (commits locais, branch `feat/migracao-fase-0-1`)
@@ -134,5 +134,7 @@ o usuário.**
 5. Fase 7 (hardening + deploy AWS) só após E2E verde + autorização (conta em
    `us-east-1`; o yml usa `sa-east-1` — alinhar).
 
-> **Diretrizes do usuário (29/06):** usar **skills** sempre que ajudarem; rodar o
-> **E2E completo antes do deploy/AWS**.
+> **Diretrizes do usuário (29/06):** usar **skills** sempre. **Fase E2E (gate antes
+> do deploy), 3 passos:** (1) E2E de todo o programa; (2) havendo erros, plano de
+> correção → corrigir → E2E, **em loop até zerar**; (3) varredura final de migração
+> completa, código morto e qualidade do código.
