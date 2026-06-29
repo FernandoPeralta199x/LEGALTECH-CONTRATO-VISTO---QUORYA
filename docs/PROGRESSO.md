@@ -22,7 +22,7 @@
 | 2 | `cases` + `case_results` (RLS-aware + authorizer + **RBAC viewer** + **INSERT atômico**) | ✅ concluída (**25 testes**), revisada+endurecida (Codex) |
 | **A** | **Auth/Users** (login + CRUD + forgot/reset + `jwt_authorizer`; signup→viewer; reset token hasheado/atômico; anti-timing; sem PII) | ✅ concluída+endurecida (**45 testes**) |
 | 3 | `clients` (catálogo compartilhado, RBAC writer, sem RLS) | ✅ concluída+endurecida (**61 testes**) |
-| 4 | `documents` (S3 presigned + RLS por `uploaded_by`) | ✅ concluída (**69 testes**), Codex revisando |
+| 4 | `documents` (S3 presigned + RLS por `uploaded_by`) | ✅ concluída+endurecida (**69 testes**) |
 | 5 | `search` / RAG (pgvector + embeddings) | ⏳ próxima |
 | 6 | services + remover código morto | roadmap |
 | **E2E** | **GATE antes do deploy:** E2E completo → loop (corrigir→E2E) **até zerar erros** → varredura final (migração completa, sem código morto, qualidade) | roadmap |
@@ -150,3 +150,8 @@ Aplicado o default mais seguro; confirmar com o usuário:
    o UUID. Confirmar se é intencional.
 4. **Sem checksum de CPF/CNPJ** (só tamanho/tipo). Avaliar validar dígito verificador
    (LegalTech). Auditoria de escrita de `clients` (sem trigger) → avaliar na Fase 6.
+5. **Modelo de visibilidade (cases/case_results/documents)** — **decisão importante:**
+   hoje é por **dono** (`created_by`/`uploaded_by`) + admin. Um colega que vê o case
+   **não** vê documentos de outro; `assigned_to` do case **não** concede acesso. Se o
+   produto for colaborativo (equipe/organização compartilha o case), rever as RLS
+   policies (ex.: visível se o case for visível / por organização).
