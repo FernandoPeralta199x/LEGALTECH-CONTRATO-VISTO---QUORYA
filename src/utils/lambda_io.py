@@ -10,11 +10,19 @@ from src.utils.helpers import error_response
 
 
 def parse_json_body(event):
-    """Retorna ``(dict, None)`` em sucesso ou ``(None, error_response(400))``."""
+    """Retorna ``(dict, None)`` em sucesso ou ``(None, error_response(400))``.
+
+    Garante que o corpo é um OBJETO JSON: um JSON válido porém não-objeto (array,
+    número, string, null, bool) faria ``Schema(**body)`` levantar ``TypeError`` (não
+    ``ValidationError``) → 500 não tratado. Aqui devolvemos 400 antes disso.
+    """
     try:
-        return json.loads(event.get("body") or "{}"), None
+        data = json.loads(event.get("body") or "{}")
     except json.JSONDecodeError:
         return None, error_response(400, "Corpo JSON inválido")
+    if not isinstance(data, dict):
+        return None, error_response(400, "Corpo JSON deve ser um objeto")
+    return data, None
 
 
 def valid_uuid(value):

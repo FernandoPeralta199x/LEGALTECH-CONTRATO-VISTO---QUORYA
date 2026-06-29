@@ -16,7 +16,11 @@ from src.services.database import tenant_tx
 from src.services.embeddings import embeddings_service
 from src.utils.context import require_user
 from src.utils.helpers import error_response, success_response
-from src.utils.lambda_io import fmt_validation_error as _fmt, valid_uuid as _valid_uuid
+from src.utils.lambda_io import (
+    fmt_validation_error as _fmt,
+    parse_json_body as _parse_body,
+    valid_uuid as _valid_uuid,
+)
 from src.utils.safety import enforce_production_safety
 
 enforce_production_safety()
@@ -26,10 +30,9 @@ logger = logging.getLogger()
 @require_user
 def search_clauses(event, context):
     user = event["user"]
-    try:
-        body = json.loads(event.get("body") or "{}")
-    except json.JSONDecodeError:
-        return error_response(400, "Corpo JSON inválido")
+    body, err = _parse_body(event)
+    if err:
+        return err
     try:
         data = SearchSchema(**body)
     except ValidationError as e:
