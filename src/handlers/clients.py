@@ -194,21 +194,25 @@ def _mask_document(num: str) -> str:
 
 def _serialize(row, role="admin") -> dict:
     document = row["document_number"]
-    if role == "viewer":  # viewer vê PII mascarada (LGPD)
-        document = _mask_document(document)
+    email = row.get("email")
+    phone = row.get("phone")
+    address = {
+        "street": row.get("address_street"),
+        "city": row.get("address_city"),
+        "state": row.get("address_state"),
+        "zip": row.get("address_zip"),
+    }
+    if role == "viewer":  # viewer vê PII reduzida (LGPD): documento mascarado e
+        document = _mask_document(document)  # sem dados de contato/endereço
+        email = phone = address = None
     return {
         "id": str(row["id"]),
         "legal_name": row["legal_name"],
         "document_type": row["document_type"],
         "document_number": document,
-        "email": row.get("email"),
-        "phone": row.get("phone"),
-        "address": {
-            "street": row.get("address_street"),
-            "city": row.get("address_city"),
-            "state": row.get("address_state"),
-            "zip": row.get("address_zip"),
-        },
+        "email": email,
+        "phone": phone,
+        "address": address,
         "status": row["status"],
         "created_at": str(row["created_at"]) if row.get("created_at") else None,
     }

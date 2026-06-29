@@ -222,3 +222,17 @@ def test_case_result_get_nonexistent_404(client_id):
     a = str(uuid.uuid4())
     assert cr_h.get_case_result(_event(a, path={"resultId": str(uuid.uuid4())}),
                                 None)["statusCode"] == 404
+
+
+def test_delete_case_audit_records_resource_id(client_id):
+    # Migration 002: auditoria de DELETE registra o resource_id (era NULL antes).
+    a = str(uuid.uuid4())
+    case_id = _data(_make_case(a, client_id))["id"]
+    assert cases_h.delete_case(_event(a, path={"caseId": case_id}), None)["statusCode"] == 200
+    conn = _admin_conn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT resource_id FROM audit.audit_log WHERE action='DELETE'"
+                    " AND resource_type='cases' ORDER BY created_at DESC LIMIT 1")
+        row = cur.fetchone()
+    conn.close()
+    assert row is not None and str(row[0]) == case_id

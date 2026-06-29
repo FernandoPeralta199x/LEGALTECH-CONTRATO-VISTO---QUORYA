@@ -61,11 +61,16 @@ def test_create_and_get(clean_clients):
 
 
 def test_viewer_sees_masked_document(clean_clients):
-    cid = _data(_create())["id"]  # criado por analyst
+    cid = _data(_create(email="contato@acme.com", phone="11999998888"))["id"]
+    # analyst vê completo
+    full = _data(c.get_client(_event(path={"clientId": cid}), None))
+    assert full["document_number"] == "11222333000181" and full["email"] == "contato@acme.com"
+    # viewer: documento mascarado E sem dados de contato/endereço (LGPD)
     got = _data(c.get_client(_event(role="viewer", path={"clientId": cid}), None))
-    assert got["document_number"] == "**********0181"  # mascarado p/ viewer
+    assert got["document_number"] == "**********0181"
+    assert got["email"] is None and got["phone"] is None and got["address"] is None
     listed = _data(c.list_clients(_event(role="viewer"), None))
-    assert listed[0]["document_number"] == "**********0181"
+    assert listed[0]["document_number"] == "**********0181" and listed[0]["email"] is None
 
 
 def test_create_invalid_checksum_400(clean_clients):

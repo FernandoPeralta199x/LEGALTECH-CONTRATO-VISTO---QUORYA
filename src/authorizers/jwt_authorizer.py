@@ -111,8 +111,9 @@ def authorize(event, context):
 
 def deny_access(message):
     """
-    Negar acesso (API Gateway retorna 401 Unauthorized)
-    Lambda de negócio NUNCA executa
+    Negar acesso. Uma policy `Deny` faz o API Gateway responder 403 Forbidden
+    (401 só ocorre quando o authorizer lança a exceção literal "Unauthorized").
+    A Lambda de negócio NUNCA executa.
     """
     return {
         'principalId': 'user',
