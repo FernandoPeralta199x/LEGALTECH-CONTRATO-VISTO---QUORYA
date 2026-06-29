@@ -19,7 +19,8 @@ def enforce_production_safety():
         return
 
     violations = []
-    if os.getenv("JWT_SECRET_KEY") in _INSECURE_SECRETS:
+    secret = os.getenv("JWT_SECRET_KEY")
+    if not secret or secret in _INSECURE_SECRETS:
         violations.append("JWT_SECRET_KEY ausente ou com valor padrão inseguro")
     if os.getenv("AI_ANALYSIS_BACKEND") == "mock":
         violations.append("AI_ANALYSIS_BACKEND=mock em ambiente produtivo")

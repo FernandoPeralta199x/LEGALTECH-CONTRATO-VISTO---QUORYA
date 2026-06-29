@@ -5,8 +5,10 @@ import json
 
 def verify_token(token):
     """Verificar JWT token"""
+    secret_key = os.getenv('JWT_SECRET_KEY')
+    if not secret_key:
+        return None  # sem segredo configurado: não valida (fail-closed)
     try:
-        secret_key = os.getenv('JWT_SECRET_KEY', 'sua-chave-secreta-aqui')
         decoded = jwt.decode(token, secret_key, algorithms=['HS256'])
         return decoded
     except jwt.InvalidTokenError:

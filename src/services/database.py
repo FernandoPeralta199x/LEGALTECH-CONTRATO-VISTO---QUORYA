@@ -55,9 +55,10 @@ def get_connection():
         _conn = _connect()
         return _conn
     try:
+        _conn.rollback()  # descarta qualquer transação/estado pendente vazado
         with _conn.cursor() as cur:
             cur.execute("SELECT 1")
-        _conn.commit()
+        _conn.rollback()  # mantém a conexão ociosa, sem transação aberta
     except psycopg2.Error:
         try:
             _conn.close()

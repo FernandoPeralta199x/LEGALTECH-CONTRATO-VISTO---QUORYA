@@ -21,9 +21,8 @@ def get_user_from_event(event):
     """
     try:
         ctx = event["requestContext"]["authorizer"]["context"]
-        user_id = str(ctx["user_id"])
+        user_id = str(uuid.UUID(str(ctx["user_id"])))  # canoniza; exige UUID válido
         role = ctx["role"]
-        uuid.UUID(user_id)  # app.user_id da RLS é uuid → exigir UUID válido
         if role not in VALID_ROLES:
             return None
         return {"user_id": user_id, "email": ctx.get("email", ""), "role": role}
