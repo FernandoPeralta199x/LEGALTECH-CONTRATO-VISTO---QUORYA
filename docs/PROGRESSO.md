@@ -25,7 +25,8 @@
 | 4 | `documents` (S3) | roadmap |
 | 5 | `search` / RAG | roadmap |
 | 6 | services + remover código morto | roadmap |
-| 7 | hardening (authorizer nas rotas, SSM, RDS Proxy) | roadmap |
+| **E2E** | **Teste ponta-a-ponta de TODO o programa** (GATE antes do deploy — pedido do usuário) | roadmap |
+| 7 | hardening + **deploy AWS** (só após E2E verde + autorização) | roadmap |
 
 ### O que já foi feito (commits locais, branch `feat/migracao-fase-0-1`)
 - `services/database.py`: `get_connection` (reuso + revalidação) + `tenant_tx`
@@ -128,5 +129,10 @@ o usuário.**
    `handlers/clients.py` + `client_schemas.py` ao schema real (`legal_name`,
    `document_number`, `document_type`); `clients.py` importa `validate_tenant_access`
    inexistente (corrigir). Sem RLS → `simple_tx`.
-4. Fases 4–7 (documents+S3, RAG, services, hardening/deploy). Deploy real na AWS só
-   com autorização (conta em `us-east-1`; o yml usa `sa-east-1` — alinhar).
+4. Fases 4, 5, 6 (documents+S3, RAG, services). **Fase E2E** (teste ponta-a-ponta de
+   TODO o programa) é **GATE obrigatório antes da Fase 7** (pedido do usuário).
+5. Fase 7 (hardening + deploy AWS) só após E2E verde + autorização (conta em
+   `us-east-1`; o yml usa `sa-east-1` — alinhar).
+
+> **Diretrizes do usuário (29/06):** usar **skills** sempre que ajudarem; rodar o
+> **E2E completo antes do deploy/AWS**.

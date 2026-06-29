@@ -142,7 +142,8 @@ def tenant_tx(user_id: str, role: str):
 | **4** | `documents` (S3 presigned + metadados) | Fase 1 | eu |
 | **5** | `search` / RAG (pgvector + embeddings OpenAI) | Fase 4 | eu |
 | **6** | Services alinhados (`audit`, `webhooks`, `cache`) + remover código morto (`users_new`, auth duplicado) | — | eu |
-| **7** | Hardening pós-MVP: RDS Proxy sizing + monitorar *pinning*, reserved concurrency, CORS/IAM por ambiente, remover `fastapi/uvicorn` | — | eu (parte infra exige conta AWS) |
+| **E2E** | **Teste de ponta a ponta de TODO o programa (GATE obrigatório antes do deploy)**: fluxos completos signup→login→authorizer→clients/cases/case_results/documents/search; RLS + RBAC + isolamento entre usuários. **Pedido explícito do usuário (29/06).** | Fases A–6 | eu |
+| **7** | Hardening pós-MVP + **deploy AWS**: RDS Proxy sizing + monitorar *pinning*, reserved concurrency, CORS/IAM por ambiente, remover `fastapi/uvicorn`. **Só após E2E verde e com autorização explícita.** | E2E | eu (infra exige conta AWS) |
 
 > **Ajuste pós-revisão do Codex:** itens de segurança que estavam na Fase 7
 > (role não-owner, authorizer nas rotas, SSM, sanitização de erros/logs) foram
