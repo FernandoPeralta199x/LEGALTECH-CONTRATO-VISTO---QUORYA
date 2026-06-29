@@ -14,12 +14,16 @@ from pydantic import ValidationError
 
 from src.schemas.case_schemas import CaseCreate, CaseUpdate
 from src.services.database import tenant_tx
-from src.utils.context import require_user
+from src.utils.context import require_user, require_writer
 from src.utils.helpers import error_response, success_response
 from src.utils.safety import enforce_production_safety
 
 enforce_production_safety()
 logger = logging.getLogger()
+
+
+class _ClientNotFound(Exception):
+    """O client_id informado não existe."""
 
 
 def _fmt(err: ValidationError) -> str:
@@ -43,6 +47,7 @@ def _valid_uuid(value):
 
 
 @require_user
+@require_writer
 def create_case(event, context):
     user = event["user"]
     body, err = _parse_body(event)
@@ -60,6 +65,10 @@ def create_case(event, context):
 
     try:
         with tenant_tx(user["user_id"], user["role"]) as cur:
+            # Valida a existência do cliente para evitar erro de FK (→ 500 opaco).
+            cur.execute("SELECT 1 FROM public.clients WHERE id = %s", (client_id,))
+            if cur.fetchone() is None:
+                raise _ClientNotFound()
             cur.execute(
                 "INSERT INTO public.cases"
                 " (client_id, case_type, priority, created_by, metadata)"
@@ -69,8 +78,12 @@ def create_case(event, context):
                  Json(metadata) if metadata else None),
             )
             row = cur.fetchone()
+    except _ClientNotFound:
+        return error_response(400, "client_id inexistente")
     except Exception as e:
-        logger.error(json.dumps({"event": "CASE_CREATE_ERROR", "reason": str(e)}))
+        logger.error(json.dumps({"event": "CASE_CREATE_ERROR",
+                                 "error": type(e).__name__,
+                                 "pgcode": getattr(e, "pgcode", None)}))
         return error_response(500, "Erro ao criar caso")
 
     logger.info(json.dumps({
@@ -99,7 +112,9 @@ def get_case(event, context):
             )
             row = cur.fetchone()
     except Exception as e:
-        logger.error(json.dumps({"event": "CASE_GET_ERROR", "reason": str(e)}))
+        logger.error(json.dumps({"event": "CASE_GET_ERROR",
+                                 "error": type(e).__name__,
+                                 "pgcode": getattr(e, "pgcode", None)}))
         return error_response(500, "Erro ao obter caso")
     if not row:
         return error_response(404, "Caso não encontrado")
@@ -127,7 +142,9 @@ def list_cases(event, context):
             )
             rows = cur.fetchall()
     except Exception as e:
-        logger.error(json.dumps({"event": "CASE_LIST_ERROR", "reason": str(e)}))
+        logger.error(json.dumps({"event": "CASE_LIST_ERROR",
+                                 "error": type(e).__name__,
+                                 "pgcode": getattr(e, "pgcode", None)}))
         return error_response(500, "Erro ao listar casos")
     return success_response(
         200, f"{len(rows)} casos encontrados", [_serialize(r) for r in rows]
@@ -135,6 +152,7 @@ def list_cases(event, context):
 
 
 @require_user
+@require_writer
 def update_case(event, context):
     user = event["user"]
     case_id = _valid_uuid((event.get("pathParameters") or {}).get("caseId"))
@@ -173,7 +191,9 @@ def update_case(event, context):
             )
             updated = cur.rowcount
     except Exception as e:
-        logger.error(json.dumps({"event": "CASE_UPDATE_ERROR", "reason": str(e)}))
+        logger.error(json.dumps({"event": "CASE_UPDATE_ERROR",
+                                 "error": type(e).__name__,
+                                 "pgcode": getattr(e, "pgcode", None)}))
         return error_response(500, "Erro ao atualizar caso")
     if not updated:
         return error_response(404, "Caso não encontrado")
@@ -182,6 +202,7 @@ def update_case(event, context):
 
 
 @require_user
+@require_writer
 def delete_case(event, context):
     user = event["user"]
     case_id = _valid_uuid((event.get("pathParameters") or {}).get("caseId"))
@@ -192,7 +213,9 @@ def delete_case(event, context):
             cur.execute("DELETE FROM public.cases WHERE id = %s", (case_id,))
             deleted = cur.rowcount
     except Exception as e:
-        logger.error(json.dumps({"event": "CASE_DELETE_ERROR", "reason": str(e)}))
+        logger.error(json.dumps({"event": "CASE_DELETE_ERROR",
+                                 "error": type(e).__name__,
+                                 "pgcode": getattr(e, "pgcode", None)}))
         return error_response(500, "Erro ao deletar caso")
     if not deleted:
         return error_response(404, "Caso não encontrado")

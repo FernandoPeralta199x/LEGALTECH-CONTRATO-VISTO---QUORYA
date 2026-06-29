@@ -29,3 +29,12 @@ def test_invalid_role_rejected():
 
 def test_missing_context_rejected():
     assert get_user_from_event({}) is None
+
+
+def test_flat_authorizer_shape_is_read():
+    # Shape REAL do REST API: claims achatados direto em authorizer.<key>.
+    uid = uuid.uuid4()
+    event = {"requestContext": {"authorizer": {
+        "user_id": str(uid), "email": "a@b.c", "role": "viewer"}}}
+    assert get_user_from_event(event) == {
+        "user_id": str(uid), "email": "a@b.c", "role": "viewer"}

@@ -37,9 +37,10 @@ def _reset_and_seed_client() -> str:
 
 
 def _event(user_id, role="analyst", body=None, path=None, query=None):
+    # Shape REAL do REST API: claims do authorizer ACHATADOS em `authorizer.<key>`.
     return {
         "requestContext": {
-            "authorizer": {"context": {"user_id": user_id, "email": "u@t.c", "role": role}}
+            "authorizer": {"user_id": user_id, "email": "u@t.c", "role": role}
         },
         "body": json.dumps(body) if body is not None else None,
         "pathParameters": path or {},
@@ -131,3 +132,42 @@ def test_case_result_only_for_visible_case(client_id):
         None,
     )
     assert blocked["statusCode"] == 404  # caso não visível ao usuário B
+
+
+def test_viewer_cannot_write(client_id):
+    # `viewer` é somente leitura: create/update/delete devem ser bloqueados (403).
+    v = str(uuid.uuid4())
+    resp = cases_h.create_case(
+        _event(v, role="viewer", body={"client_id": client_id,
+                                       "case_type": "contract_analysis"}),
+        None,
+    )
+    assert resp["statusCode"] == 403
+
+
+def test_viewer_can_read(client_id):
+    # `viewer` continua podendo listar (somente leitura).
+    v = str(uuid.uuid4())
+    assert cases_h.list_cases(_event(v, role="viewer"), None)["statusCode"] == 200
+
+
+def test_nested_authorizer_shape_still_works(client_id):
+    # Compat: shape aninhado (authorizer.context) — HTTP API / testes legados.
+    a = str(uuid.uuid4())
+    ev = {
+        "requestContext": {"authorizer": {"context": {
+            "user_id": a, "email": "u@t.c", "role": "analyst"}}},
+        "body": json.dumps({"client_id": client_id, "case_type": "contract_analysis"}),
+        "pathParameters": {}, "queryStringParameters": {},
+    }
+    assert cases_h.create_case(ev, None)["statusCode"] == 201
+
+
+def test_create_case_invalid_client_returns_400(client_id):
+    a = str(uuid.uuid4())
+    resp = cases_h.create_case(
+        _event(a, body={"client_id": str(uuid.uuid4()),
+                        "case_type": "contract_analysis"}),
+        None,
+    )
+    assert resp["statusCode"] == 400  # client_id inexistente

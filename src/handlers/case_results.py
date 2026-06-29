@@ -13,7 +13,7 @@ from pydantic import ValidationError
 
 from src.schemas.case_schemas import CaseResultCreate, CaseResultUpdate
 from src.services.database import tenant_tx
-from src.utils.context import require_user
+from src.utils.context import require_user, require_writer
 from src.utils.helpers import error_response, success_response
 from src.utils.safety import enforce_production_safety
 
@@ -46,6 +46,7 @@ def _valid_uuid(value):
 
 
 @require_user
+@require_writer
 def create_case_result(event, context):
     user = event["user"]
     body, err = _parse_body(event)
@@ -62,26 +63,30 @@ def create_case_result(event, context):
 
     try:
         with tenant_tx(user["user_id"], user["role"]) as cur:
-            # O case_id precisa ser visível ao usuário (RLS de cases filtra).
-            cur.execute("SELECT 1 FROM public.cases WHERE id = %s", (case_id,))
-            if cur.fetchone() is None:
-                raise _CaseNotVisible()
+            # Atômico (sem TOCTOU): só insere se o case for VISÍVEL ao usuário —
+            # a RLS de `cases` filtra o EXISTS; 0 linhas inseridas => 404.
             cur.execute(
                 "INSERT INTO public.case_results"
                 " (case_id, result_type, result_title, result_data, risk_level,"
                 "  confidence_score, summary_text, detailed_findings,"
                 "  recommendations, created_by)"
-                " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+                " SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s, %s"
+                " WHERE EXISTS (SELECT 1 FROM public.cases WHERE id = %s)"
                 " RETURNING id, created_at",
                 (case_id, data.result_type, data.result_title, Json(data.findings),
                  data.risk_level, data.confidence_score, data.summary_text,
-                 data.detailed_findings, data.recommendations, user["user_id"]),
+                 data.detailed_findings, data.recommendations, user["user_id"],
+                 case_id),
             )
             row = cur.fetchone()
+            if row is None:
+                raise _CaseNotVisible()
     except _CaseNotVisible:
         return error_response(404, "Caso não encontrado ou sem acesso")
     except Exception as e:
-        logger.error(json.dumps({"event": "CASE_RESULT_CREATE_ERROR", "reason": str(e)}))
+        logger.error(json.dumps({"event": "CASE_RESULT_CREATE_ERROR",
+                                 "error": type(e).__name__,
+                                 "pgcode": getattr(e, "pgcode", None)}))
         return error_response(500, "Erro ao criar resultado")
 
     logger.info(json.dumps({
@@ -110,7 +115,9 @@ def get_case_result(event, context):
             )
             row = cur.fetchone()
     except Exception as e:
-        logger.error(json.dumps({"event": "CASE_RESULT_GET_ERROR", "reason": str(e)}))
+        logger.error(json.dumps({"event": "CASE_RESULT_GET_ERROR",
+                                 "error": type(e).__name__,
+                                 "pgcode": getattr(e, "pgcode", None)}))
         return error_response(500, "Erro ao obter resultado")
     if not row:
         return error_response(404, "Resultado não encontrado")
@@ -134,7 +141,9 @@ def list_case_results(event, context):
             )
             rows = cur.fetchall()
     except Exception as e:
-        logger.error(json.dumps({"event": "CASE_RESULT_LIST_ERROR", "reason": str(e)}))
+        logger.error(json.dumps({"event": "CASE_RESULT_LIST_ERROR",
+                                 "error": type(e).__name__,
+                                 "pgcode": getattr(e, "pgcode", None)}))
         return error_response(500, "Erro ao listar resultados")
     return success_response(
         200, f"{len(rows)} resultados encontrados", [_serialize(r) for r in rows]
@@ -142,6 +151,7 @@ def list_case_results(event, context):
 
 
 @require_user
+@require_writer
 def update_case_result(event, context):
     user = event["user"]
     result_id = _valid_uuid((event.get("pathParameters") or {}).get("resultId"))
@@ -177,7 +187,9 @@ def update_case_result(event, context):
             )
             updated = cur.rowcount
     except Exception as e:
-        logger.error(json.dumps({"event": "CASE_RESULT_UPDATE_ERROR", "reason": str(e)}))
+        logger.error(json.dumps({"event": "CASE_RESULT_UPDATE_ERROR",
+                                 "error": type(e).__name__,
+                                 "pgcode": getattr(e, "pgcode", None)}))
         return error_response(500, "Erro ao atualizar resultado")
     if not updated:
         return error_response(404, "Resultado não encontrado")
@@ -185,6 +197,7 @@ def update_case_result(event, context):
 
 
 @require_user
+@require_writer
 def delete_case_result(event, context):
     user = event["user"]
     result_id = _valid_uuid((event.get("pathParameters") or {}).get("resultId"))
@@ -197,7 +210,9 @@ def delete_case_result(event, context):
             )
             deleted = cur.rowcount
     except Exception as e:
-        logger.error(json.dumps({"event": "CASE_RESULT_DELETE_ERROR", "reason": str(e)}))
+        logger.error(json.dumps({"event": "CASE_RESULT_DELETE_ERROR",
+                                 "error": type(e).__name__,
+                                 "pgcode": getattr(e, "pgcode", None)}))
         return error_response(500, "Erro ao deletar resultado")
     if not deleted:
         return error_response(404, "Resultado não encontrado")
