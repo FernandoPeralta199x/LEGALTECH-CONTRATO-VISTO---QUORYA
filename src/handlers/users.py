@@ -254,11 +254,19 @@ def get_user(event, context):
 @require_user
 @require_role("admin")
 def list_users(event, context):
+    params = event.get("queryStringParameters") or {}
+    try:
+        page = max(int(params.get("page", 1)), 1)
+        page_size = min(max(int(params.get("page_size", 50)), 1), 100)
+    except (ValueError, TypeError):
+        return error_response(400, "page/page_size inválidos")
+    offset = (page - 1) * page_size
     try:
         with simple_tx() as cur:
             cur.execute(
                 "SELECT id, email, name, role, status, created_at FROM public.users"
-                " ORDER BY created_at DESC LIMIT 100"
+                " ORDER BY created_at DESC LIMIT %s OFFSET %s",
+                (page_size, offset),
             )
             rows = cur.fetchall()
     except Exception as e:

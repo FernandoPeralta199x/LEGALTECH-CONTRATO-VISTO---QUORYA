@@ -21,6 +21,32 @@ STATUS_PATTERN = "^(active|inactive)$"
 STATE_PATTERN = "^[A-Za-z]{2}$"
 
 
+def _valid_cpf(cpf: str) -> bool:
+    if len(cpf) != 11 or len(set(cpf)) == 1:
+        return False
+    for i in (9, 10):
+        soma = sum(int(cpf[n]) * ((i + 1) - n) for n in range(i))
+        dv = (soma * 10) % 11
+        dv = 0 if dv == 10 else dv
+        if dv != int(cpf[i]):
+            return False
+    return True
+
+
+def _valid_cnpj(cnpj: str) -> bool:
+    if len(cnpj) != 14 or len(set(cnpj)) == 1:
+        return False
+    pesos1 = [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]
+    pesos2 = [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]
+    for pesos, i in ((pesos1, 12), (pesos2, 13)):
+        soma = sum(int(cnpj[n]) * pesos[n] for n in range(i))
+        dv = soma % 11
+        dv = 0 if dv < 2 else 11 - dv
+        if dv != int(cnpj[i]):
+            return False
+    return True
+
+
 class ClientCreateSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -49,6 +75,9 @@ class ClientCreateSchema(BaseModel):
             raise ValueError(
                 f"document_number incompatível com document_type={self.document_type}"
             )
+        valido = _valid_cpf if self.document_type == "cpf" else _valid_cnpj
+        if not valido(self.document_number):
+            raise ValueError("document_number inválido (dígito verificador)")
         return self
 
 

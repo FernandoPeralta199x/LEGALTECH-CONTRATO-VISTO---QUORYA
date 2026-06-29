@@ -44,7 +44,7 @@ def _data(resp):
 
 
 _VALID = {"legal_name": "Empresa XYZ", "document_type": "cnpj",
-          "document_number": "12.345.678/0001-90"}
+          "document_number": "11.222.333/0001-81"}  # CNPJ com DV válido
 
 
 def _create(role="analyst", **over):
@@ -57,7 +57,20 @@ def test_create_and_get(clean_clients):
     cid = _data(_create())["id"]
     got = _data(c.get_client(_event(path={"clientId": cid}), None))
     assert got["legal_name"] == "Empresa XYZ"
-    assert got["document_number"] == "12345678000190"  # só dígitos
+    assert got["document_number"] == "11222333000181"  # só dígitos (analyst vê completo)
+
+
+def test_viewer_sees_masked_document(clean_clients):
+    cid = _data(_create())["id"]  # criado por analyst
+    got = _data(c.get_client(_event(role="viewer", path={"clientId": cid}), None))
+    assert got["document_number"] == "**********0181"  # mascarado p/ viewer
+    listed = _data(c.list_clients(_event(role="viewer"), None))
+    assert listed[0]["document_number"] == "**********0181"
+
+
+def test_create_invalid_checksum_400(clean_clients):
+    # CNPJ com tamanho certo mas dígito verificador inválido
+    assert _create(document_number="12.345.678/0001-90")["statusCode"] == 400
 
 
 def test_create_cpf_coherence(clean_clients):

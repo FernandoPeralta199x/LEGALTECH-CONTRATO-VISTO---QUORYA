@@ -114,7 +114,7 @@ def test_full_flow(clean_db):
     # 4) admin cria client (catálogo compartilhado)
     client_id = _ok(clients_h.create_client(_ev(ctx_admin, body={
         "legal_name": "ACME Ltda", "document_type": "cnpj",
-        "document_number": "12.345.678/0001-90"}), None))["id"]
+        "document_number": "11.222.333/0001-81"}), None))["id"]
 
     # 5) ana cria case -> case_result -> document
     case_id = _ok(cases_h.create_case(_ev(ctx_ana, body={

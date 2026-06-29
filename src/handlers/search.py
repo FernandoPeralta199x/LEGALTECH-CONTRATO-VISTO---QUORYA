@@ -52,12 +52,27 @@ def search_clauses(event, context):
     if not case_id:
         return error_response(400, "case_id inválido")
 
+    # 1) Confirma acesso ao case ANTES de gerar embedding (evita custo/chamada
+    #    externa para case inexistente ou sem acesso). A RLS de cases filtra.
+    try:
+        with tenant_tx(user["user_id"], user["role"]) as cur:
+            cur.execute("SELECT 1 FROM public.cases WHERE id = %s", (case_id,))
+            case_visivel = cur.fetchone() is not None
+    except Exception as e:
+        logger.error(json.dumps({"event": "SEARCH_ERROR", "error": type(e).__name__,
+                                 "pgcode": getattr(e, "pgcode", None)}))
+        return error_response(500, "Erro na busca")
+    if not case_visivel:
+        return error_response(404, "Caso não encontrado ou sem acesso")
+
+    # 2) Gera o embedding da query (custo/chamada externa só após autorizar).
     try:
         query_embedding = embeddings_service.embed(data.query)
     except Exception as e:
         logger.error(json.dumps({"event": "SEARCH_EMBED_ERROR", "error": type(e).__name__}))
         return error_response(502, "Falha ao gerar embedding da consulta")
 
+    # 3) Busca vetorial (a RLS de documents filtra o JOIN).
     try:
         with tenant_tx(user["user_id"], user["role"]) as cur:
             rows = rag.search_similar(cur, query_embedding, case_id, data.top_k)

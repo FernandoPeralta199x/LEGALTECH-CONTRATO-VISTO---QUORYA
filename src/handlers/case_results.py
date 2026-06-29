@@ -132,12 +132,18 @@ def list_case_results(event, context):
     if not case_id:
         return error_response(400, "Parâmetro caseId inválido")
     try:
+        page = max(int(params.get("page", 1)), 1)
+        page_size = min(max(int(params.get("page_size", 50)), 1), 100)
+    except (ValueError, TypeError):
+        return error_response(400, "page/page_size inválidos")
+    offset = (page - 1) * page_size
+    try:
         with tenant_tx(user["user_id"], user["role"]) as cur:
             cur.execute(
                 "SELECT id, case_id, result_type, result_title, risk_level,"
                 " confidence_score, created_at FROM public.case_results"
-                " WHERE case_id = %s ORDER BY created_at DESC LIMIT 100",
-                (case_id,),
+                " WHERE case_id = %s ORDER BY created_at DESC LIMIT %s OFFSET %s",
+                (case_id, page_size, offset),
             )
             rows = cur.fetchall()
     except Exception as e:

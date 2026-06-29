@@ -104,10 +104,11 @@ def test_search_is_rls_filtered(client_id):
     case_id = _make_case(a, client_id)
     _seed_doc_with_embeddings(a, case_id, _SEGMENTS)
 
-    # B não é dono dos documentos (RLS uploaded_by) → busca vazia; admin vê
-    empty = _data(search_h.search_clauses(
-        _event(b, body={"case_id": case_id, "query": "rescisão"}), None))
-    assert empty == []
+    # B não vê o case de A (RLS de cases) → 404 antes mesmo de gerar embedding
+    blocked = search_h.search_clauses(
+        _event(b, body={"case_id": case_id, "query": "rescisão"}), None)
+    assert blocked["statusCode"] == 404
+    # admin vê o case e os documentos
     seen = _data(search_h.search_clauses(
         _event(b, role="admin", body={"case_id": case_id, "query": "rescisão"}), None))
     assert len(seen) == 3

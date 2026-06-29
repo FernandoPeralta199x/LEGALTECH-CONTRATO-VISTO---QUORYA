@@ -84,6 +84,7 @@ def create_client(event, context):
 
 @require_user
 def get_client(event, context):
+    user = event["user"]
     client_id = _valid_uuid((event.get("pathParameters") or {}).get("clientId"))
     if not client_id:
         return error_response(400, "clientId inválido")
@@ -96,11 +97,12 @@ def get_client(event, context):
         return error_response(500, "Erro ao obter cliente")
     if not row:
         return error_response(404, "Cliente não encontrado")
-    return success_response(200, "Cliente encontrado", _serialize(row))
+    return success_response(200, "Cliente encontrado", _serialize(row, user["role"]))
 
 
 @require_user
 def list_clients(event, context):
+    user = event["user"]
     params = event.get("queryStringParameters") or {}
     try:
         page = max(int(params.get("page", 1)), 1)
@@ -120,7 +122,8 @@ def list_clients(event, context):
         logger.error(json.dumps({"event": "CLIENT_LIST_ERROR", "error": type(e).__name__}))
         return error_response(500, "Erro ao listar clientes")
     return success_response(
-        200, f"{len(rows)} clientes encontrados", [_serialize(r) for r in rows]
+        200, f"{len(rows)} clientes encontrados",
+        [_serialize(r, user["role"]) for r in rows]
     )
 
 
@@ -202,12 +205,22 @@ _SELECT_COLS = (
 )
 
 
-def _serialize(row) -> dict:
+def _mask_document(num: str) -> str:
+    """Mascara o documento mantendo só os 4 últimos dígitos (PII p/ viewer)."""
+    if not num or len(num) <= 4:
+        return num
+    return "*" * (len(num) - 4) + num[-4:]
+
+
+def _serialize(row, role="admin") -> dict:
+    document = row["document_number"]
+    if role == "viewer":  # viewer vê PII mascarada (LGPD)
+        document = _mask_document(document)
     return {
         "id": str(row["id"]),
         "legal_name": row["legal_name"],
         "document_type": row["document_type"],
-        "document_number": row["document_number"],
+        "document_number": document,
         "email": row.get("email"),
         "phone": row.get("phone"),
         "address": {
