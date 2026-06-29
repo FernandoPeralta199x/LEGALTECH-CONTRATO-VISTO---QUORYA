@@ -80,9 +80,8 @@ def authorize(event, context):
                     }
                 ]
             },
-            'context': {
+            'context': {  # sem email (menos PII propagada aos handlers)
                 'user_id': payload['user_id'],
-                'email': payload['email'],
                 'role': payload['role']
             }
         }

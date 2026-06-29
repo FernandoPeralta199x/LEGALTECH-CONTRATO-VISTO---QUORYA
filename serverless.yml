@@ -4,15 +4,15 @@ provider:
   name: aws
   runtime: python3.11
   region: sa-east-1
-  stage: dev
-  
+  stage: ${opt:stage, 'dev'}
+
   environment:
     PYTHONPATH: /var/task:/opt/python
     DB_HOST: ${ssm:/contrato-visto/db_host}
     DB_USER: ${ssm:/contrato-visto/db_user}
     DB_PASS: ${ssm:/contrato-visto/db_pass}
     DB_NAME: contrato_visto
-    ENVIRONMENT: dev
+    ENVIRONMENT: ${self:provider.stage}
     LOG_LEVEL: INFO
     JWT_SECRET_KEY: ${ssm:/contrato-visto/jwt_secret}
 

@@ -7,6 +7,7 @@
   nunca loga PII (email/token) nem `str(e)`; senha com bcrypt; token via
   `create_access_token` (sem segredo padrão).
 """
+import hashlib
 import json
 import logging
 import secrets
@@ -45,6 +46,16 @@ def verify_password(password: str, password_hash: str) -> bool:
         logger.error(json.dumps({"event": "PASSWORD_VERIFY_ERROR",
                                  "error": type(e).__name__}))
         return False
+
+
+# Hash fixo para uniformizar o tempo do login quando o usuário não existe
+# (mitiga enumeração por timing — sempre executa um bcrypt).
+_DUMMY_PASSWORD_HASH = bcrypt.hashpw(b"timing-uniform", bcrypt.gensalt(rounds=12)).decode("utf-8")
+
+
+def _token_hash(raw: str) -> str:
+    """SHA-256 hex do token de reset (guardamos só o hash no banco)."""
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def _fmt(err: ValidationError) -> str:
@@ -123,12 +134,15 @@ def login(event, context):
                                  "error": type(e).__name__}))
         return error_response(500, "Erro no login")
 
-    if not user or not verify_password(data.password, user["password_hash"]):
+    # Sempre executa bcrypt (hash dummy se o usuário não existe) p/ tempo uniforme.
+    stored_hash = user["password_hash"] if user else _DUMMY_PASSWORD_HASH
+    password_ok = verify_password(data.password, stored_hash)
+    if not user or not password_ok:
         logger.warning(json.dumps({"event": "AUTH_LOGIN_FAILED"}))  # sem PII
         return error_response(401, "Email ou senha inválidos")
 
-    token = create_access_token({
-        "user_id": str(user["id"]), "email": user["email"], "role": user["role"],
+    token = create_access_token({  # sem email no token (menos PII)
+        "user_id": str(user["id"]), "role": user["role"],
     })
     logger.info(json.dumps({"event": "AUTH_LOGIN_SUCCESS", "user_id": str(user["id"])}))
     return success_response(200, "Login bem-sucedido", {
@@ -153,11 +167,13 @@ def forgot_password(event, context):
             user = cur.fetchone()
             if not user:
                 return generic
-            reset_token = secrets.token_urlsafe(32)
+            reset_token = secrets.token_urlsafe(32)  # vai em claro SÓ no e-mail
+            # invalida pedidos anteriores e guarda apenas o HASH do token
+            cur.execute("DELETE FROM public.password_resets WHERE user_id = %s", (user["id"],))
             cur.execute(
                 "INSERT INTO public.password_resets (user_id, token, expires_at)"
                 " VALUES (%s, %s, NOW() + INTERVAL '1 hour')",
-                (user["id"], reset_token),
+                (user["id"], _token_hash(reset_token)),
             )
     except Exception as e:
         logger.error(json.dumps({"event": "PASSWORD_RESET_REQUEST_ERROR",
@@ -181,10 +197,11 @@ def reset_password(event, context):
 
     try:
         with simple_tx() as cur:
+            # Consumo ATÔMICO: deleta e retorna o user_id se válido e não expirado.
             cur.execute(
-                "SELECT user_id FROM public.password_resets"
-                " WHERE token = %s AND expires_at > NOW()",
-                (data.token,),
+                "DELETE FROM public.password_resets"
+                " WHERE token = %s AND expires_at > NOW() RETURNING user_id",
+                (_token_hash(data.token),),
             )
             reset = cur.fetchone()
             if not reset:
@@ -194,7 +211,9 @@ def reset_password(event, context):
                 " WHERE id = %s",
                 (hash_password(data.password), reset["user_id"]),
             )
-            cur.execute("DELETE FROM public.password_resets WHERE token = %s", (data.token,))
+            # remove quaisquer outros tokens pendentes do usuário (defensivo)
+            cur.execute("DELETE FROM public.password_resets WHERE user_id = %s",
+                        (reset["user_id"],))
     except Exception as e:
         logger.error(json.dumps({"event": "PASSWORD_RESET_ERROR",
                                  "error": type(e).__name__}))

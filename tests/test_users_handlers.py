@@ -109,6 +109,18 @@ def test_login_inactive_user_401(clean_users):
     assert u.login(_pub({"email": "a@b.c", "password": "Senha123"}), None)["statusCode"] == 401
 
 
+def test_login_unknown_email_401(clean_users):
+    # usuário inexistente: ainda 401 (e executa bcrypt dummy p/ tempo uniforme)
+    assert u.login(_pub({"email": "x@y.z", "password": "Senha123"}), None)["statusCode"] == 401
+
+
+def test_login_token_has_no_email(clean_users):
+    _seed_user("a@b.c", "Senha123", role="viewer")
+    token = _data(u.login(_pub({"email": "a@b.c", "password": "Senha123"}), None))["token"]
+    claims = jwt.decode(token, os.environ["JWT_SECRET_KEY"], algorithms=["HS256"])
+    assert "email" not in claims and claims["role"] == "viewer"
+
+
 # ── RBAC: get / list ───────────────────────────────────────────────────────
 def test_get_user_self_and_admin(clean_users):
     uid = _seed_user("a@b.c", "Senha123")
@@ -158,15 +170,37 @@ def test_delete_user_is_soft_and_admin_only(clean_users):
 
 
 # ── forgot / reset ─────────────────────────────────────────────────────────
-def test_forgot_then_reset_flow(clean_users):
+def _capture_token(monkeypatch, captured):
+    monkeypatch.setattr(
+        u.email_service, "send_reset_password_email",
+        lambda to_email, reset_token, user_name=None: captured.update(token=reset_token) or True,
+    )
+
+
+def test_forgot_then_reset_flow(clean_users, monkeypatch):
     _seed_user("a@b.c", "Senha123")
+    captured = {}
+    _capture_token(monkeypatch, captured)
     assert u.forgot_password(_pub({"email": "a@b.c"}), None)["statusCode"] == 200
-    token = _fetch_reset_token("a@b.c")
-    assert token
+    token = captured["token"]  # token em CLARO (como iria no e-mail)
     assert u.reset_password(_pub({"token": token, "password": "NovaSenha9"}), None)["statusCode"] == 200
     # login com a nova senha funciona; com a antiga, não
     assert u.login(_pub({"email": "a@b.c", "password": "NovaSenha9"}), None)["statusCode"] == 200
     assert u.login(_pub({"email": "a@b.c", "password": "Senha123"}), None)["statusCode"] == 401
+    # token é de uso único (consumo atômico): segundo uso falha
+    assert u.reset_password(_pub({"token": token, "password": "Outra1234"}), None)["statusCode"] == 400
+
+
+def test_reset_token_stored_hashed(clean_users, monkeypatch):
+    import hashlib
+    _seed_user("a@b.c", "Senha123")
+    captured = {}
+    _capture_token(monkeypatch, captured)
+    u.forgot_password(_pub({"email": "a@b.c"}), None)
+    clear = captured["token"]
+    stored = _fetch_reset_token("a@b.c")
+    assert stored != clear  # nunca armazenado em claro
+    assert stored == hashlib.sha256(clear.encode()).hexdigest()
 
 
 def test_forgot_unknown_email_is_generic(clean_users):
