@@ -11,7 +11,6 @@ import hashlib
 import json
 import logging
 import secrets
-import uuid
 
 import bcrypt
 from pydantic import ValidationError
@@ -28,6 +27,7 @@ from src.services.email import email_service
 from src.utils.auth import create_access_token
 from src.utils.context import require_role, require_user
 from src.utils.helpers import error_response, generate_uuid, success_response
+from src.utils.lambda_io import fmt_validation_error as _fmt, parse_json_body as _parse_body, valid_uuid as _valid_uuid
 from src.utils.safety import enforce_production_safety
 
 enforce_production_safety()
@@ -56,26 +56,6 @@ _DUMMY_PASSWORD_HASH = bcrypt.hashpw(b"timing-uniform", bcrypt.gensalt(rounds=12
 def _token_hash(raw: str) -> str:
     """SHA-256 hex do token de reset (guardamos só o hash no banco)."""
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
-
-def _fmt(err: ValidationError) -> str:
-    return ", ".join(
-        f"{(e['loc'][0] if e['loc'] else '?')}: {e['msg']}" for e in err.errors()
-    )
-
-
-def _parse_body(event):
-    try:
-        return json.loads(event.get("body") or "{}"), None
-    except json.JSONDecodeError:
-        return None, error_response(400, "Corpo JSON inválido")
-
-
-def _valid_uuid(value):
-    try:
-        return str(uuid.UUID(str(value)))
-    except (ValueError, TypeError):
-        return None
 
 
 # ── rotas públicas ───────────────────────────────────────────────────────────

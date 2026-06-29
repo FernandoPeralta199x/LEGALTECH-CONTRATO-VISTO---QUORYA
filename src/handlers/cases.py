@@ -7,7 +7,6 @@ vazam ao cliente.
 """
 import json
 import logging
-import uuid
 
 from psycopg2.extras import Json
 from pydantic import ValidationError
@@ -16,6 +15,7 @@ from src.schemas.case_schemas import CaseCreate, CaseUpdate
 from src.services.database import tenant_tx
 from src.utils.context import require_user, require_writer
 from src.utils.helpers import error_response, success_response
+from src.utils.lambda_io import fmt_validation_error as _fmt, parse_json_body as _parse_body, valid_uuid as _valid_uuid
 from src.utils.safety import enforce_production_safety
 
 enforce_production_safety()
@@ -24,26 +24,6 @@ logger = logging.getLogger()
 
 class _ClientNotFound(Exception):
     """O client_id informado não existe."""
-
-
-def _fmt(err: ValidationError) -> str:
-    return ", ".join(
-        f"{(e['loc'][0] if e['loc'] else '?')}: {e['msg']}" for e in err.errors()
-    )
-
-
-def _parse_body(event):
-    try:
-        return json.loads(event.get("body") or "{}"), None
-    except json.JSONDecodeError:
-        return None, error_response(400, "Corpo JSON inválido")
-
-
-def _valid_uuid(value):
-    try:
-        return str(uuid.UUID(str(value)))
-    except (ValueError, TypeError):
-        return None
 
 
 @require_user

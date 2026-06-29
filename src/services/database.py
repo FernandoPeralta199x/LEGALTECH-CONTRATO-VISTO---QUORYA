@@ -5,8 +5,8 @@
 - ``tenant_tx``: transação que fixa o contexto RLS do usuário autenticado
   (``app.user_id``/``app.user_role``) via ``set_config(..., true)`` (= SET LOCAL).
   Necessário para as POLICIES de RLS e os TRIGGERS de auditoria do banco.
-- Mantém ``Database``/instância ``db`` (context manager) por compatibilidade com
-  handlers ainda não migrados.
+- ``simple_tx``: transação SEM contexto RLS, para tabelas globais (``users``,
+  ``clients``, ``password_resets``).
 """
 from __future__ import annotations
 

@@ -7,7 +7,6 @@ Não vaza `str(e)` nem PII.
 """
 import json
 import logging
-import uuid
 
 from pydantic import ValidationError
 
@@ -17,23 +16,11 @@ from src.services.database import tenant_tx
 from src.services.embeddings import embeddings_service
 from src.utils.context import require_user
 from src.utils.helpers import error_response, success_response
+from src.utils.lambda_io import fmt_validation_error as _fmt, valid_uuid as _valid_uuid
 from src.utils.safety import enforce_production_safety
 
 enforce_production_safety()
 logger = logging.getLogger()
-
-
-def _fmt(err: ValidationError) -> str:
-    return ", ".join(
-        f"{(e['loc'][0] if e['loc'] else '?')}: {e['msg']}" for e in err.errors()
-    )
-
-
-def _valid_uuid(value):
-    try:
-        return str(uuid.UUID(str(value)))
-    except (ValueError, TypeError):
-        return None
 
 
 @require_user
