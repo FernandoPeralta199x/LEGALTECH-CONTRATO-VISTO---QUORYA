@@ -86,6 +86,7 @@ docker start cv-pg18    # ou: docker run -d --name cv-pg18 -e POSTGRES_DB=contra
 # 2) (se recriar) restaurar schema + role + policies
 docker exec -i cv-pg18 psql -U dbadmin -d contrato_visto < docs/schema_referencia.sql
 #   criar role cv_app (LOGIN, NÃO-owner) + grants; aplicar migrations/001_rls_policies.sql
+#   e migrations/002_fix_audit_delete.sql
 # 3) venv + deps
 cd apps/api ... (este repo)  python -m venv .venv
 .venv/Scripts/python -m pip install psycopg2-binary python-dotenv pydantic PyJWT bcrypt email-validator pytest
@@ -175,3 +176,28 @@ Média-04 (`search` checa case antes do embedding), Média-07 (paginação em
 extraídos p/ `utils/lambda_io.py`). **Diferidos p/ Fase 7** (prontidão de produção):
 **Alta-02** revogação/versionamento de sessão; **Média-05** confirmação pós-upload
 (`HeadObject`/checksum/limite); **Média-06** backends reais por stage via SSM.
+
+## Varredura cirúrgica final (29/06) — Codex + verificação em runtime
+
+**Evidências:** 86 testes no PG18; 23 módulos importam sem erro; RLS consistente
+(cases/case_results/documents=tenant_tx; users/clients=simple_tx); 28 funções do yml
+com handler; sem resíduo FastAPI ativo; 8/8 tabelas de domínio usadas.
+
+**Corrigido nesta varredura:**
+- **Migration 002** — `audit.log_audit()` gravava `resource_id=NULL` em DELETE
+  (`NEW` é NULL); agora `COALESCE(NEW.id, OLD.id)` (trilha de DELETE correta).
+  *(O Codex previu que o delete "falharia"; o runtime provou que retorna 200 — o
+  defeito real era a auditoria, não o delete. Iron Law.)*
+- **PII**: `viewer` não vê mais email/phone/endereço de clients (além do documento mascarado).
+- `jwt_authorizer`: comentário corrigido (Deny→403). Plugin `serverless-python-requirements`
+  declarado; testes de `case_results`; removidos órfãos `serverless.yml_nok1`/`test_connection.py`.
+
+**Lacunas/diferidos confirmados (Fase 7 / decisão):**
+- `webhooks`: tabela existe, sem funcionalidade (service removido). Migrar se for requisito.
+- `audit.data_access_log`/`compliance_events`: não populadas (log explícito de acesso a PII — LGPD).
+- `delete_case` é **hard delete** com cascata; **não remove objetos S3** e o IAM não tem
+  `s3:DeleteObject` → órfãos + perda de trilha. **Decidir:** soft delete? + cleanup.
+- Dados legados com `created_by`/`uploaded_by` NULL ficam invisíveis a não-admin (backfill).
+- `assigned_to`: não concede acesso (modelo dono) e sem FK p/ `users`.
+- RAG: ingestão sem endpoint; revogação de sessão; VPC/RDS Proxy; SES IAM; backends por
+  stage; validação pós-upload; validação de dimensão do embedding.
