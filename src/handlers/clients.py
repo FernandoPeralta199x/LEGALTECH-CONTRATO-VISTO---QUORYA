@@ -140,11 +140,17 @@ def update_client(event, context):
 
     fields, values = [], []
     for col in ("legal_name", "email", "phone", "address_street",
-                "address_city", "address_state", "address_zip", "status"):
+                "address_city", "address_state", "address_zip"):
         val = getattr(data, col)
         if val is not None:
             fields.append(f"{col} = %s")
             values.append(val)
+    if data.status is not None:
+        # mantém is_active coerente com status (delete usa ambos)
+        fields.append("status = %s")
+        values.append(data.status)
+        fields.append("is_active = %s")
+        values.append(data.status == "active")
     if not fields:
         return error_response(400, "Nenhum campo para atualizar")
     fields.append("updated_at = NOW()")

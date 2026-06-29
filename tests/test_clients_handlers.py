@@ -127,3 +127,37 @@ def test_update_nonexistent_404(clean_clients):
     resp = c.update_client(_event(path={"clientId": str(uuid.uuid4())},
                                   body={"legal_name": "Nome"}), None)
     assert resp["statusCode"] == 404
+
+
+def test_update_status_syncs_is_active(clean_clients):
+    cid = _data(_create())["id"]
+    c.update_client(_event(path={"clientId": cid}, body={"status": "inactive"}), None)
+    assert _row_is_active(cid) is False
+    c.update_client(_event(path={"clientId": cid}, body={"status": "active"}), None)
+    assert _row_is_active(cid) is True
+
+
+# ── bordas ──────────────────────────────────────────────────────────────────
+def test_list_invalid_pagination_400(clean_clients):
+    resp = c.list_clients(_event(query={"page_size": "abc"}), None)
+    assert resp["statusCode"] == 400
+
+
+def test_create_invalid_json_400(clean_clients):
+    ev = _event()
+    ev["body"] = "{nao-e-json"
+    assert c.create_client(ev, None)["statusCode"] == 400
+
+
+def test_update_no_fields_400(clean_clients):
+    cid = _data(_create())["id"]
+    assert c.update_client(_event(path={"clientId": cid}, body={}), None)["statusCode"] == 400
+
+
+def _row_is_active(cid):
+    conn = _admin_conn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT is_active FROM public.clients WHERE id = %s", (cid,))
+        val = cur.fetchone()[0]
+    conn.close()
+    return val
