@@ -21,8 +21,8 @@
 | 1 | Fundação RLS-aware + policies + auditoria | ✅ concluída (**13 testes**), revisada pelo Codex |
 | 2 | `cases` + `case_results` (RLS-aware + authorizer + **RBAC viewer** + **INSERT atômico**) | ✅ concluída (**25 testes**), revisada+endurecida (Codex) |
 | **A** | **Auth/Users** (login + CRUD + forgot/reset + `jwt_authorizer`; signup→viewer; reset token hasheado/atômico; anti-timing; sem PII) | ✅ concluída+endurecida (**45 testes**) |
-| 3 | `clients` | ⏳ próxima |
-| 4 | `documents` (S3) | roadmap |
+| 3 | `clients` (catálogo compartilhado, RBAC writer, sem RLS) | ✅ concluída (**57 testes**), Codex revisando |
+| 4 | `documents` (S3 presigned + metadados; RLS por case) | ⏳ próxima |
 | 5 | `search` / RAG | roadmap |
 | 6 | services + remover código morto | roadmap |
 | **E2E** | **Teste ponta-a-ponta de TODO o programa** (GATE antes do deploy — pedido do usuário) | roadmap |
