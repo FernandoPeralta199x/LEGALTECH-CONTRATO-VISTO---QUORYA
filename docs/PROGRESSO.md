@@ -21,7 +21,7 @@
 | 1 | Fundação RLS-aware + policies + auditoria | ✅ concluída (**13 testes**), revisada pelo Codex |
 | 2 | `cases` + `case_results` (RLS-aware + authorizer + **RBAC viewer** + **INSERT atômico**) | ✅ concluída (**25 testes**), revisada+endurecida (Codex) |
 | **A** | **Auth/Users** (login + CRUD + forgot/reset + `jwt_authorizer`; signup→viewer; reset token hasheado/atômico; anti-timing; sem PII) | ✅ concluída+endurecida (**45 testes**) |
-| 3 | `clients` (catálogo compartilhado, RBAC writer, sem RLS) | ✅ concluída (**57 testes**), Codex revisando |
+| 3 | `clients` (catálogo compartilhado, RBAC writer, sem RLS) | ✅ concluída+endurecida (**61 testes**) |
 | 4 | `documents` (S3 presigned + metadados; RLS por case) | ⏳ próxima |
 | 5 | `search` / RAG | roadmap |
 | 6 | services + remover código morto | roadmap |
@@ -138,3 +138,15 @@ o usuário.**
 > do deploy), 3 passos:** (1) E2E de todo o programa; (2) havendo erros, plano de
 > correção → corrigir → E2E, **em loop até zerar**; (3) varredura final de migração
 > completa, código morto e qualidade do código.
+
+## Decisões de produto pendentes (resolver no gate E2E / antes do deploy)
+
+Aplicado o default mais seguro; confirmar com o usuário:
+1. **Signup público** cria `viewer` (Fase A). Se o onboarding for admin-only,
+   restringir `create_user` ao authorizer + admin.
+2. **`viewer` vê PII completa** de clients (`document_number`/email/phone/endereço)
+   em get/list (Fase 3). Se proibido por LGPD/negócio, mascarar p/ viewer.
+3. **`get_client` retorna inativos** (soft-deleted) a qualquer autenticado se souber
+   o UUID. Confirmar se é intencional.
+4. **Sem checksum de CPF/CNPJ** (só tamanho/tipo). Avaliar validar dígito verificador
+   (LegalTech). Auditoria de escrita de `clients` (sem trigger) → avaliar na Fase 6.
