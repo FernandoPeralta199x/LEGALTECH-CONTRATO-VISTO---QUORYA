@@ -1,344 +1,215 @@
+"""Handlers Lambda de `clients` (migração FastAPI→Serverless, Fase 3).
+
+`public.clients` é um **catálogo compartilhado**: NÃO tem `created_by` nem RLS.
+Logo: leitura para qualquer usuário autenticado; escrita (create/update/delete)
+apenas para papéis de escrita (admin/analyst) via `require_writer`. `viewer` é
+somente leitura. Usa `simple_tx` (sem contexto RLS). Nunca vaza `str(e)` nem loga
+PII (document_number/legal_name).
+"""
 import json
 import logging
+import uuid
+
+import psycopg2
 from pydantic import ValidationError
 
-from src.utils.helpers import success_response, error_response, generate_uuid, get_timestamp
-from src.utils.auth import validate_tenant_access
 from src.schemas.client_schemas import ClientCreateSchema, ClientUpdateSchema
+from src.services.database import simple_tx
+from src.utils.context import require_user, require_writer
+from src.utils.helpers import error_response, success_response
 from src.utils.safety import enforce_production_safety
 
-# 🚀 EXECUTA IMEDIATAMENTE NO COLD START (Fase Init da Lambda)
-# Se falhar aqui, o container morre antes de expor qualquer dado!
 enforce_production_safety()
-
 logger = logging.getLogger()
 
-# ============================================================================
-# HELPERS PARA ACESSAR USER DO EVENT
-# ============================================================================
 
-def get_user_from_event(event):
-    """
-    Extrai dados do usuário do event (do JWT Authorizer no API Gateway)
+def _fmt(err: ValidationError) -> str:
+    return ", ".join(
+        f"{(e['loc'][0] if e['loc'] else '?')}: {e['msg']}" for e in err.errors()
+    )
 
-    O API Gateway adiciona o payload em:
-    event['requestContext']['authorizer']['context']
-    """
+
+def _parse_body(event):
     try:
-        authorizer = event['requestContext']['authorizer']['context']
-        return {
-            'user_id': authorizer['user_id'],
-            'email': authorizer['email'],
-            'role': authorizer['role']
-        }
-    except KeyError as e:
-        logger.error(json.dumps({
-            "event": "USER_EXTRACT_ERROR",
-            "reason": str(e)
-        }))
+        return json.loads(event.get("body") or "{}"), None
+    except json.JSONDecodeError:
+        return None, error_response(400, "Corpo JSON inválido")
+
+
+def _valid_uuid(value):
+    try:
+        return str(uuid.UUID(str(value)))
+    except (ValueError, TypeError):
         return None
 
-def require_user(handler_func):
-    """Decorator para exigir que user exista no event"""
-    def wrapper(event, context):
-        user = get_user_from_event(event)
-        if not user:
-            return error_response(401, 'Usuário não autenticado')
-        event['user'] = user
-        return handler_func(event, context)
-    return wrapper
-
-# ============================================================================
-# HANDLERS (SIMPLIFICADOS - JWT já validado no API Gateway)
-# ============================================================================
 
 @require_user
+@require_writer
 def create_client(event, context):
-    """
-    Criar cliente (PROTEGIDO)
-
-    POST /clients
-    Authorization: Bearer TOKEN
-    {
-      "name": "Empresa XYZ",
-      "email": "contato@xyz.com",
-      "phone": "(11) 99999-9999",
-      "cpf_cnpj": "12.345.678/0001-90",
-      "type": "pj"
-    }
-    """
+    body, err = _parse_body(event)
+    if err:
+        return err
     try:
-        from src.services.database import db
+        data = ClientCreateSchema(**body)
+    except ValidationError as e:
+        return error_response(400, f"Validação falhou: {_fmt(e)}")
 
-        user = event['user']
-        body = json.loads(event.get('body', '{}'))
-
-        # ✅ VALIDAR COM PYDANTIC
-        try:
-            client_data = ClientCreateSchema(**body)
-        except ValidationError as e:
-            errors = [f"{err['loc'][0]}: {err['msg']}" for err in e.errors()]
-            return error_response(400, f'Validação falhou: {", ".join(errors)}')
-
-        # ✅ CONTEXT MANAGER
-        with db as database:
-            client_id = generate_uuid()
-            created_at = get_timestamp()
-
-            query = """
-            INSERT INTO public.clients (id, created_by, name, email, phone, cpf_cnpj, type, status, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """
-
-            database.execute_update(query, (
-                client_id,
-                user['user_id'],  # ← Vincula ao usuário autenticado
-                client_data.name,
-                client_data.email,
-                client_data.phone,
-                client_data.cpf_cnpj,
-                client_data.type,
-                'active',
-                created_at,
-                created_at
-            ))
-
-        logger.info(json.dumps({
-            "event": "CLIENT_CREATED",
-            "client_id": client_id,
-            "created_by": user['user_id'],
-            "name": client_data.name
-        }))
-
-        return success_response(201, 'Cliente criado com sucesso', {
-            'client_id': client_id,
-            'name': client_data.name
-        })
-
+    try:
+        with simple_tx() as cur:
+            cur.execute(
+                "INSERT INTO public.clients"
+                " (legal_name, document_type, document_number, email, phone,"
+                "  address_street, address_city, address_state, address_zip)"
+                " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
+                " RETURNING id, status, created_at",
+                (data.legal_name, data.document_type, data.document_number, data.email,
+                 data.phone, data.address_street, data.address_city,
+                 data.address_state, data.address_zip),
+            )
+            row = cur.fetchone()
+    except psycopg2.errors.UniqueViolation:
+        return error_response(409, "document_number já cadastrado")
     except Exception as e:
-        logger.error(json.dumps({
-            "event": "CLIENT_CREATE_ERROR",
-            "user_id": event.get('user', {}).get('user_id'),
-            "reason": str(e)
-        }))
-        return error_response(500, str(e))
+        logger.error(json.dumps({"event": "CLIENT_CREATE_ERROR",
+                                 "error": type(e).__name__,
+                                 "pgcode": getattr(e, "pgcode", None)}))
+        return error_response(500, "Erro ao criar cliente")
+
+    logger.info(json.dumps({"event": "CLIENT_CREATED", "client_id": str(row["id"])}))
+    return success_response(201, "Cliente criado com sucesso", {
+        "id": str(row["id"]), "status": row["status"],
+        "created_at": str(row["created_at"]),
+    })
+
 
 @require_user
 def get_client(event, context):
-    """
-    Obter cliente (PROTEGIDO - com validação de acesso Anti-IDOR)
-
-    GET /clients/{clientId}
-    Authorization: Bearer TOKEN
-    """
+    client_id = _valid_uuid((event.get("pathParameters") or {}).get("clientId"))
+    if not client_id:
+        return error_response(400, "clientId inválido")
     try:
-        from src.services.database import db
-
-        user = event['user']
-        client_id = event['pathParameters']['clientId']
-
-        # ✅ CONTEXT MANAGER
-        with db as database:
-            client = database.execute_query_one(
-                "SELECT id, created_by, name, email, phone, cpf_cnpj, type, status, created_at FROM public.clients WHERE id = %s",
-                (client_id,)
-            )
-
-            if not client:
-                return error_response(404, 'Cliente não encontrado')
-
-            # ✅ VALIDAR ACESSO (Anti-IDOR)
-            if not validate_tenant_access(user['user_id'], client['created_by'], database):
-                logger.error(json.dumps({
-                    "event": "TENANT_VIOLATION_ATTEMPT",
-                    "user_id": user['user_id'],
-                    "client_id": client_id,
-                    "action": "get_client"
-                }))
-                return error_response(403, 'Acesso negado')
-
-        return success_response(200, 'Cliente encontrado', dict(client))
-
+        with simple_tx() as cur:
+            cur.execute(_SELECT_COLS + " WHERE id = %s", (client_id,))
+            row = cur.fetchone()
     except Exception as e:
-        logger.error(json.dumps({
-            "event": "CLIENT_GET_ERROR",
-            "client_id": event.get('pathParameters', {}).get('clientId'),
-            "reason": str(e)
-        }))
-        return error_response(500, str(e))
+        logger.error(json.dumps({"event": "CLIENT_GET_ERROR", "error": type(e).__name__}))
+        return error_response(500, "Erro ao obter cliente")
+    if not row:
+        return error_response(404, "Cliente não encontrado")
+    return success_response(200, "Cliente encontrado", _serialize(row))
+
 
 @require_user
 def list_clients(event, context):
-    """
-    Listar clientes (PROTEGIDO - com RBAC)
-
-    GET /clients
-    Authorization: Bearer TOKEN
-    """
+    params = event.get("queryStringParameters") or {}
     try:
-        from src.services.database import db
-
-        user = event['user']
-
-        # ✅ CONTEXT MANAGER
-        with db as database:
-            # Admin: vê todos | Outros: veem apenas seus
-            if user['role'] == 'admin':
-                query = "SELECT id, created_by, name, email, phone, cpf_cnpj, type, status, created_at FROM public.clients WHERE status = %s ORDER BY created_at DESC LIMIT 100"
-                clients = database.execute_query(query, ('active',))
-            else:
-                query = "SELECT id, created_by, name, email, phone, cpf_cnpj, type, status, created_at FROM public.clients WHERE created_by = %s AND status = %s ORDER BY created_at DESC LIMIT 100"
-                clients = database.execute_query(query, (user['user_id'], 'active'))
-
-        return success_response(200, f'{len(clients)} clientes encontrados', [dict(c) for c in clients])
-
+        page = max(int(params.get("page", 1)), 1)
+        page_size = min(max(int(params.get("page_size", 50)), 1), 100)
+    except (ValueError, TypeError):
+        return error_response(400, "page/page_size inválidos")
+    offset = (page - 1) * page_size
+    try:
+        with simple_tx() as cur:
+            cur.execute(
+                _SELECT_COLS + " WHERE status = 'active'"
+                " ORDER BY created_at DESC LIMIT %s OFFSET %s",
+                (page_size, offset),
+            )
+            rows = cur.fetchall()
     except Exception as e:
-        logger.error(json.dumps({
-            "event": "CLIENT_LIST_ERROR",
-            "user_id": event.get('user', {}).get('user_id'),
-            "reason": str(e)
-        }))
-        return error_response(500, str(e))
+        logger.error(json.dumps({"event": "CLIENT_LIST_ERROR", "error": type(e).__name__}))
+        return error_response(500, "Erro ao listar clientes")
+    return success_response(
+        200, f"{len(rows)} clientes encontrados", [_serialize(r) for r in rows]
+    )
+
 
 @require_user
+@require_writer
 def update_client(event, context):
-    """
-    Atualizar cliente (PROTEGIDO)
-
-    PUT /clients/{clientId}
-    Authorization: Bearer TOKEN
-    """
+    client_id = _valid_uuid((event.get("pathParameters") or {}).get("clientId"))
+    if not client_id:
+        return error_response(400, "clientId inválido")
+    body, err = _parse_body(event)
+    if err:
+        return err
     try:
-        from src.services.database import db
+        data = ClientUpdateSchema(**body)
+    except ValidationError as e:
+        return error_response(400, f"Validação falhou: {_fmt(e)}")
 
-        user = event['user']
-        client_id = event['pathParameters']['clientId']
-        body = json.loads(event.get('body', '{}'))
+    fields, values = [], []
+    for col in ("legal_name", "email", "phone", "address_street",
+                "address_city", "address_state", "address_zip", "status"):
+        val = getattr(data, col)
+        if val is not None:
+            fields.append(f"{col} = %s")
+            values.append(val)
+    if not fields:
+        return error_response(400, "Nenhum campo para atualizar")
+    fields.append("updated_at = NOW()")
+    values.append(client_id)
 
-        # ✅ VALIDAR COM PYDANTIC
-        try:
-            client_data = ClientUpdateSchema(**body)
-        except ValidationError as e:
-            errors = [f"{err['loc'][0]}: {err['msg']}" for err in e.errors()]
-            return error_response(400, f'Validação falhou: {", ".join(errors)}')
-
-        # ✅ CONTEXT MANAGER
-        with db as database:
-            client = database.execute_query_one(
-                "SELECT id, created_by FROM public.clients WHERE id = %s",
-                (client_id,)
+    try:
+        with simple_tx() as cur:
+            cur.execute(
+                f"UPDATE public.clients SET {', '.join(fields)} WHERE id = %s",
+                tuple(values),
             )
-
-            if not client:
-                return error_response(404, 'Cliente não encontrado')
-
-            # ✅ VALIDAR ACESSO (Anti-IDOR)
-            if not validate_tenant_access(user['user_id'], client['created_by'], database):
-                logger.error(json.dumps({
-                    "event": "TENANT_VIOLATION_ATTEMPT",
-                    "user_id": user['user_id'],
-                    "client_id": client_id,
-                    "action": "update_client"
-                }))
-                return error_response(403, 'Acesso negado')
-
-            fields = []
-            values = []
-
-            if client_data.name:
-                fields.append('name = %s')
-                values.append(client_data.name)
-
-            if client_data.email:
-                fields.append('email = %s')
-                values.append(client_data.email)
-
-            if client_data.phone:
-                fields.append('phone = %s')
-                values.append(client_data.phone)
-
-            if client_data.type:
-                fields.append('type = %s')
-                values.append(client_data.type)
-
-            if not fields:
-                return error_response(400, 'Nenhum campo para atualizar')
-
-            fields.append('updated_at = %s')
-            values.append(get_timestamp())
-            values.append(client_id)
-
-            query = f"UPDATE public.clients SET {', '.join(fields)} WHERE id = %s"
-            database.execute_update(query, tuple(values))
-
-        logger.info(json.dumps({
-            "event": "CLIENT_UPDATED",
-            "client_id": client_id,
-            "user_id": user['user_id'],
-            "fields": list(body.keys())
-        }))
-
-        return success_response(200, 'Cliente atualizado com sucesso')
-
+            updated = cur.rowcount
     except Exception as e:
-        logger.error(json.dumps({
-            "event": "CLIENT_UPDATE_ERROR",
-            "client_id": event.get('pathParameters', {}).get('clientId'),
-            "reason": str(e)
-        }))
-        return error_response(500, str(e))
+        logger.error(json.dumps({"event": "CLIENT_UPDATE_ERROR", "error": type(e).__name__}))
+        return error_response(500, "Erro ao atualizar cliente")
+    if not updated:
+        return error_response(404, "Cliente não encontrado")
+    logger.info(json.dumps({"event": "CLIENT_UPDATED", "client_id": client_id}))
+    return success_response(200, "Cliente atualizado com sucesso")
+
 
 @require_user
+@require_writer
 def delete_client(event, context):
-    """
-    Deletar cliente (PROTEGIDO - soft delete)
-
-    DELETE /clients/{clientId}
-    Authorization: Bearer TOKEN
-    """
+    client_id = _valid_uuid((event.get("pathParameters") or {}).get("clientId"))
+    if not client_id:
+        return error_response(400, "clientId inválido")
     try:
-        from src.services.database import db
-
-        user = event['user']
-        client_id = event['pathParameters']['clientId']
-
-        # ✅ CONTEXT MANAGER
-        with db as database:
-            client = database.execute_query_one(
-                "SELECT id, created_by FROM public.clients WHERE id = %s",
-                (client_id,)
+        with simple_tx() as cur:
+            cur.execute(
+                "UPDATE public.clients SET status = 'inactive', is_active = false,"
+                " updated_at = NOW() WHERE id = %s",
+                (client_id,),
             )
-
-            if not client:
-                return error_response(404, 'Cliente não encontrado')
-
-            # ✅ VALIDAR ACESSO (Anti-IDOR)
-            if not validate_tenant_access(user['user_id'], client['created_by'], database):
-                logger.error(json.dumps({
-                    "event": "TENANT_VIOLATION_ATTEMPT",
-                    "user_id": user['user_id'],
-                    "client_id": client_id,
-                    "action": "delete_client"
-                }))
-                return error_response(403, 'Acesso negado')
-
-            database.execute_update(
-                "UPDATE public.clients SET status = %s, updated_at = %s WHERE id = %s",
-                ('inactive', get_timestamp(), client_id)
-            )
-
-        logger.info(json.dumps({
-            "event": "CLIENT_DELETED",
-            "client_id": client_id,
-            "user_id": user['user_id']
-        }))
-
-        return success_response(200, 'Cliente deletado com sucesso')
-
+            updated = cur.rowcount
     except Exception as e:
-        logger.error(json.dumps({
-            "event": "CLIENT_DELETE_ERROR",
-            "client_id": event.get('pathParameters', {}).get('clientId'),
-            "reason": str(e)
-        }))
-        return error_response(500, str(e))
+        logger.error(json.dumps({"event": "CLIENT_DELETE_ERROR", "error": type(e).__name__}))
+        return error_response(500, "Erro ao deletar cliente")
+    if not updated:
+        return error_response(404, "Cliente não encontrado")
+    logger.info(json.dumps({"event": "CLIENT_DELETED", "client_id": client_id}))
+    return success_response(200, "Cliente desativado com sucesso")
+
+
+_SELECT_COLS = (
+    "SELECT id, legal_name, document_type, document_number, email, phone,"
+    " address_street, address_city, address_state, address_zip, status, created_at"
+    " FROM public.clients"
+)
+
+
+def _serialize(row) -> dict:
+    return {
+        "id": str(row["id"]),
+        "legal_name": row["legal_name"],
+        "document_type": row["document_type"],
+        "document_number": row["document_number"],
+        "email": row.get("email"),
+        "phone": row.get("phone"),
+        "address": {
+            "street": row.get("address_street"),
+            "city": row.get("address_city"),
+            "state": row.get("address_state"),
+            "zip": row.get("address_zip"),
+        },
+        "status": row["status"],
+        "created_at": str(row["created_at"]) if row.get("created_at") else None,
+    }

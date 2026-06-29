@@ -231,6 +231,7 @@ functions:
           path: clients
           method: post
           cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
 
   getClient:
     handler: src/handlers/clients.get_client
@@ -241,6 +242,7 @@ functions:
           path: clients/{clientId}
           method: get
           cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
 
   listClients:
     handler: src/handlers/clients.list_clients
@@ -251,6 +253,7 @@ functions:
           path: clients
           method: get
           cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
 
   updateClient:
     handler: src/handlers/clients.update_client
@@ -261,6 +264,7 @@ functions:
           path: clients/{clientId}
           method: put
           cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
 
   deleteClient:
     handler: src/handlers/clients.delete_client
@@ -271,6 +275,7 @@ functions:
           path: clients/{clientId}
           method: delete
           cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
 
   # TIER 2 - Case Results
   createCaseResult:

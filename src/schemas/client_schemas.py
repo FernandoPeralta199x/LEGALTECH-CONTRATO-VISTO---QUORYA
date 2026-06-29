@@ -1,39 +1,65 @@
-from pydantic import BaseModel, EmailStr, Field, validator
+"""Schemas de clients (Pydantic 2). Alinhados ao schema real de `public.clients`:
+`legal_name`, `document_type` ∈ {cpf, cnpj}, `document_number` (só dígitos: 11=CPF,
+14=CNPJ), email/phone/endereço opcionais, `status` ∈ {active, inactive}.
+
+`clients` é um catálogo COMPARTILHADO (sem `created_by`, sem RLS).
+"""
+import re
 from typing import Optional
 
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    field_validator,
+    model_validator,
+)
+
+DOC_TYPE_PATTERN = "^(cpf|cnpj)$"
+STATUS_PATTERN = "^(active|inactive)$"
+STATE_PATTERN = "^[A-Za-z]{2}$"
+
+
 class ClientCreateSchema(BaseModel):
-    """Schema para criar cliente"""
-    name: str = Field(..., min_length=2, max_length=255)
+    model_config = ConfigDict(extra="forbid")
+
+    legal_name: str = Field(..., min_length=2, max_length=255)
+    document_type: str = Field(..., pattern=DOC_TYPE_PATTERN)
+    document_number: str = Field(..., max_length=20)
     email: Optional[EmailStr] = None
-    phone: Optional[str] = Field(None, max_length=20)
-    cpf_cnpj: str = Field(..., regex=r"^\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}$|^\d{3}\.\d{3}\.\d{3}-\d{2}$")
-    type: str = Field(..., pattern="^(pf|pj)$")
-    
-    @validator('cpf_cnpj')
-    def validate_cpf_cnpj(cls, v):
-        # Remover formatação
-        clean = v.replace('.', '').replace('/', '').replace('-', '')
-        
-        # Validar comprimento
-        if len(clean) not in [11, 14]:
-            raise ValueError('CPF/CNPJ inválido')
-        
-        return v
-    
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "name": "Empresa XYZ Ltda",
-                "email": "contato@xyz.com",
-                "phone": "(11) 99999-9999",
-                "cpf_cnpj": "12.345.678/0001-90",
-                "type": "pj"
-            }
-        }
+    phone: Optional[str] = Field(default=None, max_length=20)
+    address_street: Optional[str] = Field(default=None, max_length=255)
+    address_city: Optional[str] = Field(default=None, max_length=100)
+    address_state: Optional[str] = Field(default=None, pattern=STATE_PATTERN)
+    address_zip: Optional[str] = Field(default=None, max_length=10)
+
+    @field_validator("document_number")
+    @classmethod
+    def clean_document_number(cls, v: str) -> str:
+        digits = re.sub(r"\D", "", v)
+        if len(digits) not in (11, 14):
+            raise ValueError("deve ter 11 (CPF) ou 14 (CNPJ) dígitos")
+        return digits
+
+    @model_validator(mode="after")
+    def check_document_coherence(self):
+        expected = 11 if self.document_type == "cpf" else 14
+        if len(self.document_number) != expected:
+            raise ValueError(
+                f"document_number incompatível com document_type={self.document_type}"
+            )
+        return self
+
 
 class ClientUpdateSchema(BaseModel):
-    """Schema para atualizar cliente"""
-    name: Optional[str] = Field(None, min_length=2, max_length=255)
+    model_config = ConfigDict(extra="forbid")
+
+    legal_name: Optional[str] = Field(default=None, min_length=2, max_length=255)
     email: Optional[EmailStr] = None
-    phone: Optional[str] = Field(None, max_length=20)
-    type: Optional[str] = Field(None, pattern="^(pf|pj)$")
+    phone: Optional[str] = Field(default=None, max_length=20)
+    address_street: Optional[str] = Field(default=None, max_length=255)
+    address_city: Optional[str] = Field(default=None, max_length=100)
+    address_state: Optional[str] = Field(default=None, pattern=STATE_PATTERN)
+    address_zip: Optional[str] = Field(default=None, max_length=10)
+    status: Optional[str] = Field(default=None, pattern=STATUS_PATTERN)
