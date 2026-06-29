@@ -22,8 +22,8 @@
 | 2 | `cases` + `case_results` (RLS-aware + authorizer + **RBAC viewer** + **INSERT atômico**) | ✅ concluída (**25 testes**), revisada+endurecida (Codex) |
 | **A** | **Auth/Users** (login + CRUD + forgot/reset + `jwt_authorizer`; signup→viewer; reset token hasheado/atômico; anti-timing; sem PII) | ✅ concluída+endurecida (**45 testes**) |
 | 3 | `clients` (catálogo compartilhado, RBAC writer, sem RLS) | ✅ concluída+endurecida (**61 testes**) |
-| 4 | `documents` (S3 presigned + metadados; RLS por case) | ⏳ próxima |
-| 5 | `search` / RAG | roadmap |
+| 4 | `documents` (S3 presigned + RLS por `uploaded_by`) | ✅ concluída (**69 testes**), Codex revisando |
+| 5 | `search` / RAG (pgvector + embeddings) | ⏳ próxima |
 | 6 | services + remover código morto | roadmap |
 | **E2E** | **GATE antes do deploy:** E2E completo → loop (corrigir→E2E) **até zerar erros** → varredura final (migração completa, sem código morto, qualidade) | roadmap |
 | 7 | hardening + **deploy AWS** (só após E2E verde + autorização) | roadmap |
