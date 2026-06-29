@@ -1,7 +1,8 @@
 # PROGRESSO — Migração FastAPI → Serverless (contrato_visto)
 
-> Documento de estado ("save point"). Atualizar a cada avanço. Última atualização
-> ao final da Fase 1.
+> Documento de estado ("save point"). Atualizar a cada avanço. Última atualização:
+> Fase 2 concluída, revisada e **endurecida** pelo Codex (25 testes). Auth/Users
+> entrou no escopo (Fase A).
 
 ## Visão geral (dois projetos relacionados)
 
@@ -18,7 +19,8 @@
 |------|--------|--------|
 | 0 | Ambiente local (PG18 + role não-owner) | ✅ concluída |
 | 1 | Fundação RLS-aware + policies + auditoria | ✅ concluída (**13 testes**), revisada pelo Codex |
-| 2 | `cases` + `case_results` (handlers RLS-aware + authorizer nas rotas) | ✅ concluída (20 testes) |
+| 2 | `cases` + `case_results` (RLS-aware + authorizer + **RBAC viewer** + **INSERT atômico**) | ✅ concluída (**25 testes**), revisada+endurecida (Codex) |
+| **A** | **Auth/Users** (login + CRUD + forgot/reset + `jwt_authorizer` + remover código morto/defaults inseguros/PII) — **entrou no escopo** (decisão do usuário em 29/06; antes era do outro dev) | ⏳ próxima |
 | 3 | `clients` | roadmap |
 | 4 | `documents` (S3) | roadmap |
 | 5 | `search` / RAG | roadmap |
@@ -38,6 +40,19 @@
   `utils/auth.py` sem fallback inseguro; `get_connection` faz `rollback` antes do
   health check; `context.py` canoniza UUID.
 - `docs/schema_referencia.sql` + `docs/dicionario_de_dados.md`: schema de referência.
+
+**Fase 2 (`cases` + `case_results`) — revisada e endurecida pelo Codex:**
+- `handlers/cases.py` + `handlers/case_results.py`: handlers nativos `@require_user`
+  + `tenant_tx`; schema real; sem vazar `str(e)`; `rowcount`→404.
+- `serverless.yml`: JWT Authorizer (token) nas 10 rotas + `JWT_SECRET` via SSM.
+- Endurecimento (laudo Codex Fase 2): `context.py` lê o shape REAL do authorizer
+  (achatado em `authorizer.<key>`, REST API) com fallback aninhado; `require_writer`
+  (viewer só-leitura, 403); `case_results.create` atômico (INSERT…SELECT WHERE
+  EXISTS, sem TOCTOU); `cases.create` valida `client_id` (→400); logs sem `str(e)`
+  bruto (`type(e).__name__` + `pgcode`).
+- `tests/test_cases_handlers.py` + `test_context.py`: **25 testes** no total, todos
+  passam no PG18 (inclui viewer bloqueado/leitura, shape achatado/aninhado, client
+  inexistente).
 
 ### Achados validados na prática (PG18)
 - Policies RLS de **escrita** não existiam → criadas.
@@ -87,6 +102,12 @@ o usuário.**
   outward-facing). Planejar a Fase 7 (RDS/RDS Proxy/SSM/API Gateway) com cuidado.
 
 ## Próximos passos
-1. Incorporar o laudo do Codex sobre a Fase 1.
-2. Fase 2: `cases` + `case_results` (schema real, `@require_user`, `tenant_tx`).
-3. Confirmar com o usuário: manter handlers nativos (B) ou avaliar Mangum (A).
+1. ~~Fase 1 + laudo Codex~~ ✅. ~~Fase 2 + laudo Codex~~ ✅ (25 testes). Decisão
+   Mangum vs nativo: **nativo** (definido pelo usuário).
+2. **Fase A — Auth/Users** (entrou no escopo): migrar `handlers/users.py`
+   (login/CRUD/forgot/reset) e `jwt_authorizer.py` ao schema real (`public.users`,
+   id `varchar(36)`); remover `users_new.py` e defaults inseguros; **não logar PII**
+   (email); plugar authorizer nas rotas `users` (exceto `login`); validar o fluxo
+   login→token→rota protegida.
+3. Fases 3–7 (clients, documents, RAG, services, hardening/deploy). Deploy real na
+   AWS só com autorização (conta em `us-east-1`; o yml usa `sa-east-1` — alinhar).

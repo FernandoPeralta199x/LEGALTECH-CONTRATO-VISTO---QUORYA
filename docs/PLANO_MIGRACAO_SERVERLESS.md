@@ -136,12 +136,13 @@ def tenant_tx(user_id: str, role: str):
 |------|--------|-------------|------|
 | **0** | Ambiente local de validação (git, PG18, schema, venv) | — | eu |
 | **1** | **Fundação + GATE de segurança**: `database.py`/`tenant_tx`, `safety.py` (`ENVIRONMENT`), **role de app não-owner**, **authorizer plugado nas rotas migradas**, `JWT_SECRET` via SSM, helper compartilhado `require_user`, sanitização de erros/logs, timeouts de sessão, teste de RLS | confirmar com dev | eu (dev revisa) |
-| **2** | **`cases` + `case_results`** alinhados ao schema + RLS (só após o gate) | Fase 1 | eu |
-| **3** | `clients` (sem RLS) realinhado ao schema | Fase 1 | a definir |
-| **4** | `documents` (S3 presigned + metadados) | Fase 1 | a definir |
-| **5** | `search` / RAG (pgvector + embeddings OpenAI) | Fase 4 | a definir |
-| **6** | Services alinhados (`audit`, `webhooks`, `cache`) + remover código morto (`users_new`, auth duplicado) | — | a definir |
-| **7** | Hardening pós-MVP: RDS Proxy sizing + monitorar *pinning*, reserved concurrency, CORS/IAM por ambiente, remover `fastapi/uvicorn` | — | dev + eu |
+| **2** | **`cases` + `case_results`** alinhados ao schema + RLS + **RBAC (viewer só-leitura)** + **INSERT atômico** (só após o gate) | Fase 1 | eu |
+| **A** | **Auth/Users** — handlers `users` (login/CRUD/forgot/reset) + `jwt_authorizer`; alinhar ao schema real; remover código morto (`users_new`) e defaults inseguros; **não logar PII** | Fase 1 | **eu** (entrou no escopo em 29/06; antes era do dev) |
+| **3** | `clients` (sem RLS) realinhado ao schema | Fase 1 | eu |
+| **4** | `documents` (S3 presigned + metadados) | Fase 1 | eu |
+| **5** | `search` / RAG (pgvector + embeddings OpenAI) | Fase 4 | eu |
+| **6** | Services alinhados (`audit`, `webhooks`, `cache`) + remover código morto (`users_new`, auth duplicado) | — | eu |
+| **7** | Hardening pós-MVP: RDS Proxy sizing + monitorar *pinning*, reserved concurrency, CORS/IAM por ambiente, remover `fastapi/uvicorn` | — | eu (parte infra exige conta AWS) |
 
 > **Ajuste pós-revisão do Codex:** itens de segurança que estavam na Fase 7
 > (role não-owner, authorizer nas rotas, SSM, sanitização de erros/logs) foram
@@ -256,7 +257,9 @@ validar no PG18 → commit. Repetir para create/get/list/update/delete de cada u
 | `handlers/clients.py` + schema | colunas inexistentes (`name`, `cpf_cnpj`, `type`, `created_by`) | 3 |
 | `services/rag.py` | INSERT em `content`/`ON CONFLICT(document_id)` inexistentes | 5 |
 | `services/audit.py` | coluna `status` inexistente em `audit.audit_log`/`data_access_log` | 6 |
-| `handlers/users.py` | importa `src.services.email` inexistente | dev |
+| `handlers/users.py` | importa `src.services.email` inexistente; defaults de segredo inseguros | **A** |
+| `handlers/users_new.py` | código morto / duplicado de auth → remover | **A** |
+| `authorizers/jwt_authorizer.py` | shape do context (corrigido na Fase 2 no consumidor); **ainda loga `email` (PII)** → sanitizar | **A** |
 | `serverless.yml` | authorizer não plugado; `JWT_SECRET` hardcoded | 1/dev |
 | `utils/safety.py` | usa `APP_ENV`, mas o yml define `ENVIRONMENT` → trava nunca ativa | 1 |
 | `schemas/*` | Pydantic 2 com `Field(..., regex=...)` (deve ser `pattern=`) → schemas quebram | 2/3 |
