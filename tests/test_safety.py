@@ -27,8 +27,18 @@ def test_production_blocks_default_secret(monkeypatch):
         enforce_production_safety()
 
 
+def test_production_blocks_mock_email_backend(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("JWT_SECRET_KEY", "um-segredo-forte-de-verdade-0123456789")
+    monkeypatch.delenv("AI_ANALYSIS_BACKEND", raising=False)
+    monkeypatch.setenv("EMAIL_BACKEND", "log")  # backend sem envio real
+    with pytest.raises(RuntimeError):
+        enforce_production_safety()
+
+
 def test_production_passes_with_strong_secret(monkeypatch):
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.setenv("JWT_SECRET_KEY", "um-segredo-forte-de-verdade-0123456789")
     monkeypatch.delenv("AI_ANALYSIS_BACKEND", raising=False)
-    enforce_production_safety()  # não levanta com segredo forte
+    monkeypatch.setenv("EMAIL_BACKEND", "ses")  # envio real configurado
+    enforce_production_safety()  # não levanta com segredo forte + email real

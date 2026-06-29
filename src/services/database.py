@@ -69,6 +69,26 @@ def get_connection():
 
 
 @contextmanager
+def simple_tx():
+    """Transação SEM contexto RLS, para tabelas globais (ex.: ``public.users``,
+    ``public.password_resets``) que não têm Row Level Security.
+
+    Reusa a conexão global (com timeouts) e faz commit/rollback. Use ``tenant_tx``
+    para tabelas com RLS (cases/case_results/documents).
+    """
+    conn = get_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        yield cur
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+
+
+@contextmanager
 def tenant_tx(user_id, role):
     """Transação com o contexto RLS do usuário autenticado.
 

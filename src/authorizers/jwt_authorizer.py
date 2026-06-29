@@ -63,8 +63,7 @@ def authorize(event, context):
         logger.info(json.dumps({
             "event": "AUTH_TOKEN_VALID",
             "user_id": payload['user_id'],
-            "email": payload['email'],
-            "role": payload['role'],
+            "role": payload['role'],  # sem email (PII)
             "methodArn": event.get('methodArn')
         }))
         
@@ -98,15 +97,15 @@ def authorize(event, context):
     except jwt.InvalidTokenError as e:
         logger.warning(json.dumps({
             "event": "AUTH_TOKEN_INVALID",
-            "reason": str(e),
+            "error": type(e).__name__,
             "methodArn": event.get('methodArn')
         }))
         return deny_access('Token inválido')
-    
+
     except Exception as e:
         logger.error(json.dumps({
             "event": "AUTH_ERROR",
-            "reason": str(e),
+            "error": type(e).__name__,
             "methodArn": event.get('methodArn')
         }))
         return deny_access('Erro interno na autorização')

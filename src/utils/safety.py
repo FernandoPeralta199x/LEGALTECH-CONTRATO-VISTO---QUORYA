@@ -24,6 +24,8 @@ def enforce_production_safety():
         violations.append("JWT_SECRET_KEY ausente ou com valor padrão inseguro")
     if os.getenv("AI_ANALYSIS_BACKEND") == "mock":
         violations.append("AI_ANALYSIS_BACKEND=mock em ambiente produtivo")
+    if os.getenv("EMAIL_BACKEND", "log") in ("log", "mock"):
+        violations.append("EMAIL_BACKEND=log/mock em ambiente produtivo (sem envio real)")
 
     if violations:
         message = f"BOOT BLOQUEADO ({environment}): " + "; ".join(violations)

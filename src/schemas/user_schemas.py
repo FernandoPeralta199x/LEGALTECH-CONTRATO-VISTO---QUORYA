@@ -1,49 +1,69 @@
-from pydantic import BaseModel, EmailStr, Field, validator
+"""Schemas de usuários (Pydantic 2). Alinhados ao schema real de `public.users`:
+role ∈ {admin, analyst, viewer}; status ∈ {active, inactive}.
+
+Signup público NÃO aceita `role` (criado sempre como `viewer` — menor privilégio);
+a promoção de papel é feita por admin via `update_user`.
+"""
 from typing import Optional
 
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+
+ROLE_PATTERN = "^(admin|analyst|viewer)$"
+STATUS_PATTERN = "^(active|inactive)$"
+
+
+def _check_password_strength(v: str) -> str:
+    if not any(c.isupper() for c in v):
+        raise ValueError("deve conter pelo menos uma letra maiúscula")
+    if not any(c.isdigit() for c in v):
+        raise ValueError("deve conter pelo menos um número")
+    return v
+
+
 class UserLoginSchema(BaseModel):
-    """Schema para login"""
+    model_config = ConfigDict(extra="forbid")
+
     email: EmailStr
     password: str = Field(..., min_length=6, max_length=128)
-    
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "email": "admin@test.com",
-                "password": "Admin@12345"
-            }
-        }
+
 
 class UserSignupSchema(BaseModel):
-    """Schema para cadastro"""
+    """Cadastro público — sem `role` (o handler força `viewer`)."""
+    model_config = ConfigDict(extra="forbid")
+
     email: EmailStr
-    password: str = Field(..., min_length=6, max_length=128)
+    password: str = Field(..., min_length=8, max_length=128)
     name: str = Field(..., min_length=2, max_length=255)
-    role: str = Field(..., pattern="^(admin|manager|analyst)$")
-    
-    @validator('password')
-    def validate_password(cls, v):
-        if not any(char.isupper() for char in v):
-            raise ValueError('Senha deve conter pelo menos uma letra maiúscula')
-        if not any(char.isdigit() for char in v):
-            raise ValueError('Senha deve conter pelo menos um número')
-        return v
-    
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "email": "novo@email.com",
-                "password": "Senha@123",
-                "name": "João Silva",
-                "role": "analyst"
-            }
-        }
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        return _check_password_strength(v)
+
+
+class UserUpdateSchema(BaseModel):
+    """Atualização de usuário. `role`/`status` só são aplicados por admin
+    (validado no handler)."""
+    model_config = ConfigDict(extra="forbid")
+
+    name: Optional[str] = Field(default=None, min_length=2, max_length=255)
+    role: Optional[str] = Field(default=None, pattern=ROLE_PATTERN)
+    status: Optional[str] = Field(default=None, pattern=STATUS_PATTERN)
+
 
 class ForgotPasswordSchema(BaseModel):
-    """Schema para recuperar senha"""
+    model_config = ConfigDict(extra="forbid")
+
     email: EmailStr
 
+
 class ResetPasswordSchema(BaseModel):
-    """Schema para resetar senha"""
+    model_config = ConfigDict(extra="forbid")
+
     token: str = Field(..., min_length=20)
-    password: str = Field(..., min_length=6, max_length=128)
+    password: str = Field(..., min_length=8, max_length=128)
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        return _check_password_strength(v)

@@ -71,3 +71,21 @@ def require_writer(handler_func):
         return handler_func(event, context)
 
     return wrapper
+
+
+def require_role(*allowed_roles):
+    """Decorator: exige que ``event['user']['role']`` esteja em ``allowed_roles``.
+
+    Deve ser aplicado ABAIXO de ``@require_user``. Ex.: ``@require_role("admin")``.
+    """
+
+    def decorator(handler_func):
+        def wrapper(event, context):
+            user = event.get("user") or {}
+            if user.get("role") not in allowed_roles:
+                return error_response(403, "Acesso negado")
+            return handler_func(event, context)
+
+        return wrapper
+
+    return decorator

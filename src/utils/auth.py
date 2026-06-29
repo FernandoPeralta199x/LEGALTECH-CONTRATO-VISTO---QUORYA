@@ -1,7 +1,24 @@
 import jwt
 import os
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 import json
+
+_TOKEN_TTL_HOURS = int(os.getenv('JWT_TTL_HOURS', '8'))
+
+
+def create_access_token(payload: dict) -> str:
+    """Emite um JWT HS256 com expiração. SEM default de segredo (fail-closed):
+    se ``JWT_SECRET_KEY`` não estiver configurado, levanta erro."""
+    secret_key = os.environ['JWT_SECRET_KEY']  # ausência => KeyError (boot já barra)
+    now = datetime.now(timezone.utc)
+    claims = {
+        **payload,
+        'iat': now,
+        'exp': now + timedelta(hours=_TOKEN_TTL_HOURS),
+    }
+    return jwt.encode(claims, secret_key, algorithm='HS256')
+
 
 def verify_token(token):
     """Verificar JWT token"""

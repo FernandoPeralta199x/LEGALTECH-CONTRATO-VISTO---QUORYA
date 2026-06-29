@@ -170,6 +170,7 @@ functions:
           path: users/{userId}
           method: get
           cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
 
   listUsers:
     handler: src/handlers/users.list_users
@@ -180,6 +181,7 @@ functions:
           path: users
           method: get
           cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
 
   updateUser:
     handler: src/handlers/users.update_user
@@ -190,6 +192,7 @@ functions:
           path: users/{userId}
           method: put
           cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
 
   deleteUser:
     handler: src/handlers/users.delete_user
@@ -200,6 +203,7 @@ functions:
           path: users/{userId}
           method: delete
           cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
 
   forgotPassword:
     handler: src/handlers/users.forgot_password

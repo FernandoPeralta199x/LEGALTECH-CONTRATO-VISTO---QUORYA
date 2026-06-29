@@ -1,559 +1,337 @@
+"""Handlers Lambda de `users` / autenticação (migração FastAPI→Serverless, Fase A).
+
+- Rotas PÚBLICAS: `create_user` (signup), `login`, `forgot_password`,
+  `reset_password`. As demais são protegidas pelo JWT Authorizer (`@require_user`).
+- `public.users` NÃO tem RLS → usa `simple_tx` (transação global, sem contexto).
+- Segurança: signup cria sempre `viewer` (menor privilégio; promoção via admin);
+  nunca loga PII (email/token) nem `str(e)`; senha com bcrypt; token via
+  `create_access_token` (sem segredo padrão).
+"""
 import json
 import logging
-import bcrypt
 import secrets
-from datetime import datetime, timedelta
+import uuid
+
+import bcrypt
 from pydantic import ValidationError
 
-from src.utils.helpers import success_response, error_response, generate_uuid, get_timestamp
 from src.schemas.user_schemas import (
+    ForgotPasswordSchema,
+    ResetPasswordSchema,
     UserLoginSchema,
     UserSignupSchema,
-    ForgotPasswordSchema,
-    ResetPasswordSchema
+    UserUpdateSchema,
 )
+from src.services.database import simple_tx
+from src.services.email import email_service
+from src.utils.auth import create_access_token
+from src.utils.context import require_role, require_user
+from src.utils.helpers import error_response, generate_uuid, success_response
 from src.utils.safety import enforce_production_safety
 
-# 🚀 EXECUTA IMEDIATAMENTE NO COLD START (Fase Init da Lambda)
-# Se falhar aqui, o container morre antes de expor qualquer dado!
 enforce_production_safety()
-
 logger = logging.getLogger()
 
-# ============================================================================
-# FUNÇÕES AUXILIARES DE CRIPTOGRAFIA
-# ============================================================================
 
+# ── helpers ────────────────────────────────────────────────────────────────
 def hash_password(password: str) -> str:
-    """Hash uma senha com bcrypt (rounds=12 para segurança)"""
-    salt = bcrypt.gensalt(rounds=12)
-    return bcrypt.hashpw(password.encode('utf-8'), salt).decode('utf-8')
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
+
 
 def verify_password(password: str, password_hash: str) -> bool:
-    """Verifica se a senha corresponde ao hash bcrypt"""
     try:
-        return bcrypt.checkpw(password.encode('utf-8'), password_hash.encode('utf-8'))
+        return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
     except Exception as e:
-        logger.error(json.dumps({
-            "event": "PASSWORD_VERIFY_ERROR",
-            "reason": str(e)
-        }))
+        logger.error(json.dumps({"event": "PASSWORD_VERIFY_ERROR",
+                                 "error": type(e).__name__}))
         return False
 
-# ============================================================================
-# HELPERS PARA ACESSAR USER DO EVENT
-# ============================================================================
 
-def get_user_from_event(event):
-    """
-    Extrai dados do usuário do event (do JWT Authorizer no API Gateway)
+def _fmt(err: ValidationError) -> str:
+    return ", ".join(
+        f"{(e['loc'][0] if e['loc'] else '?')}: {e['msg']}" for e in err.errors()
+    )
 
-    O API Gateway adiciona o payload em:
-    event['requestContext']['authorizer']['context']
-    """
+
+def _parse_body(event):
     try:
-        authorizer = event['requestContext']['authorizer']['context']
-        return {
-            'user_id': authorizer['user_id'],
-            'email': authorizer['email'],
-            'role': authorizer['role']
-        }
-    except KeyError as e:
-        logger.error(json.dumps({
-            "event": "USER_EXTRACT_ERROR",
-            "reason": str(e)
-        }))
+        return json.loads(event.get("body") or "{}"), None
+    except json.JSONDecodeError:
+        return None, error_response(400, "Corpo JSON inválido")
+
+
+def _valid_uuid(value):
+    try:
+        return str(uuid.UUID(str(value)))
+    except (ValueError, TypeError):
         return None
 
-def require_user(handler_func):
-    """Decorator para exigir que user exista no event"""
-    def wrapper(event, context):
-        user = get_user_from_event(event)
-        if not user:
-            return error_response(401, 'Usuário não autenticado')
-        event['user'] = user
-        return handler_func(event, context)
-    return wrapper
 
-# ============================================================================
-# HANDLERS (SIMPLIFICADOS - JWT já validado no API Gateway)
-# ============================================================================
-
+# ── rotas públicas ───────────────────────────────────────────────────────────
 def create_user(event, context):
-    """
-    Criar novo usuário (PÚBLICO - sem autenticação necessária)
-
-    POST /users
-    {
-      "email": "novo@email.com",
-      "password": "Senha@123",
-      "name": "João",
-      "role": "analyst"
-    }
-    """
+    """Signup PÚBLICO. Cria sempre como `viewer` (menor privilégio)."""
+    body, err = _parse_body(event)
+    if err:
+        return err
     try:
-        from src.services.database import db
+        data = UserSignupSchema(**body)
+    except ValidationError as e:
+        return error_response(400, f"Validação falhou: {_fmt(e)}")
 
-        body = json.loads(event.get('body', '{}'))
-
-        # ✅ VALIDAR COM PYDANTIC
-        try:
-            user_data = UserSignupSchema(**body)
-        except ValidationError as e:
-            errors = [f"{err['loc'][0]}: {err['msg']}" for err in e.errors()]
-            return error_response(400, f'Validação falhou: {", ".join(errors)}')
-
-        # ✅ CONTEXT MANAGER GARANTE DESCONEXÃO
-        with db as database:
-            existing = database.execute_query_one(
-                "SELECT id FROM public.users WHERE email = %s",
-                (user_data.email,)
+    user_id = generate_uuid()
+    try:
+        with simple_tx() as cur:
+            cur.execute("SELECT 1 FROM public.users WHERE email = %s", (data.email,))
+            if cur.fetchone():
+                return error_response(409, "Email já cadastrado")
+            cur.execute(
+                "INSERT INTO public.users (id, email, password_hash, name, role, status)"
+                " VALUES (%s, %s, %s, %s, 'viewer', 'active')",
+                (user_id, data.email, hash_password(data.password), data.name),
             )
-
-            if existing:
-                return error_response(409, 'Email já cadastrado')
-
-            # ✅ HASH COM BCRYPT
-            password_hash = hash_password(user_data.password)
-
-            user_id = generate_uuid()
-            created_at = get_timestamp()
-
-            query = """
-            INSERT INTO public.users (id, email, password_hash, name, role, status, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            """
-
-            database.execute_update(query, (
-                user_id,
-                user_data.email,
-                password_hash,
-                user_data.name,
-                user_data.role,
-                'active',
-                created_at,
-                created_at
-            ))
-
-        logger.info(json.dumps({
-            "event": "USER_CREATED",
-            "user_id": user_id,
-            "email": user_data.email,
-            "role": user_data.role
-        }))
-
-        return success_response(201, 'Usuário criado com sucesso', {
-            'user_id': user_id,
-            'email': user_data.email,
-            'role': user_data.role
-        })
-
     except Exception as e:
-        logger.error(json.dumps({
-            "event": "USER_CREATE_ERROR",
-            "reason": str(e)
-        }))
-        return error_response(500, f'Erro ao criar usuário: {str(e)}')
+        logger.error(json.dumps({"event": "USER_CREATE_ERROR",
+                                 "error": type(e).__name__,
+                                 "pgcode": getattr(e, "pgcode", None)}))
+        return error_response(500, "Erro ao criar usuário")
+
+    logger.info(json.dumps({"event": "USER_CREATED", "user_id": user_id, "role": "viewer"}))
+    return success_response(201, "Usuário criado com sucesso",
+                            {"user_id": user_id, "role": "viewer"})
+
 
 def login(event, context):
-    """
-    Login (PÚBLICO - sem autenticação necessária)
-
-    POST /users/login
-    {
-      "email": "admin@test.com",
-      "password": "Admin@12345"
-    }
-    """
+    """Login PÚBLICO. Retorna JWT (HS256) com user_id/email/role."""
+    body, err = _parse_body(event)
+    if err:
+        return err
     try:
-        from src.services.database import db
-        import jwt
-        import os
+        data = UserLoginSchema(**body)
+    except ValidationError as e:
+        return error_response(400, f"Validação falhou: {_fmt(e)}")
 
-        body = json.loads(event.get('body', '{}'))
-
-        # ✅ VALIDAR COM PYDANTIC
-        try:
-            login_data = UserLoginSchema(**body)
-        except ValidationError as e:
-            errors = [f"{err['loc'][0]}: {err['msg']}" for err in e.errors()]
-            return error_response(400, f'Validação falhou: {", ".join(errors)}')
-
-        # ✅ CONTEXT MANAGER
-        with db as database:
-            user = database.execute_query_one(
-                "SELECT id, email, password_hash, role FROM public.users WHERE email = %s AND status = %s",
-                (login_data.email, 'active')
+    try:
+        with simple_tx() as cur:
+            cur.execute(
+                "SELECT id, email, password_hash, role FROM public.users"
+                " WHERE email = %s AND status = 'active'",
+                (data.email,),
             )
-
-            if not user:
-                logger.warning(json.dumps({
-                    "event": "AUTH_LOGIN_FAILED",
-                    "email": login_data.email,
-                    "reason": "User not found"
-                }))
-                return error_response(401, 'Email ou senha inválidos')
-
-            # ✅ VERIFICAR COM BCRYPT
-            if not verify_password(login_data.password, user['password_hash']):
-                logger.warning(json.dumps({
-                    "event": "AUTH_LOGIN_FAILED",
-                    "email": login_data.email,
-                    "reason": "Invalid password"
-                }))
-                return error_response(401, 'Email ou senha inválidos')
-
-            token_data = {
-                'user_id': str(user['id']),
-                'email': user['email'],
-                'role': user['role']
-            }
-
-            secret_key = os.getenv('JWT_SECRET_KEY', 'sua-chave-secreta-aqui')
-            token = jwt.encode(token_data, secret_key, algorithm='HS256')
-
-            logger.info(json.dumps({
-                "event": "AUTH_LOGIN_SUCCESS",
-                "user_id": str(user['id']),
-                "email": user['email']
-            }))
-
-        return success_response(200, 'Login bem-sucedido', {
-            'token': token,
-            'user_id': str(user['id']),
-            'email': user['email'],
-            'role': user['role']
-        })
-
+            user = cur.fetchone()
     except Exception as e:
-        logger.error(json.dumps({
-            "event": "AUTH_LOGIN_ERROR",
-            "reason": str(e)
-        }))
-        return error_response(500, f'Erro no login: {str(e)}')
+        logger.error(json.dumps({"event": "AUTH_LOGIN_ERROR",
+                                 "error": type(e).__name__}))
+        return error_response(500, "Erro no login")
+
+    if not user or not verify_password(data.password, user["password_hash"]):
+        logger.warning(json.dumps({"event": "AUTH_LOGIN_FAILED"}))  # sem PII
+        return error_response(401, "Email ou senha inválidos")
+
+    token = create_access_token({
+        "user_id": str(user["id"]), "email": user["email"], "role": user["role"],
+    })
+    logger.info(json.dumps({"event": "AUTH_LOGIN_SUCCESS", "user_id": str(user["id"])}))
+    return success_response(200, "Login bem-sucedido", {
+        "token": token, "user_id": str(user["id"]), "role": user["role"],
+    })
+
 
 def forgot_password(event, context):
-    """
-    Recuperar senha (PÚBLICO)
-
-    POST /users/forgot-password
-    {"email": "user@email.com"}
-    """
+    """Solicita reset. Resposta sempre genérica (não revela se o email existe)."""
+    body, err = _parse_body(event)
+    if err:
+        return err
     try:
-        from src.services.database import db
-        from src.services.email import email_service
+        data = ForgotPasswordSchema(**body)
+    except ValidationError as e:
+        return error_response(400, f"Validação falhou: {_fmt(e)}")
 
-        body = json.loads(event.get('body', '{}'))
-
-        # ✅ VALIDAR COM PYDANTIC
-        try:
-            data = ForgotPasswordSchema(**body)
-        except ValidationError as e:
-            errors = [f"{err['loc'][0]}: {err['msg']}" for err in e.errors()]
-            return error_response(400, f'Validação falhou: {", ".join(errors)}')
-
-        # ✅ CONTEXT MANAGER
-        with db as database:
-            user = database.execute_query_one(
-                "SELECT id, name FROM public.users WHERE email = %s",
-                (data.email,)
-            )
-
+    generic = success_response(200, "Se o email existir, um link de reset será enviado")
+    try:
+        with simple_tx() as cur:
+            cur.execute("SELECT id, name FROM public.users WHERE email = %s", (data.email,))
+            user = cur.fetchone()
             if not user:
-                # Resposta genérica para não vazar se o email existe
-                return success_response(200, 'Se o email existir, um link será enviado')
-
-            # ✅ GERAR TOKEN SEGURO
+                return generic
             reset_token = secrets.token_urlsafe(32)
-            expires_at = (datetime.utcnow() + timedelta(hours=1)).isoformat()
-
-            query = """
-            INSERT INTO public.password_resets (user_id, token, expires_at)
-            VALUES (%s, %s, %s)
-            """
-
-            database.execute_update(query, (
-                user['id'],
-                reset_token,
-                expires_at
-            ))
-
-            # ✅ ENVIAR EMAIL COM LINK
-            email_sent = email_service.send_reset_password_email(
-                to_email=data.email,
-                reset_token=reset_token,
-                user_name=user['name']
+            cur.execute(
+                "INSERT INTO public.password_resets (user_id, token, expires_at)"
+                " VALUES (%s, %s, NOW() + INTERVAL '1 hour')",
+                (user["id"], reset_token),
             )
-
-            if not email_sent:
-                logger.warning(json.dumps({
-                    "event": "PASSWORD_RESET_EMAIL_FAILED",
-                    "user_id": str(user['id'])
-                }))
-
-        logger.info(json.dumps({
-            "event": "PASSWORD_RESET_REQUESTED",
-            "user_id": str(user['id'])
-        }))
-
-        return success_response(200, 'Se o email existir, um link será enviado')
-
     except Exception as e:
-        logger.error(json.dumps({
-            "event": "PASSWORD_RESET_REQUEST_ERROR",
-            "reason": str(e)
-        }))
-        return error_response(500, str(e))
+        logger.error(json.dumps({"event": "PASSWORD_RESET_REQUEST_ERROR",
+                                 "error": type(e).__name__}))
+        return error_response(500, "Erro ao solicitar reset")
+
+    email_service.send_reset_password_email(data.email, reset_token, user["name"])
+    logger.info(json.dumps({"event": "PASSWORD_RESET_REQUESTED", "user_id": str(user["id"])}))
+    return generic
+
 
 def reset_password(event, context):
-    """
-    Resetar senha (PÚBLICO)
-
-    POST /users/reset-password
-    {"token": "token-recebido-por-email", "password": "NovaSenha@123"}
-    """
+    """Reseta a senha a partir de um token válido e não expirado."""
+    body, err = _parse_body(event)
+    if err:
+        return err
     try:
-        from src.services.database import db
+        data = ResetPasswordSchema(**body)
+    except ValidationError as e:
+        return error_response(400, f"Validação falhou: {_fmt(e)}")
 
-        body = json.loads(event.get('body', '{}'))
-
-        # ✅ VALIDAR COM PYDANTIC
-        try:
-            data = ResetPasswordSchema(**body)
-        except ValidationError as e:
-            errors = [f"{err['loc'][0]}: {err['msg']}" for err in e.errors()]
-            return error_response(400, f'Validação falhou: {", ".join(errors)}')
-
-        # ✅ CONTEXT MANAGER
-        with db as database:
-            reset = database.execute_query_one(
-                """SELECT user_id FROM public.password_resets
-                   WHERE token = %s AND expires_at > NOW()""",
-                (data.token,)
+    try:
+        with simple_tx() as cur:
+            cur.execute(
+                "SELECT user_id FROM public.password_resets"
+                " WHERE token = %s AND expires_at > NOW()",
+                (data.token,),
             )
-
+            reset = cur.fetchone()
             if not reset:
-                return error_response(400, 'Link de reset inválido ou expirado')
-
-            # ✅ HASH COM BCRYPT
-            password_hash = hash_password(data.password)
-
-            database.execute_update(
-                "UPDATE public.users SET password_hash = %s, updated_at = %s WHERE id = %s",
-                (password_hash, get_timestamp(), reset['user_id'])
+                return error_response(400, "Link de reset inválido ou expirado")
+            cur.execute(
+                "UPDATE public.users SET password_hash = %s, updated_at = NOW()"
+                " WHERE id = %s",
+                (hash_password(data.password), reset["user_id"]),
             )
-
-            # ✅ DELETAR TOKEN APÓS USO
-            database.execute_update(
-                "DELETE FROM public.password_resets WHERE token = %s",
-                (data.token,)
-            )
-
-        logger.info(json.dumps({
-            "event": "PASSWORD_RESET_SUCCESS",
-            "user_id": str(reset['user_id'])
-        }))
-
-        return success_response(200, 'Senha resetada com sucesso')
-
+            cur.execute("DELETE FROM public.password_resets WHERE token = %s", (data.token,))
     except Exception as e:
-        logger.error(json.dumps({
-            "event": "PASSWORD_RESET_ERROR",
-            "reason": str(e)
-        }))
-        return error_response(500, str(e))
+        logger.error(json.dumps({"event": "PASSWORD_RESET_ERROR",
+                                 "error": type(e).__name__}))
+        return error_response(500, "Erro ao resetar senha")
 
+    logger.info(json.dumps({"event": "PASSWORD_RESET_SUCCESS",
+                            "user_id": str(reset["user_id"])}))
+    return success_response(200, "Senha resetada com sucesso")
+
+
+# ── rotas protegidas (JWT Authorizer) ────────────────────────────────────────
 @require_user
 def get_user(event, context):
-    """
-    Obter usuário (PROTEGIDO - JWT Authorizer valida no API Gateway)
-
-    GET /users/{userId}
-    Authorization: Bearer TOKEN
-    """
+    user = event["user"]
+    target = _valid_uuid((event.get("pathParameters") or {}).get("userId"))
+    if not target:
+        return error_response(400, "userId inválido")
+    if target != user["user_id"] and user["role"] != "admin":
+        logger.warning(json.dumps({"event": "RBAC_VIOLATION_ATTEMPT",
+                                   "user_id": user["user_id"], "action": "get_user"}))
+        return error_response(403, "Acesso negado")
     try:
-        from src.services.database import db
-
-        user = event['user']  # ← Adicionado pelo decorator
-        user_id = event['pathParameters']['userId']
-
-        # ✅ VALIDAR ACESSO
-        if user_id != user['user_id'] and user['role'] != 'admin':
-            logger.warning(json.dumps({
-                "event": "RBAC_VIOLATION_ATTEMPT",
-                "user_id": user['user_id'],
-                "requested_action": "get_user",
-                "target_user_id": user_id
-            }))
-            return error_response(403, 'Acesso negado')
-
-        # ✅ CONTEXT MANAGER
-        with db as database:
-            query = "SELECT id, email, name, role, status, created_at FROM public.users WHERE id = %s"
-            user_data = database.execute_query_one(query, (user_id,))
-
-            if not user_data:
-                return error_response(404, 'Usuário não encontrado')
-
-            return success_response(200, 'Usuário encontrado', dict(user_data))
-
+        with simple_tx() as cur:
+            cur.execute(
+                "SELECT id, email, name, role, status, created_at"
+                " FROM public.users WHERE id = %s",
+                (target,),
+            )
+            row = cur.fetchone()
     except Exception as e:
-        logger.error(json.dumps({
-            "event": "USER_GET_ERROR",
-            "target_user_id": event.get('pathParameters', {}).get('userId'),
-            "reason": str(e)
-        }))
-        return error_response(500, str(e))
+        logger.error(json.dumps({"event": "USER_GET_ERROR", "error": type(e).__name__}))
+        return error_response(500, "Erro ao obter usuário")
+    if not row:
+        return error_response(404, "Usuário não encontrado")
+    return success_response(200, "Usuário encontrado", _serialize(row))
+
 
 @require_user
+@require_role("admin")
 def list_users(event, context):
-    """
-    Listar usuários (PROTEGIDO - apenas admin)
-
-    GET /users
-    Authorization: Bearer TOKEN
-    """
     try:
-        from src.services.database import db
-
-        user = event['user']
-
-        # ✅ VALIDAR ROLE
-        if user['role'] != 'admin':
-            logger.warning(json.dumps({
-                "event": "RBAC_VIOLATION_ATTEMPT",
-                "user_id": user['user_id'],
-                "requested_action": "list_users"
-            }))
-            return error_response(403, 'Acesso negado - apenas admin')
-
-        # ✅ CONTEXT MANAGER
-        with db as database:
-            query = "SELECT id, email, name, role, status, created_at FROM public.users ORDER BY created_at DESC LIMIT 100"
-            users = database.execute_query(query)
-
-            return success_response(200, f'{len(users)} usuários encontrados', [dict(u) for u in users])
-
+        with simple_tx() as cur:
+            cur.execute(
+                "SELECT id, email, name, role, status, created_at FROM public.users"
+                " ORDER BY created_at DESC LIMIT 100"
+            )
+            rows = cur.fetchall()
     except Exception as e:
-        logger.error(json.dumps({
-            "event": "USER_LIST_ERROR",
-            "reason": str(e)
-        }))
-        return error_response(500, str(e))
+        logger.error(json.dumps({"event": "USER_LIST_ERROR", "error": type(e).__name__}))
+        return error_response(500, "Erro ao listar usuários")
+    return success_response(200, f"{len(rows)} usuários encontrados",
+                            [_serialize(r) for r in rows])
+
 
 @require_user
 def update_user(event, context):
-    """
-    Atualizar usuário (PROTEGIDO)
-
-    PUT /users/{userId}
-    Authorization: Bearer TOKEN
-    """
+    user = event["user"]
+    target = _valid_uuid((event.get("pathParameters") or {}).get("userId"))
+    if not target:
+        return error_response(400, "userId inválido")
+    if target != user["user_id"] and user["role"] != "admin":
+        logger.warning(json.dumps({"event": "RBAC_VIOLATION_ATTEMPT",
+                                   "user_id": user["user_id"], "action": "update_user"}))
+        return error_response(403, "Acesso negado")
+    body, err = _parse_body(event)
+    if err:
+        return err
     try:
-        from src.services.database import db
+        data = UserUpdateSchema(**body)
+    except ValidationError as e:
+        return error_response(400, f"Validação falhou: {_fmt(e)}")
 
-        user = event['user']
-        user_id = event['pathParameters']['userId']
-        body = json.loads(event.get('body', '{}'))
+    fields, values = [], []
+    if data.name is not None:
+        fields.append("name = %s")
+        values.append(data.name)
+    # role/status só por admin (silenciosamente ignorados para não-admin).
+    if user["role"] == "admin":
+        if data.role is not None:
+            fields.append("role = %s")
+            values.append(data.role)
+        if data.status is not None:
+            fields.append("status = %s")
+            values.append(data.status)
+    if not fields:
+        return error_response(400, "Nenhum campo para atualizar")
+    fields.append("updated_at = NOW()")
+    values.append(target)
 
-        # ✅ VALIDAR ACESSO
-        if user_id != user['user_id'] and user['role'] != 'admin':
-            logger.warning(json.dumps({
-                "event": "RBAC_VIOLATION_ATTEMPT",
-                "user_id": user['user_id'],
-                "requested_action": "update_user",
-                "target_user_id": user_id
-            }))
-            return error_response(403, 'Acesso negado')
-
-        # ✅ CONTEXT MANAGER
-        with db as database:
-            fields = []
-            values = []
-
-            if 'name' in body and body['name']:
-                fields.append('name = %s')
-                values.append(body['name'])
-
-            if user['role'] == 'admin':
-                if 'role' in body and body['role']:
-                    fields.append('role = %s')
-                    values.append(body['role'])
-
-                if 'status' in body and body['status']:
-                    fields.append('status = %s')
-                    values.append(body['status'])
-
-            if not fields:
-                return error_response(400, 'Nenhum campo para atualizar')
-
-            fields.append('updated_at = %s')
-            values.append(get_timestamp())
-            values.append(user_id)
-
-            query = f"UPDATE public.users SET {', '.join(fields)} WHERE id = %s"
-            database.execute_update(query, tuple(values))
-
-        logger.info(json.dumps({
-            "event": "USER_UPDATED",
-            "user_id": user['user_id'],
-            "target_user_id": user_id,
-            "fields": list(body.keys())
-        }))
-
-        return success_response(200, 'Usuário atualizado com sucesso')
-
+    try:
+        with simple_tx() as cur:
+            cur.execute(
+                f"UPDATE public.users SET {', '.join(fields)} WHERE id = %s",
+                tuple(values),
+            )
+            updated = cur.rowcount
     except Exception as e:
-        logger.error(json.dumps({
-            "event": "USER_UPDATE_ERROR",
-            "target_user_id": event.get('pathParameters', {}).get('userId'),
-            "reason": str(e)
-        }))
-        return error_response(500, str(e))
+        logger.error(json.dumps({"event": "USER_UPDATE_ERROR", "error": type(e).__name__}))
+        return error_response(500, "Erro ao atualizar usuário")
+    if not updated:
+        return error_response(404, "Usuário não encontrado")
+    logger.info(json.dumps({"event": "USER_UPDATED", "user_id": user["user_id"],
+                            "target_user_id": target}))
+    return success_response(200, "Usuário atualizado com sucesso")
+
 
 @require_user
+@require_role("admin")
 def delete_user(event, context):
-    """
-    Deletar usuário (PROTEGIDO - apenas admin)
-
-    DELETE /users/{userId}
-    Authorization: Bearer TOKEN
-    """
+    user = event["user"]
+    target = _valid_uuid((event.get("pathParameters") or {}).get("userId"))
+    if not target:
+        return error_response(400, "userId inválido")
     try:
-        from src.services.database import db
-
-        user = event['user']
-        user_id = event['pathParameters']['userId']
-
-        # ✅ VALIDAR ROLE
-        if user['role'] != 'admin':
-            logger.error(json.dumps({
-                "event": "RBAC_VIOLATION_ATTEMPT",
-                "user_id": user['user_id'],
-                "requested_action": "delete_user",
-                "target_user_id": user_id
-            }))
-            return error_response(403, 'Acesso negado - apenas admin')
-
-        # ✅ CONTEXT MANAGER
-        with db as database:
-            database.execute_update(
-                "UPDATE public.users SET status = %s, updated_at = %s WHERE id = %s",
-                ('inactive', get_timestamp(), user_id)
+        with simple_tx() as cur:
+            cur.execute(
+                "UPDATE public.users SET status = 'inactive', updated_at = NOW()"
+                " WHERE id = %s",
+                (target,),
             )
-
-        logger.info(json.dumps({
-            "event": "USER_DELETED",
-            "user_id": user['user_id'],
-            "target_user_id": user_id
-        }))
-
-        return success_response(200, 'Usuário deletado com sucesso')
-
+            updated = cur.rowcount
     except Exception as e:
-        logger.error(json.dumps({
-            "event": "USER_DELETE_ERROR",
-            "target_user_id": event.get('pathParameters', {}).get('userId'),
-            "reason": str(e)
-        }))
-        return error_response(500, str(e))
+        logger.error(json.dumps({"event": "USER_DELETE_ERROR", "error": type(e).__name__}))
+        return error_response(500, "Erro ao deletar usuário")
+    if not updated:
+        return error_response(404, "Usuário não encontrado")
+    logger.info(json.dumps({"event": "USER_DELETED", "user_id": user["user_id"],
+                            "target_user_id": target}))
+    return success_response(200, "Usuário desativado com sucesso")
+
+
+def _serialize(row) -> dict:
+    return {
+        "id": str(row["id"]),
+        "email": row["email"],
+        "name": row["name"],
+        "role": row["role"],
+        "status": row["status"],
+        "created_at": str(row["created_at"]) if row.get("created_at") else None,
+    }
