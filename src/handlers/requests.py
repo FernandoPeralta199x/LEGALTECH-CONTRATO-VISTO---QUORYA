@@ -100,7 +100,7 @@ def create_request(event, context):
                 " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'created',%s,%s,NULL,%s,%s)",
                 (request_id, org, uid, code, data.product_type, product_label, title,
                  data.description, data.source_mode, data.idempotency_key,
-                 est["total_cents"], Json(est)),
+                 est["total_price_cents"], Json(est)),
             )
             cur.execute(
                 "INSERT INTO public.cases"
@@ -187,7 +187,7 @@ def create_request(event, context):
         "case_code": code,
         "product_type": data.product_type,
         "status": "awaiting_triage",
-        "total_price_cents": est["total_cents"],
+        "total_price_cents": est["total_price_cents"],
         "parties_count": party_count,
         "triage_modules_count": len(modules),
     })

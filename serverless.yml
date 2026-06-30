@@ -143,6 +143,62 @@ functions:
           cors: true
           authorizer: ${self:custom.jwtAuthorizer}
 
+  # TIER 1 - Pricing (catálogo + estimativa + config por organização)
+  getPricing:
+    handler: src/handlers/pricing.get_pricing
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: pricing
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  estimatePricing:
+    handler: src/handlers/pricing.estimate_pricing
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: pricing/estimate
+          method: post
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  getPricingConfig:
+    handler: src/handlers/pricing.get_pricing_config
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: pricing/config
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  updatePricingConfig:
+    handler: src/handlers/pricing.update_pricing_config
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: pricing/config
+          method: put
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  checkCasesLimit:
+    handler: src/handlers/pricing.check_cases_limit
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: pricing/config/limit-check
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
   # TIER 1 - Documents
   uploadDocument:
     handler: src/handlers/documents.upload_document

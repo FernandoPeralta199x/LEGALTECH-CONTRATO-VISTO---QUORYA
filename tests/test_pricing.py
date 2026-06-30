@@ -19,18 +19,24 @@ def test_preco_produto_e_soma_dos_modulos_required():
     assert pc.compute_product_base_price("reuniao_equipe") == 0
 
 
-def test_estimate_soma_modulos_e_sla():
+def test_estimate_base_mais_modulos_e_sla():
+    # analise_contratual: base required = ia_deepseek+analise_contratual_ia = 10800;
+    # revisao_humana é não-required selecionado -> entra em modules_total (12900).
     est = estimate("analise_contratual",
                    ["ia_deepseek", "analise_contratual_ia", "revisao_humana"])
-    assert est["total_cents"] == 2900 + 7900 + 12900  # 23700
+    assert est["base_price_cents"] == 2900 + 7900  # 10800
+    assert est["modules_total_cents"] == 12900
+    assert est["total_price_cents"] == 23700
     assert est["sla_hours"] == 48 + 24  # produto 48 + revisão humana +24
 
 
 def test_estimate_aplica_override_da_org():
-    # override Escavador R$65,00 (6500) — igual ao validado na varredura do produto real
+    # override Escavador R$65,00 (6500) — igual ao validado na varredura do produto real.
+    # escavador/targetdata/ia_deepseek são required em dados_partes -> entram na base.
     overrides = {"escavador": {"price_cents": 6500}}
     est = estimate("dados_partes", ["escavador", "targetdata", "ia_deepseek"], overrides)
-    assert est["total_cents"] == 6500 + 3900 + 2900  # 13300
+    assert est["base_price_cents"] == 6500 + 3900 + 2900  # 13300
+    assert est["total_price_cents"] == 13300
 
 
 def test_effective_price_default_e_override():
