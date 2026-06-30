@@ -90,6 +90,13 @@ def test_signup_weak_password_400(clean_users):
     assert resp["statusCode"] == 400
 
 
+def test_signup_password_over_72_bytes_400(clean_users):
+    # bcrypt rejeita > 72 bytes -> deve dar 400 (não 500)
+    longpw = "A1" + "x" * 100
+    resp = u.create_user(_pub({"email": "a@b.c", "password": longpw, "name": "Ana"}), None)
+    assert resp["statusCode"] == 400
+
+
 # ── login ─────────────────────────────────────────────────────────────────
 def test_login_returns_valid_jwt(clean_users):
     _seed_user("a@b.c", "Senha123", role="analyst")

@@ -13,6 +13,10 @@ STATUS_PATTERN = "^(active|inactive)$"
 
 
 def _check_password_strength(v: str) -> str:
+    # bcrypt opera sobre no máx. 72 bytes (e rejeita acima disso) → validar em bytes
+    # para devolver 400 em vez de estourar no hash (500).
+    if len(v.encode("utf-8")) > 72:
+        raise ValueError("não pode exceder 72 bytes")
     if not any(c.isupper() for c in v):
         raise ValueError("deve conter pelo menos uma letra maiúscula")
     if not any(c.isdigit() for c in v):

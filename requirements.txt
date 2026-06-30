@@ -2,17 +2,20 @@
 # Sem FastAPI/uvicorn/SQLAlchemy: a migração usa handlers Lambda + psycopg2 direto.
 # Dependências de desenvolvimento/testes: ver requirements-dev.txt.
 
+# Versões alinhadas às testadas no PG18 (pip freeze do venv) — reprodutibilidade.
+
 # Banco
-psycopg2-binary==2.9.9
+psycopg2-binary==2.9.12
 
 # AWS (S3 presigned, SES) — import tardio em services/storage.py e services/email.py
+# (não exercitado nos testes locais; validar no deploy)
 boto3==1.34.69
 
 # Embeddings (busca vetorial) — import tardio em services/embeddings.py (backend openai)
 openai==1.30.1
 
 # Validação / auth
-pydantic==2.5.0
+pydantic==2.13.4
 PyJWT==2.13.0
-bcrypt==4.1.1
-email-validator==2.1.0
+bcrypt==5.0.0
+email-validator==2.3.0
