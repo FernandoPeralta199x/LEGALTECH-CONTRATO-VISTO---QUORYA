@@ -22,6 +22,10 @@ provider:
     # o deploy em stages que não têm o parâmetro (ex.: dev com backend mock)
     OPENAI_API_KEY: ${ssm:/contrato-visto/${self:provider.stage}/openai_key, ''}
     DOCUMENTS_BUCKET: contrato-visto-documents-${self:provider.stage}
+    # SP1 — fila assíncrona de processamento de documentos
+    QUEUE_BACKEND: sqs
+    DOCUMENT_PROCESSING_QUEUE_URL: !Ref DocumentProcessingQueue
+    DOCUMENT_PROCESSING_MAX_ATTEMPTS: '3'
 
   iamRoleStatements:
     - Effect: Allow
@@ -37,6 +41,15 @@ provider:
       Action:
         - ses:SendEmail
       Resource: "*"
+    - Effect: Allow
+      Action:
+        - sqs:SendMessage
+        - sqs:ReceiveMessage
+        - sqs:DeleteMessage
+        - sqs:GetQueueAttributes
+      Resource:
+        - !GetAtt DocumentProcessingQueue.Arn
+        - !GetAtt DocumentProcessingDLQ.Arn
     - Effect: Allow
       Action:
         - ssm:GetParameter
@@ -374,7 +387,7 @@ functions:
           cors: true
           authorizer: ${self:custom.jwtAuthorizer}
 
-  # SP2 - ingestão: OCR -> chunking -> embeddings (idempotente, mock-first)
+  # SP2 - ingestão síncrona (force-reprocess): OCR -> chunking -> embeddings
   processDocument:
     handler: src/handlers/documents.process_document
     timeout: 60
@@ -385,11 +398,29 @@ functions:
           method: post
           cors: true
           authorizer: ${self:custom.jwtAuthorizer}
+
+  # SP1 - enfileira o processamento (publica na SQS; resposta 'queued')
+  enqueueProcessing:
+    handler: src/handlers/documents.enqueue_processing
+    timeout: 30
+    memorySize: 512
+    events:
       - http:
           path: documents/{docId}/enqueue-processing
           method: post
           cors: true
           authorizer: ${self:custom.jwtAuthorizer}
+
+  # SP1 - worker assíncrono disparado pela SQS (processa os jobs idempotentemente)
+  documentProcessingWorker:
+    handler: src/handlers/worker.document_processing_worker
+    timeout: 120
+    memorySize: 1024
+    events:
+      - sqs:
+          arn: !GetAtt DocumentProcessingQueue.Arn
+          batchSize: 5
+          functionResponseType: ReportBatchItemFailures
 
   searchClauses:
     handler: src/handlers/search.search_clauses
@@ -675,3 +706,30 @@ package:
     - '!conftest.py'
     - '!requirements-dev.txt'
     - '!**/*.md'
+
+# SP1 — infraestrutura da fila assíncrona: fila principal + DLQ (redrive por maxReceiveCount)
+resources:
+  Resources:
+    DocumentProcessingDLQ:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: contrato-visto-doc-processing-dlq-${self:provider.stage}
+        MessageRetentionPeriod: 1209600  # 14 dias
+
+    DocumentProcessingQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: contrato-visto-doc-processing-${self:provider.stage}
+        VisibilityTimeout: 180   # >= 6x o timeout (120s) da Lambda worker
+        MessageRetentionPeriod: 345600  # 4 dias
+        RedrivePolicy:
+          deadLetterTargetArn: !GetAtt DocumentProcessingDLQ.Arn
+          maxReceiveCount: 3
+
+  Outputs:
+    DocumentProcessingQueueUrl:
+      Value: !Ref DocumentProcessingQueue
+    DocumentProcessingQueueArn:
+      Value: !GetAtt DocumentProcessingQueue.Arn
+    DocumentProcessingDLQArn:
+      Value: !GetAtt DocumentProcessingDLQ.Arn

@@ -13,12 +13,12 @@ import uuid
 
 from pydantic import ValidationError
 
-from src.adapters.ocr import create_ocr_adapter
 from src.schemas.document_schemas import DocumentUploadSchema
-from src.services.chunking import chunk_text
+from src.schemas.queue_schemas import DocumentProcessingJob, EnqueueDocumentProcessingResult
 from src.services.database import tenant_tx
-from src.services.embeddings import embeddings_service
-from src.services.rag import store_chunk, store_embedding
+from src.services.document_ingestion import DocumentNotFound, OcrFailed, ingest_document
+from src.services.document_worker import process_job
+from src.services.queue import create_queue_client
 from src.services.storage import storage_service
 from src.utils.context import require_user, require_writer
 from src.utils.helpers import error_response, success_response
@@ -115,54 +115,67 @@ def process_document(event, context):
         return error_response(400, "docId inválido")
     try:
         with tenant_tx(user["user_id"], user["role"], org) as cur:
-            cur.execute(
-                "SELECT id, s3_path, file_type FROM public.documents WHERE id = %s", (doc_id,))
-            doc = cur.fetchone()
-            if not doc:
-                return error_response(404, "Documento não encontrado")
-            # idempotência (limpa-e-regera): remove embeddings antes dos chunks (FK)
-            cur.execute("DELETE FROM public.document_embeddings WHERE document_id = %s", (doc_id,))
-            cur.execute("DELETE FROM public.document_chunks WHERE document_id = %s", (doc_id,))
-
-            ocr = create_ocr_adapter()
-            res = ocr.extract_text(doc["s3_path"] or f"local/{doc_id}",
-                                   _content_type(doc.get("file_type") or "pdf"))
-            if not res.success or not res.data.get("text"):
-                cur.execute("UPDATE public.documents SET ocr_status='failed',"
-                            " extraction_status='failed' WHERE id = %s", (doc_id,))
-                return error_response(502, "Falha na extração de texto (OCR)")
-
-            text = res.data["text"]
-            pages = res.data.get("pages")
-            chunks = chunk_text(text)
-            for i, ch in enumerate(chunks):
-                chunk_id = store_chunk(cur, org, doc_id, i, ch, start_page=1, end_page=pages)
-                emb = embeddings_service.embed(ch)
-                store_embedding(cur, org, doc_id, chunk_id, ch, emb,
-                                segment_type="chunk", embedding_model=embeddings_service.model)
-            cur.execute(
-                "UPDATE public.documents SET ocr_status='done', extraction_status='done'"
-                " WHERE id = %s", (doc_id,))
+            res = ingest_document(cur, org, doc_id)
+    except DocumentNotFound:
+        return error_response(404, "Documento não encontrado")
+    except OcrFailed:
+        return error_response(502, "Falha na extração de texto (OCR)")
     except Exception as e:
         logger.error(json.dumps({"event": "DOCUMENT_PROCESS_ERROR", "error": type(e).__name__,
                                  "pgcode": getattr(e, "pgcode", None)}))
         return error_response(500, "Erro ao processar documento")
 
     logger.info(json.dumps({"event": "DOCUMENT_PROCESSED", "document_id": doc_id,
-                            "chunks": len(chunks)}))
+                            "chunks": res["chunk_count"]}))
     return success_response(200, "Documento processado", {
         "document_id": doc_id,
         "status": "done",
-        # campos p/ o contrato enqueue-processing do frontend (execução síncrona
-        # por ora; a fila real (SQS) é o SP1):
+        # contrato compatível com a execução síncrona (force-reprocess):
         "job_id": f"sync-{doc_id}",
         "queue_backend": "inline",
-        "pages": pages,
-        "chunks": len(chunks),
-        "embeddings": len(chunks),
-        "ocr_source": res.source,
-        "embedding_model": embeddings_service.model,
+        "pages": res["pages"],
+        "chunks": res["chunk_count"],
+        "embeddings": res["embedding_count"],
+        "ocr_source": res["ocr_source"],
+        "embedding_model": res["embedding_model"],
     })
+
+
+@require_user
+@require_writer
+def enqueue_processing(event, context):
+    """Enfileira o processamento do documento (SP1). Na AWS publica na SQS (worker
+    assíncrono); em dev (inline) cria a execução e processa de forma síncrona —
+    em ambos os casos a resposta é 'queued' (contrato EnqueueProcessingResult)."""
+    user = event["user"]
+    org = user["organization_id"]
+    doc_id = _valid_uuid((event.get("pathParameters") or {}).get("docId"))
+    if not doc_id:
+        return error_response(400, "docId inválido")
+    try:
+        with tenant_tx(user["user_id"], user["role"], org) as cur:
+            cur.execute("SELECT id, case_id FROM public.documents WHERE id = %s", (doc_id,))
+            doc = cur.fetchone()
+            if not doc:
+                return error_response(404, "Documento não encontrado")
+            job = DocumentProcessingJob(
+                organization_id=org, case_id=doc["case_id"], document_id=doc_id,
+                requested_by=user["user_id"], metadata={"source": "api"})
+            client = create_queue_client()
+            client.publish(job)  # SQS: envia a mensagem; inline: no-op
+            if client.backend == "inline":
+                # dev: sem SQS, processa o job de forma síncrona (idempotente)
+                process_job(cur, org, job)
+            result = EnqueueDocumentProcessingResult(
+                job_id=job.job_id, queue_backend=client.backend, document_id=doc_id)
+    except Exception as e:
+        logger.error(json.dumps({"event": "DOCUMENT_ENQUEUE_ERROR", "error": type(e).__name__,
+                                 "pgcode": getattr(e, "pgcode", None)}))
+        return error_response(500, "Erro ao enfileirar o processamento")
+
+    logger.info(json.dumps({"event": "DOCUMENT_ENQUEUED", "document_id": doc_id,
+                            "job_id": str(job.job_id), "backend": client.backend}))
+    return success_response(202, "Processamento enfileirado", result.model_dump(mode="json"))
 
 
 @require_user

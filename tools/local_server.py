@@ -34,6 +34,22 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 load_dotenv(ROOT / ".env")
 
+
+class _CfnLoader(yaml.SafeLoader):
+    """SafeLoader que tolera tags CloudFormation (!Ref/!GetAtt/!Sub/...) do
+    serverless.yml — só precisamos das rotas, então as tags viram placeholders."""
+
+
+def _cfn_passthrough(loader, tag_suffix, node):
+    if isinstance(node, yaml.ScalarNode):
+        return loader.construct_scalar(node)
+    if isinstance(node, yaml.SequenceNode):
+        return loader.construct_sequence(node)
+    return loader.construct_mapping(node)
+
+
+_CfnLoader.add_multi_constructor("!", _cfn_passthrough)
+
 API_PREFIX = "/api/v1"
 HOST = os.getenv("HOST", "127.0.0.1")
 PORT = int(os.getenv("PORT", "8000"))
@@ -76,7 +92,7 @@ def _compile(path: str) -> re.Pattern:
 
 def load_routes() -> list[Route]:
     with open(ROOT / "serverless.yml", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f)
+        cfg = yaml.load(f, Loader=_CfnLoader)
     routes: list[Route] = []
     for _, fdef in (cfg.get("functions") or {}).items():
         handler = fdef.get("handler")
