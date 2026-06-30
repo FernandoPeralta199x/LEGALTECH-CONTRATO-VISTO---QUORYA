@@ -57,16 +57,16 @@ def upload_document(event, context):
             # Atômico: só insere se o case for VISÍVEL ao usuário (RLS de cases).
             cur.execute(
                 "INSERT INTO public.documents"
-                " (id, case_id, s3_url, s3_path, file_name, file_type,"
+                " (id, organization_id, case_id, s3_url, s3_path, file_name, file_type,"
                 "  file_size_bytes, file_hash, document_classification,"
                 "  ocr_status, extraction_status, uploaded_by)"
-                " SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', 'pending', %s"
+                " SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', 'pending', %s"
                 " WHERE EXISTS (SELECT 1 FROM public.cases WHERE id = %s"
                 "               AND status NOT IN ('completed','closed'))"
                 " RETURNING id, created_at",
-                (doc_id, case_id, s3_url, s3_key, data.file_name, data.file_type,
-                 data.file_size_bytes, data.file_hash, data.document_classification,
-                 user["user_id"], case_id),
+                (doc_id, user["organization_id"], case_id, s3_url, s3_key, data.file_name,
+                 data.file_type, data.file_size_bytes, data.file_hash,
+                 data.document_classification, user["user_id"], case_id),
             )
             row = cur.fetchone()
             if row is None:

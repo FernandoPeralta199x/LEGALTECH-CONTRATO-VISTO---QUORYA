@@ -51,17 +51,17 @@ def create_case_result(event, context):
             # a RLS de `cases` filtra o EXISTS; 0 linhas inseridas => 404.
             cur.execute(
                 "INSERT INTO public.case_results"
-                " (case_id, result_type, result_title, result_data, risk_level,"
+                " (organization_id, case_id, result_type, result_title, result_data, risk_level,"
                 "  confidence_score, summary_text, detailed_findings,"
                 "  recommendations, created_by)"
-                " SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s, %s"
+                " SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s"
                 " WHERE EXISTS (SELECT 1 FROM public.cases WHERE id = %s"
                 "               AND status NOT IN ('completed','closed'))"
                 " RETURNING id, created_at",
-                (case_id, data.result_type, data.result_title, Json(data.findings),
-                 data.risk_level, data.confidence_score, data.summary_text,
-                 data.detailed_findings, data.recommendations, user["user_id"],
-                 case_id),
+                (user["organization_id"], case_id, data.result_type, data.result_title,
+                 Json(data.findings), data.risk_level, data.confidence_score,
+                 data.summary_text, data.detailed_findings, data.recommendations,
+                 user["user_id"], case_id),
             )
             row = cur.fetchone()
             if row is None:

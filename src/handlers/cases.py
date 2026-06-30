@@ -59,11 +59,11 @@ def create_case(event, context):
                 raise _ClientInactive()
             cur.execute(
                 "INSERT INTO public.cases"
-                " (client_id, case_type, priority, created_by, metadata)"
-                " VALUES (%s, %s, %s, %s, %s)"
+                " (organization_id, client_id, case_type, priority, created_by, metadata)"
+                " VALUES (%s, %s, %s, %s, %s, %s)"
                 " RETURNING id, status, created_at",
-                (client_id, data.case_type, data.priority, user["user_id"],
-                 Json(metadata) if metadata else None),
+                (user["organization_id"], client_id, data.case_type, data.priority,
+                 user["user_id"], Json(metadata) if metadata else None),
             )
             row = cur.fetchone()
     except _ClientNotFound:

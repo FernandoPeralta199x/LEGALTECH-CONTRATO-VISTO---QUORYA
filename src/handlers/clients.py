@@ -1,10 +1,10 @@
-"""Handlers Lambda de `clients` (migração FastAPI→Serverless, Fase 3).
+"""Handlers Lambda de `clients` (migração FastAPI→Serverless; multi-tenant V2).
 
-`public.clients` é um **catálogo compartilhado**: NÃO tem `created_by` nem RLS.
-Logo: leitura para qualquer usuário autenticado; escrita (create/update/delete)
-apenas para papéis de escrita (admin/analyst) via `require_writer`. `viewer` é
-somente leitura. Usa `simple_tx` (sem contexto RLS). Nunca vaza `str(e)` nem loga
-PII (document_number/legal_name).
+`public.clients` agora é **por organização** (RLS por `organization_id` + FORCE).
+Usa `tenant_tx` (contexto da org do usuário). Leitura para qualquer usuário
+autenticado da org; escrita (create/update/delete) apenas para papéis de escrita
+(admin/analyst) via `require_writer`. `viewer` é somente leitura. Nunca vaza
+`str(e)` nem loga PII (document_number/legal_name).
 """
 import json
 import logging
@@ -13,7 +13,7 @@ import psycopg2
 from pydantic import ValidationError
 
 from src.schemas.client_schemas import ClientCreateSchema, ClientUpdateSchema
-from src.services.database import simple_tx
+from src.services.database import tenant_tx
 from src.utils.context import require_user, require_writer
 from src.utils.helpers import error_response, success_response
 from src.utils.lambda_io import fmt_validation_error as _fmt, parse_json_body as _parse_body, parse_pagination as _paginate, valid_uuid as _valid_uuid
@@ -26,6 +26,7 @@ logger = logging.getLogger()
 @require_user
 @require_writer
 def create_client(event, context):
+    user = event["user"]
     body, err = _parse_body(event)
     if err:
         return err
@@ -35,16 +36,16 @@ def create_client(event, context):
         return error_response(400, f"Validação falhou: {_fmt(e)}")
 
     try:
-        with simple_tx() as cur:
+        with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
             cur.execute(
                 "INSERT INTO public.clients"
-                " (legal_name, document_type, document_number, email, phone,"
+                " (organization_id, legal_name, document_type, document_number, email, phone,"
                 "  address_street, address_city, address_state, address_zip)"
-                " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
+                " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
                 " RETURNING id, status, created_at",
-                (data.legal_name, data.document_type, data.document_number, data.email,
-                 data.phone, data.address_street, data.address_city,
-                 data.address_state, data.address_zip),
+                (user["organization_id"], data.legal_name, data.document_type,
+                 data.document_number, data.email, data.phone, data.address_street,
+                 data.address_city, data.address_state, data.address_zip),
             )
             row = cur.fetchone()
     except psycopg2.errors.UniqueViolation:
@@ -69,7 +70,7 @@ def get_client(event, context):
     if not client_id:
         return error_response(400, "clientId inválido")
     try:
-        with simple_tx() as cur:
+        with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
             cur.execute(_SELECT_COLS + " WHERE id = %s", (client_id,))
             row = cur.fetchone()
     except Exception as e:
@@ -89,7 +90,7 @@ def list_clients(event, context):
         return perr
     page, page_size, offset = pag
     try:
-        with simple_tx() as cur:
+        with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
             cur.execute(
                 _SELECT_COLS + " WHERE status = 'active'"
                 " ORDER BY created_at DESC LIMIT %s OFFSET %s",
@@ -108,6 +109,7 @@ def list_clients(event, context):
 @require_user
 @require_writer
 def update_client(event, context):
+    user = event["user"]
     client_id = _valid_uuid((event.get("pathParameters") or {}).get("clientId"))
     if not client_id:
         return error_response(400, "clientId inválido")
@@ -138,7 +140,7 @@ def update_client(event, context):
     values.append(client_id)
 
     try:
-        with simple_tx() as cur:
+        with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
             cur.execute(
                 f"UPDATE public.clients SET {', '.join(fields)} WHERE id = %s",
                 tuple(values),
@@ -156,11 +158,12 @@ def update_client(event, context):
 @require_user
 @require_writer
 def delete_client(event, context):
+    user = event["user"]
     client_id = _valid_uuid((event.get("pathParameters") or {}).get("clientId"))
     if not client_id:
         return error_response(400, "clientId inválido")
     try:
-        with simple_tx() as cur:
+        with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
             cur.execute(
                 "UPDATE public.clients SET status = 'inactive', is_active = false,"
                 " updated_at = NOW() WHERE id = %s",
