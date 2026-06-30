@@ -85,6 +85,7 @@ class ClientCreateSchema(BaseModel):
     address_city: Optional[str] = Field(default=None, max_length=100)
     address_state: Optional[str] = Field(default=None, pattern=STATE_PATTERN)
     address_zip: Optional[str] = Field(default=None, max_length=10)
+    rg: Optional[str] = Field(default=None, max_length=40)
 
     @model_validator(mode="before")
     @classmethod
@@ -122,6 +123,7 @@ class ClientUpdateSchema(BaseModel):
     address_city: Optional[str] = Field(default=None, max_length=100)
     address_state: Optional[str] = Field(default=None, pattern=STATE_PATTERN)
     address_zip: Optional[str] = Field(default=None, max_length=10)
+    rg: Optional[str] = Field(default=None, max_length=40)
     status: Optional[str] = Field(default=None, pattern=STATUS_PATTERN)
 
     @model_validator(mode="before")

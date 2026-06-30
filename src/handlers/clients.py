@@ -40,14 +40,14 @@ def create_client(event, context):
             cur.execute(
                 "INSERT INTO public.clients"
                 " (organization_id, legal_name, document_type, document_number, email, phone,"
-                "  address_street, address_city, address_state, address_zip)"
-                " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+                "  address_street, address_city, address_state, address_zip, rg)"
+                " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
                 " RETURNING id, legal_name, document_type, document_number, email, phone,"
-                " address_street, address_city, address_state, address_zip, status,"
+                " address_street, address_city, address_state, address_zip, rg, status,"
                 " created_at, updated_at",
                 (user["organization_id"], data.legal_name, data.document_type,
                  data.document_number, data.email, data.phone, data.address_street,
-                 data.address_city, data.address_state, data.address_zip),
+                 data.address_city, data.address_state, data.address_zip, data.rg),
             )
             row = cur.fetchone()
     except psycopg2.errors.UniqueViolation:
@@ -129,7 +129,7 @@ def update_client(event, context):
 
     fields, values = [], []
     for col in ("legal_name", "email", "phone", "address_street",
-                "address_city", "address_state", "address_zip"):
+                "address_city", "address_state", "address_zip", "rg"):
         val = getattr(data, col)
         if val is not None:
             fields.append(f"{col} = %s")
@@ -188,7 +188,7 @@ def delete_client(event, context):
 
 _SELECT_COLS = (
     "SELECT id, legal_name, document_type, document_number, email, phone,"
-    " address_street, address_city, address_state, address_zip, status,"
+    " address_street, address_city, address_state, address_zip, rg, status,"
     " created_at, updated_at"
     " FROM public.clients"
 )
@@ -205,6 +205,7 @@ def _serialize(row, role="admin") -> dict:
     document = row["document_number"]
     email = row.get("email")
     phone = row.get("phone")
+    rg = row.get("rg")
     address = {
         "street": row.get("address_street"),
         "city": row.get("address_city"),
@@ -212,8 +213,8 @@ def _serialize(row, role="admin") -> dict:
         "zip": row.get("address_zip"),
     }
     if role == "viewer":  # viewer vê PII reduzida (LGPD): documento mascarado e
-        document = _mask_document(document)  # sem dados de contato/endereço
-        email = phone = address = None
+        document = _mask_document(document)  # sem dados de contato/endereço/RG
+        email = phone = address = rg = None
     # Shape alinhado ao contrato do frontend (BackendClient): aliases name/document/
     # document_masked/metadata/updated_at, mantendo os campos legados.
     return {
@@ -228,6 +229,7 @@ def _serialize(row, role="admin") -> dict:
         "email": email,
         "phone": phone,
         "address": address,
+        "rg": rg,
         "metadata": {},
         "status": row["status"],
         "created_at": str(row["created_at"]) if row.get("created_at") else None,
