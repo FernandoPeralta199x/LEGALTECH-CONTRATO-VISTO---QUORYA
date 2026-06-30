@@ -30,6 +30,10 @@ enforce_production_safety()
 logger = logging.getLogger()
 
 
+# M-02: chaves de metadata de parte aceitas do cliente (resto é descartado)
+_PARTY_META_ALLOW = {"notes"}
+
+
 def _file_ext(filename: str) -> str | None:
     return filename.rsplit(".", 1)[-1][:10].lower() if "." in filename else None
 
@@ -122,12 +126,15 @@ def create_request(event, context):
             for p in data.parties:
                 if not p.name.strip() or not p.role.strip():
                     continue
+                # M-02: não espalha metadata arbitrária do cliente; só uma allowlist
+                safe_meta = {k: v for k, v in (p.metadata or {}).items()
+                             if k in _PARTY_META_ALLOW}
                 cur.execute(
                     "INSERT INTO public.case_parties"
                     " (organization_id, case_id, party_type, name, document, metadata)"
                     " VALUES (%s,%s,%s,%s,%s,%s)",
                     (org, case_id, p.role, p.name.strip(), p.document,
-                     Json({**p.metadata, "person_type": p.person_type,
+                     Json({**safe_meta, "person_type": p.person_type,
                            "email": p.email, "phone": p.phone,
                            "document_type": p.document_type, "source": "new_case_wizard"})),
                 )
