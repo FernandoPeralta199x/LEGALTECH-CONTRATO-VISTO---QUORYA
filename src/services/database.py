@@ -86,20 +86,45 @@ def simple_tx():
 
 
 @contextmanager
-def tenant_tx(user_id, role):
-    """Transação com o contexto RLS do usuário autenticado.
+def tenant_tx(user_id, role, organization_id):
+    """Transação com o contexto RLS do usuário autenticado e da sua organização.
 
     ``set_config(..., true)`` aplica o valor SÓ nesta transação (seguro com
-    pooling/RDS Proxy; não vaza entre invocações). Todas as queries do request
-    devem usar o cursor cedido, para enxergarem o contexto.
+    pooling/RDS Proxy; não vaza entre invocações). Seta app.user_id,
+    app.user_role e app.organization_id. Todas as queries do request devem usar
+    o cursor cedido, para enxergarem o contexto.
     """
     conn = get_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     try:
         cur.execute(
             "SELECT set_config('app.user_id', %s, true),"
+            "       set_config('app.user_role', %s, true),"
+            "       set_config('app.organization_id', %s, true)",
+            (str(user_id), str(role), str(organization_id)),
+        )
+        yield cur
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+
+
+@contextmanager
+def signup_tx(organization_id, role="admin"):
+    """Transação de onboarding: seta app.organization_id ANTES dos INSERTs para
+    satisfazer a RLS de ``organizations`` (id = app.organization_id). ``users``
+    não tem RLS, mas a mesma transação cria org + usuário admin atomicamente.
+    """
+    conn = get_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute(
+            "SELECT set_config('app.organization_id', %s, true),"
             "       set_config('app.user_role', %s, true)",
-            (str(user_id), str(role)),
+            (str(organization_id), str(role)),
         )
         yield cur
         conn.commit()

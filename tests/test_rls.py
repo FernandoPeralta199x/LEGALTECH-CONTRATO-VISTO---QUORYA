@@ -10,6 +10,10 @@ import pytest
 
 from src.services.database import get_connection, tenant_tx
 
+# Org de sistema (migração 005) — a RLS de cases/clients ainda é por-dono nesta
+# fase; o organization_id é exigido pela assinatura de tenant_tx mas é inócuo aqui.
+SYSTEM_ORG_ID = "00000000-0000-0000-0000-000000000001"
+
 
 def _new_user() -> str:
     return str(uuid.uuid4())
@@ -35,7 +39,7 @@ def _reset():
 
 
 def _seed_case(user_id: str) -> str:
-    with tenant_tx(user_id, "analyst") as cur:
+    with tenant_tx(user_id, "analyst", SYSTEM_ORG_ID) as cur:
         cur.execute(
             "INSERT INTO public.clients (legal_name, document_number, document_type)"
             " VALUES ('Cliente Teste', %s, 'cnpj') RETURNING id",
@@ -61,11 +65,11 @@ def test_owner_sees_case_other_user_does_not():
     user_a, user_b = _new_user(), _new_user()
     _seed_case(user_a)
 
-    with tenant_tx(user_a, "analyst") as cur:
+    with tenant_tx(user_a, "analyst", SYSTEM_ORG_ID) as cur:
         cur.execute("SELECT count(*) AS n FROM public.cases")
         assert cur.fetchone()["n"] == 1
 
-    with tenant_tx(user_b, "analyst") as cur:
+    with tenant_tx(user_b, "analyst", SYSTEM_ORG_ID) as cur:
         cur.execute("SELECT count(*) AS n FROM public.cases")
         assert cur.fetchone()["n"] == 0
 
@@ -74,7 +78,7 @@ def test_admin_sees_all_cases():
     user_a, admin = _new_user(), _new_user()
     _seed_case(user_a)
 
-    with tenant_tx(admin, "admin") as cur:
+    with tenant_tx(admin, "admin", SYSTEM_ORG_ID) as cur:
         cur.execute("SELECT count(*) AS n FROM public.cases")
         assert cur.fetchone()["n"] == 1
 
@@ -83,7 +87,7 @@ def test_update_fires_audit_trigger_with_app_user_id():
     user_a = _new_user()
     case_id = _seed_case(user_a)
 
-    with tenant_tx(user_a, "analyst") as cur:
+    with tenant_tx(user_a, "analyst", SYSTEM_ORG_ID) as cur:
         cur.execute(
             "UPDATE public.cases SET status = 'in_progress' WHERE id = %s",
             (case_id,),
@@ -109,7 +113,7 @@ def test_context_does_not_leak_between_users_on_reused_connection():
     user_a, user_b = _new_user(), _new_user()
     _seed_case(user_a)
     # mesma conexão é reutilizada por get_connection; o SET LOCAL não pode vazar
-    with tenant_tx(user_b, "analyst") as cur:
+    with tenant_tx(user_b, "analyst", SYSTEM_ORG_ID) as cur:
         cur.execute("SELECT count(*) AS n FROM public.cases")
         assert cur.fetchone()["n"] == 0
 
