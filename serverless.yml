@@ -18,6 +18,9 @@ provider:
     ENVIRONMENT: ${self:provider.stage}
     LOG_LEVEL: INFO
     JWT_SECRET_KEY: ${ssm:/contrato-visto/${self:provider.stage}/jwt_secret}
+    # opcional (só usado com EMBEDDINGS_BACKEND=openai); default vazio p/ não quebrar
+    # o deploy em stages que não têm o parâmetro (ex.: dev com backend mock)
+    OPENAI_API_KEY: ${ssm:/contrato-visto/${self:provider.stage}/openai_key, ''}
     DOCUMENTS_BUCKET: contrato-visto-documents-${self:provider.stage}
 
   iamRoleStatements:

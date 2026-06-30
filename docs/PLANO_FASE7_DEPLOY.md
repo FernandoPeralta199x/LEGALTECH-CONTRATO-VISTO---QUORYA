@@ -10,18 +10,42 @@ funcional e segura (MVP), com banco privado e segredos por stage.
 PostgreSQL 18 privado** (pgvector, RLS) via **RDS Proxy**; Lambda **dentro da VPC**;
 S3 privado p/ documentos; SES p/ e-mail; OpenAI p/ embeddings. Segredos no SSM por stage.
 
-**Decisões tomadas (29/06):** rede = **RDS privado + Lambda em VPC + RDS Proxy**;
-escopo = **MVP funcional primeiro** (hardening fica para depois); **região = `${REGION}`
-(a confirmar pela imagem do console)**; stage inicial sugerido = `prod` (ou `dev`).
+**Decisões tomadas (29/06):**
+- **Região = `sa-east-1` (São Paulo)** — confirmada pelo console; o `serverless.yml` já está nela.
+- Conta = **Contrato Visto** (`1126-1385-9096`), plano gratuito: **~US$109 de créditos / 152 dias**.
+- Rede (alvo de produção) = **RDS privado + Lambda em VPC + RDS Proxy**.
+- **Estratégia em 2 ETAPAS** (créditos limitados):
+  - **7a — dev econômico (~US$15/mês):** RDS + Lambda em VPC **sem NAT, sem RDS Proxy**,
+    backends **mock/local/log** (`ENVIRONMENT=dev` → `safety` permite). Valida auth/RLS/
+    CRUD/paginação na nuvem barato. **Sem** S3/SES/OpenAI reais. Créditos rendem ~6 meses.
+  - **7b — prod completo (depois):** + RDS Proxy + NAT + S3/SES/OpenAI reais + hardening.
 
 ---
 
-## Parâmetros (defina antes de começar)
+## Parâmetros
 ```
-REGION=${REGION}          # ex.: us-east-1 ou sa-east-1 (definir pela imagem)
-STAGE=dev                 # primeiro deploy; depois prod
-ACCOUNT=<id-da-conta>
+REGION=sa-east-1
+STAGE=dev                 # etapa 7a; depois 'prod' na 7b
+ACCOUNT=112613859096      # conta "Contrato Visto"
 ```
+
+## Etapa 7a — deploy dev econômico (FAZER PRIMEIRO)
+Difere do runbook completo abaixo:
+- **Pular** NAT Gateway, RDS Proxy, SES, OpenAI, bucket S3 (backends mock/local/log).
+- Lambda **em VPC** acessa só o RDS (não precisa de internet em dev). `DB_HOST` (SSM dev)
+  = endpoint **direto do RDS** (sem Proxy).
+- SSM só **4 params**: `/contrato-visto/dev/{db_host,db_user,db_pass,jwt_secret}`.
+- Após criar a VPC, adicionar ao `serverless.yml` o bloco com os IDs reais:
+```yaml
+  vpc:
+    securityGroupIds:
+      - sg-xxxxxxxx          # SG-LAMBDA
+    subnetIds:
+      - subnet-aaaa          # subnet privada AZ-a
+      - subnet-bbbb          # subnet privada AZ-b
+```
+- `npx serverless deploy --stage dev --region sa-east-1` → smoke (`/health`, signup,
+  login, criar client/case). Custo ~US$15/mês (só RDS).
 
 ## Pré-requisitos (na máquina que faz o deploy)
 - AWS CLI v2 autenticado (`aws sts get-caller-identity`).
