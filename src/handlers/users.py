@@ -63,13 +63,16 @@ class _LastAdmin(Exception):
     """A operação deixaria o sistema sem nenhum administrador ativo."""
 
 
-def _is_last_active_admin(cur, target_id) -> bool:
-    """True se `target_id` é admin ativo e é o ÚNICO admin ativo do sistema."""
-    cur.execute("SELECT role, status FROM public.users WHERE id = %s", (target_id,))
+def _is_last_active_admin(cur, target_id, organization_id) -> bool:
+    """True se `target_id` é admin ativo e é o ÚNICO admin ativo da sua organização."""
+    cur.execute("SELECT role, status FROM public.users WHERE id = %s AND organization_id = %s",
+                (target_id, organization_id))
     t = cur.fetchone()
     if not t or t["role"] != "admin" or t["status"] != "active":
         return False
-    cur.execute("SELECT count(*) AS n FROM public.users WHERE role='admin' AND status='active'")
+    cur.execute("SELECT count(*) AS n FROM public.users"
+                " WHERE role='admin' AND status='active' AND organization_id = %s",
+                (organization_id,))
     return cur.fetchone()["n"] <= 1
 
 
@@ -251,8 +254,8 @@ def get_user(event, context):
         with simple_tx() as cur:
             cur.execute(
                 "SELECT id, email, name, role, status, created_at"
-                " FROM public.users WHERE id = %s",
-                (target,),
+                " FROM public.users WHERE id = %s AND organization_id = %s",
+                (target, user["organization_id"]),
             )
             row = cur.fetchone()
     except Exception as e:
@@ -275,8 +278,9 @@ def list_users(event, context):
         with simple_tx() as cur:
             cur.execute(
                 "SELECT id, email, name, role, status, created_at FROM public.users"
+                " WHERE organization_id = %s"
                 " ORDER BY created_at DESC LIMIT %s OFFSET %s",
-                (page_size, offset),
+                (event["user"]["organization_id"], page_size, offset),
             )
             rows = cur.fetchall()
     except Exception as e:
@@ -325,11 +329,14 @@ def update_user(event, context):
     deactivating = user["role"] == "admin" and data.status == "inactive"
     try:
         with simple_tx() as cur:
-            if (demoting or deactivating) and _is_last_active_admin(cur, target):
+            if (demoting or deactivating) and _is_last_active_admin(
+                cur, target, user["organization_id"]
+            ):
                 raise _LastAdmin()
             cur.execute(
-                f"UPDATE public.users SET {', '.join(fields)} WHERE id = %s",
-                tuple(values),
+                f"UPDATE public.users SET {', '.join(fields)}"
+                " WHERE id = %s AND organization_id = %s",
+                (*values, user["organization_id"]),
             )
             updated = cur.rowcount
     except _LastAdmin:
@@ -353,12 +360,12 @@ def delete_user(event, context):
         return error_response(400, "userId inválido")
     try:
         with simple_tx() as cur:
-            if _is_last_active_admin(cur, target):
+            if _is_last_active_admin(cur, target, user["organization_id"]):
                 raise _LastAdmin()
             cur.execute(
                 "UPDATE public.users SET status = 'inactive', updated_at = NOW()"
-                " WHERE id = %s",
-                (target,),
+                " WHERE id = %s AND organization_id = %s",
+                (target, user["organization_id"]),
             )
             updated = cur.rowcount
     except _LastAdmin:

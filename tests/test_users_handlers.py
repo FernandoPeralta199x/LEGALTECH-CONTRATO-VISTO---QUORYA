@@ -156,6 +156,15 @@ def test_list_users_admin_only(clean_users):
     assert u.list_users(_event(str(uuid.uuid4()), role="admin"), None)["statusCode"] == 200
 
 
+def test_list_users_only_same_org(clean_users):
+    # cada signup cria a sua própria organização; um admin não enxerga users de outra org
+    d1 = _data(u.create_user(_pub({"email": "o1@b.c", "password": "Senha123", "name": "O1"}), None))
+    d2 = _data(u.create_user(_pub({"email": "o2@b.c", "password": "Senha123", "name": "O2"}), None))
+    resp = u.list_users(_event(d1["user_id"], role="admin", org_id=d1["organization_id"]), None)
+    ids = [x["id"] for x in _data(resp)]
+    assert d1["user_id"] in ids and d2["user_id"] not in ids
+
+
 def test_unauthenticated_blocked(clean_users):
     assert u.list_users({"requestContext": {}}, None)["statusCode"] == 401
 
