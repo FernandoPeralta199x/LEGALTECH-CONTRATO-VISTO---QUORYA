@@ -300,6 +300,28 @@ functions:
           method: post
           cors: true
 
+  # Aliases de auth esperados pelo frontend (/api/v1/auth/*)
+  authLogin:
+    handler: src/handlers/users.login
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: auth/login
+          method: post
+          cors: true
+
+  authMe:
+    handler: src/handlers/users.me
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: auth/me
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
   getUser:
     handler: src/handlers/users.get_user
     timeout: 10
@@ -502,6 +524,7 @@ package:
     - '!tests/**'
     - '!docs/**'
     - '!migrations/**'
+    - '!tools/**'
     - '!.env'
     - '!.env.*'
     - '!**/__pycache__/**'

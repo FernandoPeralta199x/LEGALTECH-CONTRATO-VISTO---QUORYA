@@ -107,7 +107,10 @@ def test_signup_password_over_72_bytes_400(clean_users):
 def test_login_returns_valid_jwt(clean_users):
     _seed_user("a@b.c", "Senha123", role="analyst")
     resp = u.login(_pub({"email": "a@b.c", "password": "Senha123"}), None)
-    token = _data(resp)["token"]
+    data = _data(resp)
+    token = data["access_token"]
+    assert data["token_type"] == "bearer" and data["expires_in"] > 0
+    assert data["user"]["email"] == "a@b.c" and data["user"]["role"] == "analyst"
     claims = jwt.decode(token, os.environ["JWT_SECRET_KEY"], algorithms=["HS256"])
     assert claims["role"] == "analyst" and "exp" in claims
 
@@ -129,16 +132,29 @@ def test_login_unknown_email_401(clean_users):
 
 def test_login_token_has_no_email(clean_users):
     _seed_user("a@b.c", "Senha123", role="viewer")
-    token = _data(u.login(_pub({"email": "a@b.c", "password": "Senha123"}), None))["token"]
+    token = _data(u.login(_pub({"email": "a@b.c", "password": "Senha123"}), None))["access_token"]
     claims = jwt.decode(token, os.environ["JWT_SECRET_KEY"], algorithms=["HS256"])
     assert "email" not in claims and claims["role"] == "viewer"
 
 
 def test_login_token_carries_organization_id(clean_users):
     u.create_user(_pub({"email": "org@b.c", "password": "Senha123", "name": "Org"}), None)
-    token = _data(u.login(_pub({"email": "org@b.c", "password": "Senha123"}), None))["token"]
+    token = _data(u.login(_pub({"email": "org@b.c", "password": "Senha123"}), None))["access_token"]
     claims = jwt.decode(token, os.environ["JWT_SECRET_KEY"], algorithms=["HS256"])
     assert "organization_id" in claims and uuid.UUID(claims["organization_id"])
+
+
+# ── /auth/me ────────────────────────────────────────────────────────────────
+def test_me_returns_current_user(clean_users):
+    uid = _seed_user("me@b.c", "Senha123", role="analyst")
+    resp = u.me(_event(uid, role="analyst"), None)
+    data = _data(resp)
+    assert data["id"] == uid and data["email"] == "me@b.c"
+    assert data["role"] == "analyst" and data["organization_id"] == SYSTEM_ORG_ID
+
+
+def test_me_unauthenticated_401(clean_users):
+    assert u.me({"requestContext": {}}, None)["statusCode"] == 401
 
 
 # ── RBAC: get / list ───────────────────────────────────────────────────────

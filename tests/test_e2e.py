@@ -74,7 +74,7 @@ def _seed_admin(email="admin@acme.com", password="Admin1234", org_id=ORG_ID):
 def _login(email, password):
     resp = users_h.login({"body": json.dumps({"email": email, "password": password})}, None)
     assert resp["statusCode"] == 200, resp
-    return json.loads(resp["body"])["data"]["token"]
+    return json.loads(resp["body"])["data"]["access_token"]
 
 
 def _authctx(token):

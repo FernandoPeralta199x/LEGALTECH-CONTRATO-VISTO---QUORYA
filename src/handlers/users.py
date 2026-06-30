@@ -25,7 +25,7 @@ from src.schemas.user_schemas import (
 )
 from src.services.database import signup_tx, simple_tx
 from src.services.email import email_service
-from src.utils.auth import create_access_token
+from src.utils.auth import TOKEN_TTL_SECONDS, create_access_token
 from src.utils.context import require_role, require_user
 from src.utils.helpers import error_response, generate_uuid, success_response
 from src.utils.lambda_io import fmt_validation_error as _fmt, parse_json_body as _parse_body, parse_pagination as _paginate, valid_uuid as _valid_uuid
@@ -132,8 +132,8 @@ def login(event, context):
     try:
         with simple_tx() as cur:
             cur.execute(
-                "SELECT id, email, password_hash, role, organization_id FROM public.users"
-                " WHERE email = %s AND status = 'active'",
+                "SELECT id, email, name, password_hash, role, organization_id"
+                " FROM public.users WHERE email = %s AND status = 'active'",
                 (data.email,),
             )
             user = cur.fetchone()
@@ -154,9 +154,44 @@ def login(event, context):
         "organization_id": str(user["organization_id"]),
     })
     logger.info(json.dumps({"event": "AUTH_LOGIN_SUCCESS", "user_id": str(user["id"])}))
+    # Shape alinhado ao contrato do frontend (authApi.AuthTokenResult).
     return success_response(200, "Login bem-sucedido", {
-        "token": token, "user_id": str(user["id"]), "role": user["role"],
-        "organization_id": str(user["organization_id"]),
+        "access_token": token,
+        "token_type": "bearer",
+        "expires_in": TOKEN_TTL_SECONDS,
+        "user": {
+            "id": str(user["id"]),
+            "email": user["email"],
+            "name": user["name"],
+            "role": user["role"],
+            "organization_id": str(user["organization_id"]),
+        },
+    })
+
+
+@require_user
+def me(event, context):
+    """Retorna o usuário autenticado (GET /auth/me). Mantém a sessão no frontend."""
+    user = event["user"]
+    try:
+        with simple_tx() as cur:
+            cur.execute(
+                "SELECT id, email, name, role, organization_id FROM public.users"
+                " WHERE id = %s AND status = 'active'",
+                (user["user_id"],),
+            )
+            row = cur.fetchone()
+    except Exception as e:
+        logger.error(json.dumps({"event": "AUTH_ME_ERROR", "error": type(e).__name__}))
+        return error_response(500, "Erro ao obter usuário atual")
+    if not row:
+        return error_response(404, "Usuário não encontrado")
+    return success_response(200, "Usuário atual", {
+        "id": str(row["id"]),
+        "email": row["email"],
+        "name": row["name"],
+        "role": row["role"],
+        "organization_id": str(row["organization_id"]),
     })
 
 
