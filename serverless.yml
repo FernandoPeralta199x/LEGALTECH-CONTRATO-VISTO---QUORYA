@@ -120,6 +120,29 @@ functions:
           cors: true
           authorizer: ${self:custom.jwtAuthorizer}
 
+  # TIER 1 - Requests (wizard "Novo Pedido" -> orquestra case/partes/doc/triagem)
+  createRequest:
+    handler: src/handlers/requests.create_request
+    timeout: 15
+    memorySize: 512
+    events:
+      - http:
+          path: requests
+          method: post
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  getRequest:
+    handler: src/handlers/requests.get_request
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: requests/{requestId}
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
   # TIER 1 - Documents
   uploadDocument:
     handler: src/handlers/documents.upload_document
