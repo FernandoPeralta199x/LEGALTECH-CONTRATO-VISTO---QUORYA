@@ -195,3 +195,34 @@ def test_criar_parte_viewer_403(case_id):
     assert cp_h.create_case_party(
         _event(v, role="viewer", path={"caseId": case_id},
                body={"party_type": "x", "name": "y"}), None)["statusCode"] == 403
+
+
+def test_run_triage_executa_modulos_e_evidencias(case_id):
+    a = str(uuid.uuid4())
+    result = _data(tr_h.run_triage(_event(a, path={"caseId": case_id}), None))
+    assert result["modules_executed"] == 8  # plano de analise_contratual
+    assert result["risk_level"] in ("low", "medium", "high")
+    # todos os módulos viraram 'done'
+    mods = _data(tr_h.list_triage(_event(a, path={"caseId": case_id}), None))
+    assert mods and all(m["status"] == "done" for m in mods)
+    # evidências gravadas (provider_results + cache)
+    conn = _admin_conn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM public.provider_results WHERE case_id=%s", (case_id,))
+        assert cur.fetchone()[0] == 8
+        cur.execute("SELECT count(*) FROM public.external_queries_cache WHERE case_id=%s", (case_id,))
+        assert cur.fetchone()[0] == 8
+    conn.close()
+    # idempotente: re-executar não duplica provider_results
+    _data(tr_h.run_triage(_event(a, path={"caseId": case_id}), None))
+    conn = _admin_conn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM public.provider_results WHERE case_id=%s", (case_id,))
+        assert cur.fetchone()[0] == 8
+    conn.close()
+
+
+def test_run_triage_viewer_403(case_id):
+    v = str(uuid.uuid4())
+    assert tr_h.run_triage(
+        _event(v, role="viewer", path={"caseId": case_id}), None)["statusCode"] == 403

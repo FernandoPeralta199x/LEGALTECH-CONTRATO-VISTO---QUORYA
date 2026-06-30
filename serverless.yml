@@ -215,6 +215,18 @@ functions:
           cors: true
           authorizer: ${self:custom.jwtAuthorizer}
 
+  # SP3 - executa a triagem do caso (roda os módulos mock, grava evidências)
+  runCaseTriage:
+    handler: src/handlers/triage.run_triage
+    timeout: 60
+    memorySize: 512
+    events:
+      - http:
+          path: cases/{caseId}/triage/run
+          method: post
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
   # TIER 1 - Dashboard (visão geral da organização)
   getDashboardStats:
     handler: src/handlers/dashboard.get_stats

@@ -7,7 +7,8 @@ import json
 import logging
 
 from src.services.database import tenant_tx
-from src.utils.context import require_user
+from src.services.triage_runner import run_case_triage
+from src.utils.context import require_user, require_writer
 from src.utils.helpers import error_response, success_response
 from src.utils.lambda_io import valid_uuid as _valid_uuid
 from src.utils.safety import enforce_production_safety
@@ -59,3 +60,28 @@ def list_triage(event, context):
         logger.error(json.dumps({"event": "TRIAGE_LIST_ERROR", "error": type(e).__name__}))
         return error_response(500, "Erro ao listar o plano de triagem")
     return success_response(200, f"{len(rows)} módulos de triagem", [_serialize_module(r) for r in rows])
+
+
+@require_user
+@require_writer
+def run_triage(event, context):
+    """Executa a triagem do caso (SP3): roda os módulos (mock), grava evidências
+    (external_queries_cache + provider_results), atualiza status e a timeline."""
+    user = event["user"]
+    org = user["organization_id"]
+    case_id = _valid_uuid((event.get("pathParameters") or {}).get("caseId"))
+    if not case_id:
+        return error_response(400, "caseId inválido")
+    try:
+        with tenant_tx(user["user_id"], user["role"], org) as cur:
+            cur.execute("SELECT 1 FROM public.cases WHERE id = %s", (case_id,))
+            if cur.fetchone() is None:
+                return error_response(404, "Caso não encontrado")
+            result = run_case_triage(cur, org, case_id, user["user_id"])
+    except Exception as e:
+        logger.error(json.dumps({"event": "TRIAGE_RUN_ERROR", "error": type(e).__name__,
+                                 "pgcode": getattr(e, "pgcode", None)}))
+        return error_response(500, "Erro ao executar a triagem")
+    logger.info(json.dumps({"event": "TRIAGE_EXECUTED", "case_id": case_id,
+                            "modules": result["modules_executed"]}))
+    return success_response(200, "Triagem executada", result)
