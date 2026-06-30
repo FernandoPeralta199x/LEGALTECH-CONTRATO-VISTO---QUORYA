@@ -199,5 +199,22 @@ com handler; sem resíduo FastAPI ativo; 8/8 tabelas de domínio usadas.
   `s3:DeleteObject` → órfãos + perda de trilha. **Decidir:** soft delete? + cleanup.
 - Dados legados com `created_by`/`uploaded_by` NULL ficam invisíveis a não-admin (backfill).
 - `assigned_to`: não concede acesso (modelo dono) e sem FK p/ `users`.
-- RAG: ingestão sem endpoint; revogação de sessão; VPC/RDS Proxy; SES IAM; backends por
+- RAG: ingestão sem endpoint; revogação de sessão; VPC/RDS Proxy; backends por
   stage; validação pós-upload; validação de dimensão do embedding.
+
+## Varredura profunda #2 (29/06) — Codex + runtime + TDD
+
+Foco em ângulos finos. **Validados OK** (sem bug): reuso da conexão global, não-vazamento
+de contexto RLS entre invocações (`SET LOCAL`), recuperação após tx abortada, JWT alg
+confusion, SQL injection, unicode. **Bugs reais corrigidos (viravam 500):**
+- **Body JSON não-objeto** (array/escalar/null) → `Schema(**body)` dava `TypeError` →
+  `parse_json_body` valida objeto → 400 (todos os handlers).
+- **NaN/Infinity** (jsonb) e **null byte** (text) → `parse_json_body` rejeita → 400.
+- **`page` gigante** → OFFSET estourava bigint → `parse_pagination` com teto (4 handlers).
+- **`create_user` em corrida** → `UniqueViolation` virava 500 → agora 409.
+- **`forgot_password`** ignorava falha de envio → agora loga (mantém 200); **IAM
+  `ses:SendEmail`** adicionado.
+
+**129 testes** no PG18 (novo `tests/test_edge_cases.py`). **Diferidos p/ Fase 7:**
+A1 revogação de sessão, A2 `delete_case` hard+S3, M2 forgot concorrente, M3 timing,
+M4 upload metadados, M7 `audit.data_access_log` (LGPD).
