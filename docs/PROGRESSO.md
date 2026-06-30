@@ -156,6 +156,14 @@ o usuário.**
 **A implementar agora (decisão A):** mascaramento de PII p/ viewer + checksum CPF/CNPJ.
 Depois: melhoria DRY (C). Antes, revisar o laudo de qualidade do Codex.
 
+### Decisões de regra de negócio pendentes (varredura #4 — 29/06)
+Achados confirmados em runtime (são REGRA, não bug de runtime — decisão do usuário):
+7. **`create_case` aceita client com `status=inactive`** (retorna 201). Deveria
+   rejeitar caso para cliente desativado? (validar `status='active'`).
+8. **Lockout de admin**: `update_user`/`delete_user` permitem rebaixar/desativar o
+   **último admin** → sistema sem administrador. Proteger (recusar se restaria 0 admin)?
+   *(Risco operacional; alguns sistemas permitem e recuperam via SQL — por isso é decisão.)*
+
 ## Auditoria de qualidade (E2E — passo 3)
 
 **Migração completa ✅:** 28 funções do `serverless.yml` com handler; **zero** resíduo
