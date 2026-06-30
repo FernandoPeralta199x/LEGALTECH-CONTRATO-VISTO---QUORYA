@@ -138,11 +138,13 @@ def test_override_de_preco_da_org_aplicado_ao_total():
     assert data["total_price_cents"] == 2900 + 9900  # ia_deepseek + override
 
 
-def test_documento_obrigatorio_retorna_400():
+def test_pedido_sem_documento_e_opcional():
+    # documento é opcional (toggle "anexar contrato" off no wizard) -> cria sem doc
     a = str(uuid.uuid4())
     p = _payload()
     p["document"] = None
-    assert req_h.create_request(_event(a, body=p), None)["statusCode"] == 400
+    data = _data(req_h.create_request(_event(a, body=p), None))
+    assert data["status"] == "awaiting_triage" and data["documents_count"] == 0
 
 
 def test_product_type_invalido_retorna_400():

@@ -61,8 +61,8 @@ def create_request(event, context):
 
     if data.product_type not in PRODUCTS:
         return error_response(400, "product_type inválido")
-    if data.document is None:
-        return error_response(400, "documento é obrigatório no pedido")
+    # documento é OPCIONAL: o wizard permite registrar o pedido sem contrato
+    # (anexar depois). Quando ausente, não cria documento nem o evento de anexo.
 
     org = user["organization_id"]
     uid = user["user_id"]
@@ -130,16 +130,18 @@ def create_request(event, context):
                 )
                 party_count += 1
 
-            doc = data.document
-            s3_key = doc.storage_key or f"local/wizard/{case_id}/{doc.filename}"
-            cur.execute(
-                "INSERT INTO public.documents"
-                " (id, organization_id, case_id, s3_url, s3_path, file_name, file_type,"
-                "  file_size_bytes, ocr_status, extraction_status, uploaded_by)"
-                " VALUES (gen_random_uuid(), %s,%s,%s,%s,%s,%s,%s,'pending','pending',%s)",
-                (org, case_id, s3_key, s3_key, doc.filename, _file_ext(doc.filename),
-                 doc.size_bytes, uid),
-            )
+            has_document = data.document is not None
+            if has_document:
+                doc = data.document
+                s3_key = doc.storage_key or f"local/wizard/{case_id}/{doc.filename}"
+                cur.execute(
+                    "INSERT INTO public.documents"
+                    " (id, organization_id, case_id, s3_url, s3_path, file_name, file_type,"
+                    "  file_size_bytes, ocr_status, extraction_status, uploaded_by)"
+                    " VALUES (gen_random_uuid(), %s,%s,%s,%s,%s,%s,%s,'pending','pending',%s)",
+                    (org, case_id, s3_key, s3_key, doc.filename, _file_ext(doc.filename),
+                     doc.size_bytes, uid),
+                )
 
             for d in modules:
                 cur.execute(
@@ -156,9 +158,10 @@ def create_request(event, context):
             ]
             timeline += [("party_added", "Parte adicionada",
                           "Parte informada no Wizard vinculada ao caso.", "user")] * party_count
+            if has_document:
+                timeline.append(("document_attached", "Documento anexado",
+                                 "Documento selecionado no Wizard vinculado ao caso.", "user"))
             timeline += [
-                ("document_attached", "Documento anexado",
-                 "Documento selecionado no Wizard vinculado ao caso.", "user"),
                 ("triage_plan_created", "Plano de triagem criado",
                  "Módulos de triagem criados para o caso.", "system"),
                 ("wizard_completed", "Wizard concluído",
@@ -200,7 +203,7 @@ def create_request(event, context):
         "idempotency_key": data.idempotency_key,
         "total_price_cents": est["total_price_cents"],
         "parties_count": party_count,
-        "documents_count": 1,
+        "documents_count": 1 if has_document else 0,
         "triage_modules_count": len(modules),
         "timeline_events_count": len(timeline),
     })
