@@ -1,7 +1,8 @@
 """Handlers Lambda de `documents` (migração FastAPI→Serverless, Fase 4).
 
-`public.documents` tem RLS por **`uploaded_by`** (dono do documento) + auditoria por
-trigger → usa `tenant_tx` (fixa app.user_id/role). Upload e download usam URLs
+`public.documents` tem RLS por **`organization_id`** (multi-tenant V2, FORCE RLS) +
+auditoria por trigger → usa `tenant_tx` (fixa app.user_id/role/organization_id).
+Upload e download usam URLs
 S3 pré-assinadas (o arquivo não passa pela Lambda). O upload só é permitido para um
 `case` VISÍVEL ao usuário (verificado atômico na mesma transação). Escrita exige
 papel writer (admin/analyst); leitura, qualquer autenticado (a RLS filtra).
@@ -143,9 +144,10 @@ def get_document_download_url(event, context):
         return error_response(500, "Erro ao gerar URL de download")
     if not row:
         return error_response(404, "Documento não encontrado")
-    url = storage_service.presign_get(row["s3_path"]) if row["s3_path"] else None
+    if not row["s3_path"]:
+        return error_response(409, "Documento ainda não possui arquivo para download")
     return success_response(200, "URL de download", {
-        "url": url,
+        "url": storage_service.presign_get(row["s3_path"]),
         "expires_in_seconds": storage_service.expires,
         "method": "GET",
     })
@@ -182,9 +184,14 @@ def list_documents(event, context):
     return success_response(200, f"{len(rows)} documentos", [_serialize_v2(r) for r in rows])
 
 
+# ocr_status (legado) -> status do documento V2 esperado pelo frontend
+_DOC_STATUS_MAP = {"pending": "pending_upload", "done": "processed"}
+
+
 def _serialize_v2(row) -> dict:
     """Schema legado de documents -> shape V2 do frontend (filename/content_type/status)."""
     created = str(row["created_at"]) if row.get("created_at") else None
+    raw_status = row.get("ocr_status") or "pending_upload"
     return {
         "id": str(row["id"]),
         "case_id": str(row["case_id"]),
@@ -192,7 +199,7 @@ def _serialize_v2(row) -> dict:
         "content_type": _content_type(row.get("file_type") or ""),
         "size_bytes": row.get("file_size_bytes") or 0,
         "file_hash": row.get("file_hash"),
-        "status": row.get("ocr_status") or "pending_upload",
+        "status": _DOC_STATUS_MAP.get(raw_status, raw_status),
         "uploaded_by": str(row["uploaded_by"]) if row.get("uploaded_by") else None,
         "uploaded_at": created,
         "metadata": {},

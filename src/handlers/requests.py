@@ -230,7 +230,8 @@ def get_request(event, context):
             )
             modules_count = cur.fetchone()["n"]
             cur.execute(
-                "SELECT count(*) AS n FROM public.case_parties WHERE case_id = %s",
+                "SELECT count(*) AS n FROM public.case_parties"
+                " WHERE case_id = %s AND deleted_at IS NULL",
                 (req["case_id"],),
             )
             parties_count = cur.fetchone()["n"]

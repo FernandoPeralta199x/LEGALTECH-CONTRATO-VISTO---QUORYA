@@ -21,6 +21,8 @@ logger = logging.getLogger()
 
 # chaves de PII que NUNCA voltam no metadata exposto
 _PII_KEYS = {"email", "phone", "document", "document_number", "cpf", "cnpj", "rg"}
+# allowlist de campos aceitos no metadata da parte (evita PII/campos arbitrários)
+_META_ALLOWLIST = ("person_type", "document_type", "notes", "email", "phone")
 
 
 def _serialize_party(row) -> dict:
@@ -92,11 +94,12 @@ def create_case_party(event, context):
     party_type = (body.get("party_type") or "").strip()
     if not name or not party_type:
         return error_response(400, "name e party_type são obrigatórios")
-    metadata = dict(body.get("metadata") or {})
-    for k in ("email", "phone", "notes", "person_type", "document_type"):
-        if body.get(k):
-            metadata[k] = body[k]
-    metadata["created_by"] = user["user_id"]
+    raw_md = body.get("metadata") or {}
+    metadata = {"created_by": user["user_id"]}
+    for k in _META_ALLOWLIST:  # allowlist estrita (não aceita metadata arbitrário)
+        v = body.get(k, raw_md.get(k))
+        if v not in (None, ""):
+            metadata[k] = v
     try:
         with tenant_tx(user["user_id"], user["role"], org) as cur:
             cur.execute("SELECT 1 FROM public.cases WHERE id = %s", (case_id,))
@@ -152,14 +155,14 @@ def update_case_party(event, context):
                 fields.append("document = %s")
                 values.append(body["document"])
             md = dict(cur_row["metadata"] or {})
-            for k in ("email", "phone", "notes", "person_type", "document_type"):
-                if k in body:
-                    if body[k] in (None, ""):
+            raw_md = body.get("metadata") or {}
+            for k in _META_ALLOWLIST:  # allowlist estrita
+                if k in body or k in raw_md:
+                    v = body.get(k, raw_md.get(k))
+                    if v in (None, ""):
                         md.pop(k, None)
                     else:
-                        md[k] = body[k]
-            if isinstance(body.get("metadata"), dict):
-                md.update(body["metadata"])
+                        md[k] = v
             fields.append("metadata = %s")
             values.append(Json(md))
             fields.append("updated_at = NOW()")

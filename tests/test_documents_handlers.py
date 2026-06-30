@@ -81,7 +81,7 @@ def test_upload_and_get(client_id):
 
     got = _data(d.get_document(_event(a, path={"docId": doc_id}), None))
     # get_document agora retorna o shape V2 (filename/status) esperado pelo frontend
-    assert got["filename"] == "contrato.pdf" and got["status"] == "pending"
+    assert got["filename"] == "contrato.pdf" and got["status"] == "pending_upload"
     assert got["download_url"].startswith("https://")
     # download-url dedicado
     du = _data(d.get_document_download_url(_event(a, path={"docId": doc_id}), None))
