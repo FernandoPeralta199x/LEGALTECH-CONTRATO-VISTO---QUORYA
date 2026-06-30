@@ -27,7 +27,7 @@ def clean():
     conn.autocommit = True
     with conn.cursor() as cur:
         cur.execute(
-            "TRUNCATE public.provider_results, public.triage_modules,"
+            "TRUNCATE public.timeline_events, public.provider_results, public.triage_modules,"
             " public.agent_executions, public.external_queries_cache,"
             " public.pricing_configs, public.case_parties, public.requests,"
             " public.request_code_sequences, public.cases, public.clients"
@@ -140,3 +140,22 @@ def test_agent_executions_job_id_unique_per_org():
             cur.execute(
                 "INSERT INTO public.agent_executions (organization_id, case_id, job_id, agent_type)"
                 " VALUES (%s, %s, %s, 'triagem')", (ORG_A, case_id2, job))  # job repetido
+
+
+def test_timeline_events_isolated_by_org():
+    with tenant_tx(_uid(), "admin", ORG_A) as cur:
+        cur.execute(
+            "INSERT INTO public.cases (organization_id, case_type, created_by)"
+            " VALUES (%s, 'contract_analysis', %s) RETURNING id", (ORG_A, _uid()))
+        case_id = cur.fetchone()["id"]
+        cur.execute(
+            "INSERT INTO public.timeline_events"
+            " (organization_id, case_id, event_type, title, actor)"
+            " VALUES (%s, %s, 'request_created', 'Pedido criado', 'system')",
+            (ORG_A, case_id))
+    with tenant_tx(_uid(), "admin", ORG_A) as cur:
+        cur.execute("SELECT count(*) AS n FROM public.timeline_events")
+        assert cur.fetchone()["n"] == 1
+    with tenant_tx(_uid(), "admin", ORG_B) as cur:
+        cur.execute("SELECT count(*) AS n FROM public.timeline_events")
+        assert cur.fetchone()["n"] == 0

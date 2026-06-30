@@ -75,9 +75,10 @@ def _seed_doc_with_embeddings(user_id, case_id, segments):
     conn = _admin_conn()
     conn.autocommit = True
     cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT set_config('app.organization_id', %s, false)", (SYSTEM_ORG,))
     for i, text in enumerate(segments):
-        chunk_id = rag.store_chunk(cur, doc_id, i, text)
-        rag.store_embedding(cur, doc_id, chunk_id, text, embeddings_service.embed(text))
+        chunk_id = rag.store_chunk(cur, SYSTEM_ORG, doc_id, i, text)
+        rag.store_embedding(cur, SYSTEM_ORG, doc_id, chunk_id, text, embeddings_service.embed(text))
     cur.close()
     conn.close()
     return doc_id

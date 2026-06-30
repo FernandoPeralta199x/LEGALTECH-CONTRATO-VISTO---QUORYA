@@ -13,25 +13,29 @@ Alinhado ao schema real:
 from src.services.embeddings import to_vector_literal
 
 
-def store_chunk(cur, document_id, chunk_index, chunk_text, start_page=None, end_page=None):
-    """Insere um chunk de texto e devolve o id (bigint)."""
+def store_chunk(cur, organization_id, document_id, chunk_index, chunk_text,
+                start_page=None, end_page=None):
+    """Insere um chunk de texto e devolve o id (bigint). `organization_id` é exigido
+    pela RLS por organização (migração 010) e deve ser o da org do documento."""
     cur.execute(
         "INSERT INTO public.document_chunks"
-        " (document_id, chunk_index, chunk_text, start_page, end_page)"
-        " VALUES (%s, %s, %s, %s, %s) RETURNING id",
-        (document_id, chunk_index, chunk_text, start_page, end_page),
+        " (organization_id, document_id, chunk_index, chunk_text, start_page, end_page)"
+        " VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+        (organization_id, document_id, chunk_index, chunk_text, start_page, end_page),
     )
     return cur.fetchone()["id"]
 
 
-def store_embedding(cur, document_id, chunk_id, segment_text, embedding,
+def store_embedding(cur, organization_id, document_id, chunk_id, segment_text, embedding,
                     segment_type="clause", embedding_model="text-embedding-3-small"):
-    """Insere o embedding de um segmento (colunas reais; sem ON CONFLICT)."""
+    """Insere o embedding de um segmento (colunas reais; sem ON CONFLICT).
+    `organization_id` é exigido pela RLS por organização (migração 010)."""
     cur.execute(
         "INSERT INTO public.document_embeddings"
-        " (document_id, chunk_id, segment_text, embedding, segment_type, embedding_model)"
-        " VALUES (%s, %s, %s, %s::vector, %s, %s)",
-        (document_id, chunk_id, segment_text, to_vector_literal(embedding),
+        " (organization_id, document_id, chunk_id, segment_text, embedding,"
+        "  segment_type, embedding_model)"
+        " VALUES (%s, %s, %s, %s, %s::vector, %s, %s)",
+        (organization_id, document_id, chunk_id, segment_text, to_vector_literal(embedding),
          segment_type, embedding_model),
     )
 
