@@ -152,6 +152,8 @@ def login(event, context):
     token = create_access_token({  # sem email no token (menos PII)
         "user_id": str(user["id"]), "role": user["role"],
         "organization_id": str(user["organization_id"]),
+        # claims exigidos pelo frontend (sessão local): sub + token_use
+        "sub": str(user["id"]), "token_use": "dev",
     })
     logger.info(json.dumps({"event": "AUTH_LOGIN_SUCCESS", "user_id": str(user["id"])}))
     # Shape alinhado ao contrato do frontend (authApi.AuthTokenResult).

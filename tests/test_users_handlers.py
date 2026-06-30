@@ -113,6 +113,8 @@ def test_login_returns_valid_jwt(clean_users):
     assert data["user"]["email"] == "a@b.c" and data["user"]["role"] == "analyst"
     claims = jwt.decode(token, os.environ["JWT_SECRET_KEY"], algorithms=["HS256"])
     assert claims["role"] == "analyst" and "exp" in claims
+    # claims exigidos pela sessão local do frontend
+    assert claims["token_use"] == "dev" and claims["sub"]
 
 
 def test_login_wrong_password_401(clean_users):

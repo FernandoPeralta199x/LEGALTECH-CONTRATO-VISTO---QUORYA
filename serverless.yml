@@ -322,6 +322,18 @@ functions:
           cors: true
           authorizer: ${self:custom.jwtAuthorizer}
 
+  # alias /me esperado pelo frontend (validateDevTokenWithBackend)
+  me:
+    handler: src/handlers/users.me
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: me
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
   getUser:
     handler: src/handlers/users.get_user
     timeout: 10
