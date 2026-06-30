@@ -88,12 +88,19 @@ def list_clients(event, context):
     if perr:
         return perr
     page, page_size, offset = pag
+    # busca textual opcional (?q=) por nome ou documento do cliente (header global)
+    q = (params.get("q") or "").strip()
+    where, fargs = "WHERE status = 'active'", []
+    if q:
+        where += " AND (legal_name ILIKE %s OR document_number ILIKE %s)"
+        like = f"%{q}%"
+        fargs = [like, like]
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
             cur.execute(
-                _SELECT_COLS + " WHERE status = 'active'"
+                _SELECT_COLS + f" {where}"
                 " ORDER BY created_at DESC LIMIT %s OFFSET %s",
-                (page_size, offset),
+                tuple(fargs + [page_size, offset]),
             )
             rows = cur.fetchall()
     except Exception as e:

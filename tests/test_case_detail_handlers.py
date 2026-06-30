@@ -265,6 +265,18 @@ def test_gerar_relatorio_viewer_403(case_id):
         _event(v, role="viewer", path={"caseId": case_id}), None)["statusCode"] == 403
 
 
+def test_list_cases_busca_q(case_id):
+    # #27: busca textual (?q=) por título ou código do caso
+    a = str(uuid.uuid4())
+    ev = _event(a)
+    ev["queryStringParameters"] = {"q": "presta"}  # parte de "Contrato de prestação"
+    page = _data(cases_h.list_cases(ev, None))
+    assert any(c["id"] == case_id for c in page["items"])
+    ev2 = _event(a)
+    ev2["queryStringParameters"] = {"q": "zzznaoexiste"}
+    assert _data(cases_h.list_cases(ev2, None))["items"] == []
+
+
 def test_soft_delete_bloqueia_filhos_do_caso(case_id):
     # FE4-26-B1: ao arquivar o caso, TODOS os filhos ficam inacessíveis (404), leitura e escrita
     a = str(uuid.uuid4())

@@ -306,19 +306,26 @@ def list_cases(event, context):
     if perr:
         return perr
     page, page_size, offset = pag
+    # busca textual opcional (?q=) por título ou código do caso (header global)
+    q = (params.get("q") or "").strip()
+    where, fargs = "WHERE deleted_at IS NULL", []
+    if q:
+        where += " AND (title ILIKE %s OR code ILIKE %s)"
+        like = f"%{q}%"
+        fargs = [like, like]
     try:
         # A RLS já filtra os casos visíveis ao usuário (não filtramos por mão).
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
-            cur.execute("SELECT count(*) AS n FROM public.cases WHERE deleted_at IS NULL")
+            cur.execute(f"SELECT count(*) AS n FROM public.cases {where}", tuple(fargs))
             total = cur.fetchone()["n"]
             cur.execute(
                 "SELECT id, client_id, case_type, status, priority, product_type,"
                 " product_label, title, code, risk_level, progress, source_mode,"
                 " request_id, created_by, assigned_to, created_at, completed_at,"
                 " metadata, submitted_at"
-                " FROM public.cases WHERE deleted_at IS NULL"
+                f" FROM public.cases {where}"
                 " ORDER BY created_at DESC LIMIT %s OFFSET %s",
-                (page_size, offset),
+                tuple(fargs + [page_size, offset]),
             )
             rows = cur.fetchall()
     except Exception as e:

@@ -55,6 +55,15 @@ def _create(role="analyst", **over):
     return c.create_client(_event(role, body=body), None)
 
 
+def test_list_clients_busca_q(clean_clients):
+    # #27: busca textual (?q=) por nome do cliente
+    _create(legal_name="Zebra Advocacia")
+    achados = _data(c.list_clients(_event(query={"q": "zebra"}), None))
+    assert any(x["name"] == "Zebra Advocacia" for x in achados)
+    # termo sem correspondência -> vazio (sem falso-positivo)
+    assert _data(c.list_clients(_event(query={"q": "qqqnaoexiste"}), None)) == []
+
+
 # ── create ──────────────────────────────────────────────────────────────────
 def test_create_client_shape_v2_do_frontend(clean_clients):
     # frontend envia name/cpf/person_type/contract_role/address (shape V2) — o backend
