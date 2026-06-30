@@ -87,6 +87,17 @@ functions:
           cors: true
           authorizer: ${self:custom.jwtAuthorizer}
 
+  getCaseAggregate:
+    handler: src/handlers/cases.get_case_aggregate
+    timeout: 15
+    memorySize: 512
+    events:
+      - http:
+          path: cases/{caseId}/aggregate
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
   listCases:
     handler: src/handlers/cases.list_cases
     timeout: 10

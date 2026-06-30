@@ -181,7 +181,8 @@ def delete_client(event, context):
 
 _SELECT_COLS = (
     "SELECT id, legal_name, document_type, document_number, email, phone,"
-    " address_street, address_city, address_state, address_zip, status, created_at"
+    " address_street, address_city, address_state, address_zip, status,"
+    " created_at, updated_at"
     " FROM public.clients"
 )
 
@@ -206,14 +207,22 @@ def _serialize(row, role="admin") -> dict:
     if role == "viewer":  # viewer vê PII reduzida (LGPD): documento mascarado e
         document = _mask_document(document)  # sem dados de contato/endereço
         email = phone = address = None
+    # Shape alinhado ao contrato do frontend (BackendClient): aliases name/document/
+    # document_masked/metadata/updated_at, mantendo os campos legados.
     return {
         "id": str(row["id"]),
+        "name": row["legal_name"],
+        "display_name": row["legal_name"],
         "legal_name": row["legal_name"],
         "document_type": row["document_type"],
+        "document": document,
         "document_number": document,
+        "document_masked": _mask_document(row["document_number"]),
         "email": email,
         "phone": phone,
         "address": address,
+        "metadata": {},
         "status": row["status"],
         "created_at": str(row["created_at"]) if row.get("created_at") else None,
+        "updated_at": str(row["updated_at"]) if row.get("updated_at") else None,
     }

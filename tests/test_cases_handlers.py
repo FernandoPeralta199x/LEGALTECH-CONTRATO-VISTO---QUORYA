@@ -75,7 +75,7 @@ def test_create_get_list_case(client_id):
     case_id = _data(_make_case(a, client_id))["id"]
 
     assert cases_h.get_case(_event(a, path={"caseId": case_id}), None)["statusCode"] == 200
-    listed = _data(cases_h.list_cases(_event(a), None))
+    listed = _data(cases_h.list_cases(_event(a), None))["items"]
     assert len(listed) == 1 and listed[0]["id"] == case_id
 
 
@@ -84,10 +84,10 @@ def test_case_isolation_and_admin(client_id):
     case_id = _data(_make_case(a, client_id))["id"]
 
     # usuário de OUTRA organização não vê os casos (RLS por org)
-    assert len(_data(cases_h.list_cases(_event(b, org_id=OTHER_ORG), None))) == 0
+    assert len(_data(cases_h.list_cases(_event(b, org_id=OTHER_ORG), None))["items"]) == 0
     assert cases_h.get_case(_event(b, path={"caseId": case_id}, org_id=OTHER_ORG), None)["statusCode"] == 404
     # admin da MESMA organização vê
-    assert len(_data(cases_h.list_cases(_event(b, role="admin"), None))) == 1
+    assert len(_data(cases_h.list_cases(_event(b, role="admin"), None))["items"]) == 1
 
 
 def test_update_and_delete_case(client_id):

@@ -145,3 +145,30 @@ def test_viewer_pode_ler(case_id):
     v = str(uuid.uuid4())
     assert cp_h.list_case_parties(_event(v, role="viewer", path={"caseId": case_id}),
                                   None)["statusCode"] == 200
+
+
+def test_get_case_aggregate(case_id):
+    a = str(uuid.uuid4())
+    agg = _data(cases_h.get_case_aggregate(_event(a, path={"caseId": case_id}), None))
+    assert agg["case"]["product_type"] == "analise_contratual"
+    assert agg["case"]["code"].startswith("REQ-")
+    assert agg["case"]["status"] == "awaiting_triage"
+    assert agg["request"] is not None and agg["request"]["code"].startswith("REQ-")
+    assert len(agg["parties"]) == 2
+    # PII nunca crua no agregado: o shape só expõe *_masked (sem campos crus)
+    empresa = next(p for p in agg["parties"] if p["role"] == "contratante")
+    assert "document" not in empresa and empresa["document_masked"] == "**.***.***/****-99"
+    assert empresa["email"] is None and empresa["email_masked"] == "c******@empresax.com"
+    assert len(agg["documents"]) == 1
+    assert len(agg["timeline"]) == 7
+    assert len(agg["triage_modules"]) == 8
+    assert agg["summary"]["parties_count"] == 2 and agg["summary"]["documents_count"] == 1
+    assert agg["summary"]["timeline_count"] == 7
+    assert agg["summary"]["triage_status"] in ("pending", "not_started")
+    assert agg["report"] is None and agg["provider_results"] == []
+
+
+def test_aggregate_isolamento_404(case_id):
+    b = str(uuid.uuid4())
+    assert cases_h.get_case_aggregate(
+        _event(b, path={"caseId": case_id}, org_id=OTHER_ORG), None)["statusCode"] == 404
