@@ -218,3 +218,19 @@ confusion, SQL injection, unicode. **Bugs reais corrigidos (viravam 500):**
 **129 testes** no PG18 (novo `tests/test_edge_cases.py`). **Diferidos p/ Fase 7:**
 A1 revogação de sessão, A2 `delete_case` hard+S3, M2 forgot concorrente, M3 timing,
 M4 upload metadados, M7 `audit.data_access_log` (LGPD).
+
+## Varredura robusta #3 (29/06) — segurança (OWASP) + stress + Codex + web
+
+**Stress (aguenta):** 2000 cases list paginado 17ms (+RLS); findings 340KB 65ms;
+12 inserts concorrentes do mesmo `document_number` → 1 ok/11 dup (constraint); busca
+vetorial sobre 300 embeddings 55ms. **Bugs corrigidos:**
+- **bcrypt > 72 bytes** virava 500 → 400 (validação de bytes no schema).
+- **`requirements.txt`** desalinhado das versões testadas → pinado ao `pip freeze`.
+- **safety fail-safe**: stage desconhecido (`prd`/`qa`/`homolog`) agora = produtivo.
+- **authorizer** exige `exp`; **body > 1MB → 413** + `RecursionError` tratado; **teto
+  de page 10k**; **CORS `no-store`**; **SSM por stage**; removido `logger` morto.
+
+**133 testes.** **Diferidos p/ Fase 7** (decisão/infra, não-bugs de runtime): FORCE RLS
++ check de role não-owner no boot, revogação de sessão (iss/aud/jti), rate limiting/WAF,
+upload checksum/HeadObject + `s3:DeleteObject`, keyset pagination, auditoria de acesso a
+PII, CORS por ambiente. CVE-2025-45768 (PyJWT) mitigado (HS256 fixo, v2.13.0).
