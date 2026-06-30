@@ -20,12 +20,14 @@ cd "X:\QUOARYA\FASE FINAL   28 06 2026\contrato_visto_backend-main"
 ```
 Variáveis opcionais: `PORT` (default 8000), `HOST` (default 127.0.0.1).
 
-## 2. Subir o frontend (porta 3000)
-O `.env.local` do frontend já aponta para `http://127.0.0.1:8000` (era o FastAPI;
-agora é o dev-server). O Next reescreve `/api/v1/*` para esse destino.
+## 2. Subir o frontend próprio (porta 3000)
+Frontend do produto: `X:\QUOARYA\FASE FINAL   28 06 2026\contrato_visto_frontend`
+(cópia standalone do Next.js, independente da referência `legaltech-aws`). O
+`.env.local` já aponta para `http://127.0.0.1:8000`; o Next reescreve `/api/v1/*`
+para esse destino.
 ```bash
-cd "X:\QUOARYA\legaltech-aws\apps\frontend"
-npm install   # se ainda não instalado
+cd "X:\QUOARYA\FASE FINAL   28 06 2026\contrato_visto_frontend"
+npm install   # primeira vez (node_modules não é versionado)
 npm run dev   # -> http://localhost:3000
 ```
 
