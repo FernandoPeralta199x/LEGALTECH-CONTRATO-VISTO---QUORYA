@@ -45,7 +45,7 @@ def client_id():
 
 def _event(user_id, role="analyst", body=None):
     return {
-        "requestContext": {"authorizer": {"user_id": user_id, "email": "u@t.c", "role": role}},
+        "requestContext": {"authorizer": {"user_id": user_id, "email": "u@t.c", "role": role, "organization_id": "00000000-0000-0000-0000-000000000001"}},
         "body": json.dumps(body) if body is not None else None,
         "pathParameters": {}, "queryStringParameters": {},
     }

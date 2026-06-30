@@ -46,7 +46,7 @@ def create_case_result(event, context):
         return error_response(400, "case_id inválido")
 
     try:
-        with tenant_tx(user["user_id"], user["role"]) as cur:
+        with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
             # Atômico (sem TOCTOU): só insere se o case for VISÍVEL ao usuário —
             # a RLS de `cases` filtra o EXISTS; 0 linhas inseridas => 404.
             cur.execute(
@@ -97,7 +97,7 @@ def get_case_result(event, context):
     if not result_id:
         return error_response(400, "resultId inválido")
     try:
-        with tenant_tx(user["user_id"], user["role"]) as cur:
+        with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
             cur.execute(
                 "SELECT id, case_id, result_type, result_title, result_data,"
                 " risk_level, confidence_score, summary_text, created_at"
@@ -127,7 +127,7 @@ def list_case_results(event, context):
         return perr
     page, page_size, offset = pag
     try:
-        with tenant_tx(user["user_id"], user["role"]) as cur:
+        with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
             cur.execute(
                 "SELECT id, case_id, result_type, result_title, risk_level,"
                 " confidence_score, created_at FROM public.case_results"
@@ -175,7 +175,7 @@ def update_case_result(event, context):
     values.append(result_id)
 
     try:
-        with tenant_tx(user["user_id"], user["role"]) as cur:
+        with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
             cur.execute(
                 f"UPDATE public.case_results SET {', '.join(fields)} WHERE id = %s",
                 tuple(values),
@@ -199,7 +199,7 @@ def delete_case_result(event, context):
     if not result_id:
         return error_response(400, "resultId inválido")
     try:
-        with tenant_tx(user["user_id"], user["role"]) as cur:
+        with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
             cur.execute(
                 "DELETE FROM public.case_results WHERE id = %s", (result_id,)
             )

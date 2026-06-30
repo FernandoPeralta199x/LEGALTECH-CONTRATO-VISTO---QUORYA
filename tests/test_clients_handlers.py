@@ -31,7 +31,7 @@ def clean_clients():
 def _event(role="analyst", body=None, path=None, query=None):
     return {
         "requestContext": {"authorizer": {"user_id": str(uuid.uuid4()),
-                                          "email": "u@t.c", "role": role}},
+                                          "email": "u@t.c", "role": role, "organization_id": "00000000-0000-0000-0000-000000000001"}},
         "body": json.dumps(body) if body is not None else None,
         "pathParameters": path or {},
         "queryStringParameters": query or {},

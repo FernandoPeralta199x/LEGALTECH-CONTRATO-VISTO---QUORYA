@@ -48,7 +48,7 @@ def create_case(event, context):
     metadata = {"description": data.description} if data.description else None
 
     try:
-        with tenant_tx(user["user_id"], user["role"]) as cur:
+        with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
             # Cliente deve existir (evita FK→500) e estar ATIVO (não criar caso
             # para cliente desativado).
             cur.execute("SELECT status FROM public.clients WHERE id = %s", (client_id,))
@@ -93,7 +93,7 @@ def get_case(event, context):
     if not case_id:
         return error_response(400, "caseId inválido")
     try:
-        with tenant_tx(user["user_id"], user["role"]) as cur:
+        with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
             cur.execute(
                 "SELECT id, client_id, case_type, status, priority, created_by,"
                 " assigned_to, created_at, completed_at FROM public.cases"
@@ -121,7 +121,7 @@ def list_cases(event, context):
     page, page_size, offset = pag
     try:
         # A RLS já filtra os casos visíveis ao usuário (não filtramos por mão).
-        with tenant_tx(user["user_id"], user["role"]) as cur:
+        with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
             cur.execute(
                 "SELECT id, client_id, case_type, status, priority, created_by,"
                 " assigned_to, created_at, completed_at FROM public.cases"
@@ -174,7 +174,7 @@ def update_case(event, context):
     values.append(case_id)
 
     try:
-        with tenant_tx(user["user_id"], user["role"]) as cur:
+        with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
             cur.execute(
                 f"UPDATE public.cases SET {', '.join(fields)} WHERE id = %s",
                 tuple(values),
@@ -199,7 +199,7 @@ def delete_case(event, context):
     if not case_id:
         return error_response(400, "caseId inválido")
     try:
-        with tenant_tx(user["user_id"], user["role"]) as cur:
+        with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
             cur.execute("DELETE FROM public.cases WHERE id = %s", (case_id,))
             deleted = cur.rowcount
     except Exception as e:

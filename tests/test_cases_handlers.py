@@ -40,7 +40,7 @@ def _event(user_id, role="analyst", body=None, path=None, query=None):
     # Shape REAL do REST API: claims do authorizer ACHATADOS em `authorizer.<key>`.
     return {
         "requestContext": {
-            "authorizer": {"user_id": user_id, "email": "u@t.c", "role": role}
+            "authorizer": {"user_id": user_id, "email": "u@t.c", "role": role, "organization_id": "00000000-0000-0000-0000-000000000001"}
         },
         "body": json.dumps(body) if body is not None else None,
         "pathParameters": path or {},
@@ -168,7 +168,8 @@ def test_nested_authorizer_shape_still_works(client_id):
     a = str(uuid.uuid4())
     ev = {
         "requestContext": {"authorizer": {"context": {
-            "user_id": a, "email": "u@t.c", "role": "analyst"}}},
+            "user_id": a, "email": "u@t.c", "role": "analyst",
+            "organization_id": "00000000-0000-0000-0000-000000000001"}}},
         "body": json.dumps({"client_id": client_id, "case_type": "contract_analysis"}),
         "pathParameters": {}, "queryStringParameters": {},
     }

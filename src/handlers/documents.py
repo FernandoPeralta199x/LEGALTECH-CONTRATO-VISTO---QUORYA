@@ -53,7 +53,7 @@ def upload_document(event, context):
     s3_url = storage_service.object_url(s3_key)
 
     try:
-        with tenant_tx(user["user_id"], user["role"]) as cur:
+        with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
             # Atômico: só insere se o case for VISÍVEL ao usuário (RLS de cases).
             cur.execute(
                 "INSERT INTO public.documents"
@@ -103,7 +103,7 @@ def get_document(event, context):
     if not doc_id:
         return error_response(400, "docId inválido")
     try:
-        with tenant_tx(user["user_id"], user["role"]) as cur:
+        with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
             cur.execute(
                 "SELECT id, case_id, s3_path, file_name, file_type, file_size_bytes,"
                 " file_hash, ocr_status, extraction_status, document_classification,"

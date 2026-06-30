@@ -45,7 +45,7 @@ def search_clauses(event, context):
     # 1) Confirma acesso ao case ANTES de gerar embedding (evita custo/chamada
     #    externa para case inexistente ou sem acesso). A RLS de cases filtra.
     try:
-        with tenant_tx(user["user_id"], user["role"]) as cur:
+        with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
             cur.execute("SELECT 1 FROM public.cases WHERE id = %s", (case_id,))
             case_visivel = cur.fetchone() is not None
     except Exception as e:
@@ -64,7 +64,7 @@ def search_clauses(event, context):
 
     # 3) Busca vetorial (a RLS de documents filtra o JOIN).
     try:
-        with tenant_tx(user["user_id"], user["role"]) as cur:
+        with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
             rows = rag.search_similar(cur, query_embedding, case_id, data.top_k)
     except Exception as e:
         logger.error(json.dumps({"event": "SEARCH_ERROR", "error": type(e).__name__,
