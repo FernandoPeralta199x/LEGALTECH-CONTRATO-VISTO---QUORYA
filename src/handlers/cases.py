@@ -95,20 +95,22 @@ def get_case(event, context):
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
             cur.execute(
-                "SELECT id, client_id, case_type, status, priority, created_by,"
-                " assigned_to, created_at, completed_at FROM public.cases"
-                " WHERE id = %s",
+                "SELECT id, client_id, case_type, status, priority, product_type,"
+                " product_label, title, code, risk_level, progress, source_mode,"
+                " request_id, created_by, assigned_to, created_at, completed_at"
+                " FROM public.cases WHERE id = %s",
                 (case_id,),
             )
             row = cur.fetchone()
+            if not row:
+                return error_response(404, "Caso não encontrado")
+            detail = _case_detail(cur, case_id, row.get("request_id"))
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_GET_ERROR",
                                  "error": type(e).__name__,
                                  "pgcode": getattr(e, "pgcode", None)}))
         return error_response(500, "Erro ao obter caso")
-    if not row:
-        return error_response(404, "Caso não encontrado")
-    return success_response(200, "Caso encontrado", _serialize(row))
+    return success_response(200, "Caso encontrado", {**_serialize(row), **detail})
 
 
 @require_user
@@ -123,8 +125,10 @@ def list_cases(event, context):
         # A RLS já filtra os casos visíveis ao usuário (não filtramos por mão).
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
             cur.execute(
-                "SELECT id, client_id, case_type, status, priority, created_by,"
-                " assigned_to, created_at, completed_at FROM public.cases"
+                "SELECT id, client_id, case_type, status, priority, product_type,"
+                " product_label, title, code, risk_level, progress, source_mode,"
+                " request_id, created_by, assigned_to, created_at, completed_at"
+                " FROM public.cases WHERE deleted_at IS NULL"
                 " ORDER BY created_at DESC LIMIT %s OFFSET %s",
                 (page_size, offset),
             )
@@ -213,13 +217,49 @@ def delete_case(event, context):
     return success_response(200, "Caso deletado com sucesso")
 
 
+def _case_detail(cur, case_id, request_id) -> dict:
+    """Contagens das abas + pricing do pedido vinculado (para a tela de detalhe)."""
+    cur.execute("SELECT count(*) AS n FROM public.case_parties"
+                " WHERE case_id = %s AND deleted_at IS NULL", (case_id,))
+    parties = cur.fetchone()["n"]
+    cur.execute("SELECT count(*) AS n FROM public.documents WHERE case_id = %s", (case_id,))
+    documents = cur.fetchone()["n"]
+    cur.execute("SELECT count(*) AS n FROM public.timeline_events WHERE case_id = %s", (case_id,))
+    timeline = cur.fetchone()["n"]
+    cur.execute("SELECT count(*) AS n FROM public.triage_modules WHERE case_id = %s", (case_id,))
+    triage = cur.fetchone()["n"]
+    pricing = None
+    if request_id:
+        cur.execute("SELECT total_price_cents, price_snapshot FROM public.requests"
+                    " WHERE id = %s", (request_id,))
+        prow = cur.fetchone()
+        if prow:
+            pricing = {"total_price_cents": prow["total_price_cents"],
+                       "snapshot": prow["price_snapshot"]}
+    return {
+        "parties_count": parties,
+        "documents_count": documents,
+        "timeline_count": timeline,
+        "triage_count": triage,
+        "pricing": pricing,
+    }
+
+
 def _serialize(row) -> dict:
     return {
         "id": str(row["id"]),
-        "client_id": str(row["client_id"]),
+        "client_id": str(row["client_id"]) if row["client_id"] else None,
         "case_type": row["case_type"],
         "status": row["status"],
         "priority": row["priority"],
+        "product_type": row.get("product_type"),
+        "product_label": row.get("product_label"),
+        "title": row.get("title"),
+        "code": row.get("code"),
+        "risk_level": row.get("risk_level"),
+        "progress": row.get("progress"),
+        "source_mode": row.get("source_mode"),
+        "request_id": str(row["request_id"]) if row.get("request_id") else None,
         "created_by": str(row["created_by"]) if row["created_by"] else None,
         "assigned_to": str(row["assigned_to"]) if row["assigned_to"] else None,
         "created_at": str(row["created_at"]) if row["created_at"] else None,

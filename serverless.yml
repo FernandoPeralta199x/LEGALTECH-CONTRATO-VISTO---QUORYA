@@ -143,6 +143,52 @@ functions:
           cors: true
           authorizer: ${self:custom.jwtAuthorizer}
 
+  # TIER 1 - Detalhe do caso (abas: Partes / Timeline / Triagem)
+  listCaseParties:
+    handler: src/handlers/case_parties.list_case_parties
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: cases/{caseId}/parties
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  listCaseTimeline:
+    handler: src/handlers/timeline.list_timeline
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: cases/{caseId}/timeline
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  listCaseTriage:
+    handler: src/handlers/triage.list_triage
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: cases/{caseId}/triage
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  # TIER 1 - Dashboard (visão geral da organização)
+  getDashboardStats:
+    handler: src/handlers/dashboard.get_stats
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: dashboard/stats
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
   # TIER 1 - Pricing (catálogo + estimativa + config por organização)
   getPricing:
     handler: src/handlers/pricing.get_pricing
