@@ -28,6 +28,11 @@ from src.utils.safety import enforce_production_safety
 enforce_production_safety()
 logger = logging.getLogger()
 
+# FE4-26-B1: documento só é acessível se o caso pai estiver ativo (não arquivado).
+# Soft-delete do caso (deleted_at) torna seus documentos inalcançáveis por docId.
+_ACTIVE_CASE = (" AND EXISTS (SELECT 1 FROM public.cases c"
+                " WHERE c.id = public.documents.case_id AND c.deleted_at IS NULL)")
+
 
 class _CaseNotVisible(Exception):
     """O case referenciado não existe ou não é visível ao usuário (RLS)."""
@@ -154,7 +159,8 @@ def enqueue_processing(event, context):
         return error_response(400, "docId inválido")
     try:
         with tenant_tx(user["user_id"], user["role"], org) as cur:
-            cur.execute("SELECT id, case_id FROM public.documents WHERE id = %s", (doc_id,))
+            cur.execute("SELECT id, case_id FROM public.documents WHERE id = %s" + _ACTIVE_CASE,
+                        (doc_id,))
             doc = cur.fetchone()
             if not doc:
                 return error_response(404, "Documento não encontrado")
@@ -189,7 +195,7 @@ def get_document(event, context):
             cur.execute(
                 "SELECT id, case_id, s3_path, file_name, file_type, file_size_bytes,"
                 " file_hash, ocr_status, extraction_status, uploaded_by,"
-                " created_at FROM public.documents WHERE id = %s",
+                " created_at FROM public.documents WHERE id = %s" + _ACTIVE_CASE,
                 (doc_id,),
             )
             row = cur.fetchone()
@@ -225,15 +231,17 @@ def update_document(event, context):
         sets.append("file_name = %s")
         vals.append(body["filename"])
     if "status" in body and body["status"]:
+        if body["status"] not in _DOC_STATUS_REV:
+            return error_response(400, "status inválido (use: pending_upload, processed, failed)")
         sets.append("ocr_status = %s")
-        vals.append(_DOC_STATUS_REV.get(body["status"], body["status"]))
+        vals.append(_DOC_STATUS_REV[body["status"]])
     if not sets:
         return error_response(400, "Nenhum campo atualizável (use 'filename' e/ou 'status')")
     vals.append(doc_id)
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
             cur.execute(
-                f"UPDATE public.documents SET {', '.join(sets)} WHERE id = %s"
+                f"UPDATE public.documents SET {', '.join(sets)} WHERE id = %s" + _ACTIVE_CASE +
                 " RETURNING id, case_id, file_name, file_type, file_size_bytes, file_hash,"
                 " ocr_status, uploaded_by, created_at", tuple(vals))
             row = cur.fetchone()
@@ -255,7 +263,8 @@ def get_document_download_url(event, context):
         return error_response(400, "docId inválido")
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
-            cur.execute("SELECT s3_path FROM public.documents WHERE id = %s", (doc_id,))
+            cur.execute("SELECT s3_path FROM public.documents WHERE id = %s" + _ACTIVE_CASE,
+                        (doc_id,))
             row = cur.fetchone()
     except Exception as e:
         logger.error(json.dumps({"event": "DOCUMENT_DOWNLOAD_URL_ERROR",
@@ -286,13 +295,18 @@ def list_documents(event, context):
         case_id = _valid_uuid(params["case_id"])
         if not case_id:
             return error_response(400, "case_id inválido")
-    conditions, args = [], []
+    # sempre exclui documentos de casos arquivados (soft-delete) — FE4-26-B1
+    conditions = ["EXISTS (SELECT 1 FROM public.cases c WHERE c.id = public.documents.case_id"
+                  " AND c.deleted_at IS NULL)"]
+    args = []
     if case_id:
         conditions.append("case_id = %s")
         args.append(case_id)
     if params.get("status"):
-        # filtro V2 do frontend -> ocr_status legado (inverso do _DOC_STATUS_MAP)
-        args.append(_DOC_STATUS_REV.get(params["status"], params["status"]))
+        # filtro V2 do frontend -> ocr_status legado; status não mapeável é erro de contrato
+        if params["status"] not in _DOC_STATUS_REV:
+            return error_response(400, "status inválido (use: pending_upload, processed, failed)")
+        args.append(_DOC_STATUS_REV[params["status"]])
         conditions.append("ocr_status = %s")
     sql = ("SELECT id, case_id, file_name, file_type, file_size_bytes, file_hash,"
            " ocr_status, uploaded_by, created_at FROM public.documents")
@@ -312,8 +326,10 @@ def list_documents(event, context):
 
 # ocr_status (legado) -> status do documento V2 esperado pelo frontend
 _DOC_STATUS_MAP = {"pending": "pending_upload", "done": "processed"}
-# inverso: status V2 (filtro/PATCH do frontend) -> ocr_status legado
-_DOC_STATUS_REV = {"pending_upload": "pending", "processed": "done"}
+# inverso: status V2 (filtro/PATCH do frontend) -> ocr_status legado. Conjunto fechado:
+# só estes status mapeiam para a coluna ocr_status; outros são rejeitados (evita filtro
+# vazio silencioso e poluição de ocr_status) — FE4-26-B3.
+_DOC_STATUS_REV = {"pending_upload": "pending", "processed": "done", "failed": "failed"}
 
 
 def _serialize_v2(row) -> dict:

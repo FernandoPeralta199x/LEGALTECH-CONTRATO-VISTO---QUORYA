@@ -297,3 +297,20 @@ def test_soft_delete_preserva_linha_e_some_da_listagem(client_id):
     assert case_id not in {c["id"] for c in listed["items"]}
     # 404 ao tentar deletar de novo (já arquivado)
     assert cases_h.delete_case(_event(a, path={"caseId": case_id}), None)["statusCode"] == 404
+
+
+def test_triggers_de_auditoria_existem_nas_migracoes():
+    # FE4-26-B2: migrations 013/014 garantem os triggers de auditoria em deploy limpo
+    conn = _admin_conn()
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT c.relname, t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid"
+            " WHERE NOT t.tgisinternal AND t.tgname LIKE 'audit_%'"
+            " AND c.relname IN ('cases','documents','pricing_configs')")
+        found = {(r[0], r[1]) for r in cur.fetchall()}
+    conn.close()
+    assert ("cases", "audit_cases_update") in found
+    assert ("cases", "audit_cases_delete") in found
+    assert ("documents", "audit_documents_delete") in found
+    assert ("pricing_configs", "audit_pricing_configs_insert") in found
+    assert ("pricing_configs", "audit_pricing_configs_update") in found

@@ -46,7 +46,7 @@ def search_clauses(event, context):
     #    externa para case inexistente ou sem acesso). A RLS de cases filtra.
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
-            cur.execute("SELECT 1 FROM public.cases WHERE id = %s", (case_id,))
+            cur.execute("SELECT 1 FROM public.cases WHERE id = %s AND deleted_at IS NULL", (case_id,))
             case_visivel = cur.fetchone() is not None
     except Exception as e:
         logger.error(json.dumps({"event": "SEARCH_ERROR", "error": type(e).__name__,

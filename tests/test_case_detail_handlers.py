@@ -263,3 +263,22 @@ def test_gerar_relatorio_viewer_403(case_id):
     v = str(uuid.uuid4())
     assert rep_h.generate_case_report(
         _event(v, role="viewer", path={"caseId": case_id}), None)["statusCode"] == 403
+
+
+def test_soft_delete_bloqueia_filhos_do_caso(case_id):
+    # FE4-26-B1: ao arquivar o caso, TODOS os filhos ficam inacessíveis (404), leitura e escrita
+    a = str(uuid.uuid4())
+    assert cases_h.delete_case(_event(a, path={"caseId": case_id}), None)["statusCode"] == 200
+    p = {"caseId": case_id}
+    # leituras
+    assert cases_h.get_case(_event(a, path=p), None)["statusCode"] == 404
+    assert cases_h.get_case_aggregate(_event(a, path=p), None)["statusCode"] == 404
+    assert cp_h.list_case_parties(_event(a, path=p), None)["statusCode"] == 404
+    assert tl_h.list_timeline(_event(a, path=p), None)["statusCode"] == 404
+    assert tr_h.list_triage(_event(a, path=p), None)["statusCode"] == 404
+    assert rep_h.get_case_report(_event(a, path=p), None)["statusCode"] == 404
+    # escritas
+    assert cp_h.create_case_party(
+        _event(a, path=p, body={"party_type": "testemunha", "name": "X"}), None)["statusCode"] == 404
+    assert tr_h.run_triage(_event(a, path=p), None)["statusCode"] == 404
+    assert rep_h.generate_case_report(_event(a, path=p), None)["statusCode"] == 404

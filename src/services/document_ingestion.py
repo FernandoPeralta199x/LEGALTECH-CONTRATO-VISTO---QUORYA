@@ -36,7 +36,10 @@ def ingest_document(cur, org, doc_id) -> dict:
     """Roda a ingestão SP2 do documento e devolve métricas. Idempotente (limpa-e-regera)."""
     doc_id = str(doc_id)  # store_chunk/embedding não adaptam uuid.UUID (psycopg2)
     org = str(org)
-    cur.execute("SELECT id, s3_path, file_type FROM public.documents WHERE id = %s", (str(doc_id),))
+    # FE4-26-B1: não ingere documento de caso arquivado (soft-delete)
+    cur.execute("SELECT id, s3_path, file_type FROM public.documents WHERE id = %s"
+                " AND EXISTS (SELECT 1 FROM public.cases c WHERE c.id = public.documents.case_id"
+                " AND c.deleted_at IS NULL)", (str(doc_id),))
     doc = cur.fetchone()
     if not doc:
         raise DocumentNotFound(str(doc_id))

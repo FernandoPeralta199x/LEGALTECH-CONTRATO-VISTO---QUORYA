@@ -45,7 +45,7 @@ def list_triage(event, context):
         return error_response(400, "caseId inválido")
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
-            cur.execute("SELECT 1 FROM public.cases WHERE id = %s", (case_id,))
+            cur.execute("SELECT 1 FROM public.cases WHERE id = %s AND deleted_at IS NULL", (case_id,))
             if cur.fetchone() is None:
                 return error_response(404, "Caso não encontrado")
             cur.execute(
@@ -74,7 +74,7 @@ def run_triage(event, context):
         return error_response(400, "caseId inválido")
     try:
         with tenant_tx(user["user_id"], user["role"], org) as cur:
-            cur.execute("SELECT 1 FROM public.cases WHERE id = %s", (case_id,))
+            cur.execute("SELECT 1 FROM public.cases WHERE id = %s AND deleted_at IS NULL", (case_id,))
             if cur.fetchone() is None:
                 return error_response(404, "Caso não encontrado")
             result = run_case_triage(cur, org, case_id, user["user_id"])

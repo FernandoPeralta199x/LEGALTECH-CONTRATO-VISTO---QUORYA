@@ -56,6 +56,7 @@ def create_case_result(event, context):
                 "  recommendations, created_by)"
                 " SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s"
                 " WHERE EXISTS (SELECT 1 FROM public.cases WHERE id = %s"
+                "               AND deleted_at IS NULL"
                 "               AND status NOT IN ('completed','closed'))"
                 " RETURNING id, created_at",
                 (user["organization_id"], case_id, data.result_type, data.result_title,
@@ -66,7 +67,8 @@ def create_case_result(event, context):
             row = cur.fetchone()
             if row is None:
                 # distingue caso inexistente/sem acesso de caso finalizado
-                cur.execute("SELECT 1 FROM public.cases WHERE id = %s", (case_id,))
+                cur.execute("SELECT 1 FROM public.cases WHERE id = %s AND deleted_at IS NULL",
+                            (case_id,))
                 if cur.fetchone() is None:
                     raise _CaseNotVisible()
                 raise _CaseFinalized()

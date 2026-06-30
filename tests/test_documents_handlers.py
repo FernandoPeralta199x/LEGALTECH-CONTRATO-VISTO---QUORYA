@@ -226,3 +226,33 @@ def test_list_documents_filtra_status(client_id):
     ev2["queryStringParameters"] = {"status": "pending_upload"}
     ids2 = {x["id"] for x in _data(d.list_documents(ev2, None))}
     assert doc2 in ids2 and doc1 not in ids2
+
+
+# ── #26/Codex B3: status fora do conjunto mapeável é erro de contrato (400) ──
+def test_update_document_status_invalido_400(client_id):
+    a = str(uuid.uuid4())
+    case_id = _make_case(a, client_id)
+    doc_id = _data(_upload(a, case_id))["document_id"]
+    assert d.update_document(_event(a, path={"docId": doc_id},
+            body={"status": "available"}), None)["statusCode"] == 400
+
+
+def test_list_documents_status_invalido_400(client_id):
+    a = str(uuid.uuid4())
+    ev = _event(a)
+    ev["queryStringParameters"] = {"status": "available"}
+    assert d.list_documents(ev, None)["statusCode"] == 400
+
+
+# ── #26/Codex B1: documento de caso arquivado fica inacessível ───────────────
+def test_documento_de_caso_arquivado_inacessivel(client_id):
+    a = str(uuid.uuid4())
+    case_id = _make_case(a, client_id)
+    doc_id = _data(_upload(a, case_id))["document_id"]
+    assert cases_h.delete_case(_event(a, path={"caseId": case_id}), None)["statusCode"] == 200
+    assert d.get_document(_event(a, path={"docId": doc_id}), None)["statusCode"] == 404
+    assert d.get_document_download_url(_event(a, path={"docId": doc_id}), None)["statusCode"] == 404
+    assert d.update_document(_event(a, path={"docId": doc_id},
+            body={"filename": "x.pdf"}), None)["statusCode"] == 404
+    assert d.process_document(_event(a, path={"docId": doc_id}), None)["statusCode"] == 404
+    assert doc_id not in {x["id"] for x in _data(d.list_documents(_event(a), None))}

@@ -37,7 +37,7 @@ def get_case_report(event, context):
         return error_response(400, "caseId inválido")
     try:
         with tenant_tx(user["user_id"], user["role"], org) as cur:
-            cur.execute("SELECT 1 FROM public.cases WHERE id = %s", (case_id,))
+            cur.execute("SELECT 1 FROM public.cases WHERE id = %s AND deleted_at IS NULL", (case_id,))
             if cur.fetchone() is None:
                 return error_response(404, "Caso não encontrado")
             report = _get(cur, org, case_id)
@@ -60,7 +60,7 @@ def generate_case_report(event, context):
         return error_response(400, "caseId inválido")
     try:
         with tenant_tx(user["user_id"], user["role"], org) as cur:
-            cur.execute("SELECT 1 FROM public.cases WHERE id = %s", (case_id,))
+            cur.execute("SELECT 1 FROM public.cases WHERE id = %s AND deleted_at IS NULL", (case_id,))
             if cur.fetchone() is None:
                 return error_response(404, "Caso não encontrado")
             report = _generate(cur, org, case_id, user["user_id"])

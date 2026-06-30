@@ -86,7 +86,8 @@ def process_job(cur, org, job: DocumentProcessingJob, *,
         doc = cur.fetchone()
         if doc is None:
             raise DocumentNotFound("document_not_found")
-        cur.execute("SELECT 1 FROM public.cases WHERE id = %s", (str(job.case_id),))
+        cur.execute("SELECT 1 FROM public.cases WHERE id = %s AND deleted_at IS NULL",
+                    (str(job.case_id),))
         if cur.fetchone() is None:
             raise LookupError("case_not_found")
         if str(doc["case_id"]) != str(job.case_id):
