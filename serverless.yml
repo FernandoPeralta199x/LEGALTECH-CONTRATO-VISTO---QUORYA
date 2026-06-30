@@ -257,6 +257,17 @@ functions:
           cors: true
           authorizer: ${self:custom.jwtAuthorizer}
 
+  listDocuments:
+    handler: src/handlers/documents.list_documents
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: documents
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
   getDocument:
     handler: src/handlers/documents.get_document
     timeout: 10

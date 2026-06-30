@@ -125,6 +125,56 @@ def get_document(event, context):
     return success_response(200, "Documento encontrado", data)
 
 
+@require_user
+def list_documents(event, context):
+    """Lista documentos da organização no shape V2 esperado pelo frontend.
+
+    Filtro opcional por ``case_id`` (query). A RLS já restringe à organização.
+    Mapeia o schema legado de ``documents`` para o contrato V2 do frontend.
+    """
+    user = event["user"]
+    params = event.get("queryStringParameters") or {}
+    case_id = None
+    if params.get("case_id"):
+        case_id = _valid_uuid(params["case_id"])
+        if not case_id:
+            return error_response(400, "case_id inválido")
+    sql = ("SELECT id, case_id, file_name, file_type, file_size_bytes, file_hash,"
+           " ocr_status, uploaded_by, created_at FROM public.documents")
+    args = ()
+    if case_id:
+        sql += " WHERE case_id = %s"
+        args = (case_id,)
+    sql += " ORDER BY created_at DESC LIMIT 500"
+    try:
+        with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
+            cur.execute(sql, args)
+            rows = cur.fetchall()
+    except Exception as e:
+        logger.error(json.dumps({"event": "DOCUMENT_LIST_ERROR", "error": type(e).__name__}))
+        return error_response(500, "Erro ao listar documentos")
+    return success_response(200, f"{len(rows)} documentos", [_serialize_v2(r) for r in rows])
+
+
+def _serialize_v2(row) -> dict:
+    """Schema legado de documents -> shape V2 do frontend (filename/content_type/status)."""
+    created = str(row["created_at"]) if row.get("created_at") else None
+    return {
+        "id": str(row["id"]),
+        "case_id": str(row["case_id"]),
+        "filename": row["file_name"],
+        "content_type": _content_type(row.get("file_type") or ""),
+        "size_bytes": row.get("file_size_bytes") or 0,
+        "file_hash": row.get("file_hash"),
+        "status": row.get("ocr_status") or "pending_upload",
+        "uploaded_by": str(row["uploaded_by"]) if row.get("uploaded_by") else None,
+        "uploaded_at": created,
+        "metadata": {},
+        "created_at": created,
+        "updated_at": created,
+    }
+
+
 def _content_type(file_type: str) -> str:
     return {
         "pdf": "application/pdf", "jpg": "image/jpeg", "jpeg": "image/jpeg",
