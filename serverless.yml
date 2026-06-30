@@ -227,6 +227,40 @@ functions:
           cors: true
           authorizer: ${self:custom.jwtAuthorizer}
 
+  # SP3 - relatório/parecer do caso (gerar, revisar, obter)
+  getCaseReport:
+    handler: src/handlers/reports.get_case_report
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: cases/{caseId}/report
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  generateCaseReport:
+    handler: src/handlers/reports.generate_case_report
+    timeout: 30
+    memorySize: 512
+    events:
+      - http:
+          path: cases/{caseId}/report/generate
+          method: post
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  reviewCaseReport:
+    handler: src/handlers/reports.review_case_report
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: cases/{caseId}/report/review
+          method: post
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
   # TIER 1 - Dashboard (visão geral da organização)
   getDashboardStats:
     handler: src/handlers/dashboard.get_stats

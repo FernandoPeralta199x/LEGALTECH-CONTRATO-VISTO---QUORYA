@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from src.schemas.case_schemas import CaseCreate, CaseUpdate
 from src.services.database import tenant_tx
 from src.utils.context import require_user, require_writer
+from src.services.report_generator import get_report as _get_report
 from src.utils.pii import mask_document, mask_email, mask_phone
 from src.utils.helpers import error_response, success_response
 from src.utils.lambda_io import fmt_validation_error as _fmt, parse_json_body as _parse_body, parse_pagination as _paginate, valid_uuid as _valid_uuid
@@ -260,6 +261,8 @@ def get_case_aggregate(event, context):
                     "result_ref": t["result_ref"], "raw_result_ref": t["raw_result_ref"],
                     "created_at": str(t["created_at"]), "updated_at": str(t["updated_at"]),
                 })
+
+            report = _get_report(cur, org, case_id)
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_AGGREGATE_ERROR", "error": type(e).__name__,
                                  "pgcode": getattr(e, "pgcode", None)}))
@@ -282,16 +285,16 @@ def get_case_aggregate(event, context):
         "case_id": str(c["id"]), "organization_id": str(org),
         "parties_count": len(parties), "documents_count": len(documents),
         "timeline_count": len(timeline), "triage_status": _triage_status(triage),
-        "report_status": "not_generated", "risk_level": c["risk_level"] or "unknown",
+        "report_status": report["status"] if report else "not_generated",
+        "risk_level": c["risk_level"] or "unknown",
         "recommendation": c["recommendation"], "progress": c["progress"] or 0,
         "latest_event_at": latest_event_at, "source_mode": c["source_mode"] or "local",
         "updated_at": created,
     }
-    # provider_results e report são populados nas fases SP4/SP3 (vazios por ora).
     return success_response(200, "Detalhe do caso", {
         "case": case_obj, "request": request_obj, "parties": parties,
         "documents": documents, "timeline": timeline, "triage_modules": triage,
-        "provider_results": [], "report": None, "summary": summary,
+        "provider_results": [], "report": report, "summary": summary,
     })
 
 
