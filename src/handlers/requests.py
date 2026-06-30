@@ -13,10 +13,13 @@ import psycopg2
 from psycopg2.extras import Json
 from pydantic import ValidationError
 
+import uuid
+
 from src.schemas.request_schemas import RequestCreateSchema
 from src.services.database import tenant_tx
 from src.services.pricing.config import MATRIX, PRODUCTS
 from src.services.pricing.estimate import estimate
+from src.services.storage import storage_service
 from src.services.triage_plan import plan_for_product
 from src.utils.context import require_user, require_writer
 from src.utils.helpers import error_response, generate_uuid, success_response
@@ -133,14 +136,16 @@ def create_request(event, context):
             has_document = data.document is not None
             if has_document:
                 doc = data.document
-                s3_key = doc.storage_key or f"local/wizard/{case_id}/{doc.filename}"
+                # S-01: chave do S3 SEMPRE gerada no backend (case_id/doc_id), nunca do cliente
+                doc_id = str(uuid.uuid4())
+                s3_key = storage_service.build_key(case_id, doc_id, doc.filename)
                 cur.execute(
                     "INSERT INTO public.documents"
                     " (id, organization_id, case_id, s3_url, s3_path, file_name, file_type,"
                     "  file_size_bytes, ocr_status, extraction_status, uploaded_by)"
-                    " VALUES (gen_random_uuid(), %s,%s,%s,%s,%s,%s,%s,'pending','pending',%s)",
-                    (org, case_id, s3_key, s3_key, doc.filename, _file_ext(doc.filename),
-                     doc.size_bytes, uid),
+                    " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'pending','pending',%s)",
+                    (doc_id, org, case_id, storage_service.object_url(s3_key), s3_key,
+                     doc.filename, _file_ext(doc.filename), doc.size_bytes, uid),
                 )
 
             for d in modules:

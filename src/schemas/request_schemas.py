@@ -3,6 +3,10 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
+# teto de tamanho declarado para upload (S-02): a chave do S3 é sempre gerada pelo
+# backend (S-01), então o cliente nunca informa storage_key.
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
+
 
 class PartyInput(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -22,8 +26,9 @@ class DocumentInput(BaseModel):
 
     filename: str = Field(min_length=1, max_length=255)
     mime_type: str | None = Field(default=None, max_length=120)
-    size_bytes: int | None = Field(default=None, ge=0)
-    storage_key: str | None = None
+    size_bytes: int | None = Field(default=None, ge=0, le=MAX_UPLOAD_BYTES)
+    # storage_key NÃO é aceito do cliente (S-01: evita IDOR no bucket). O backend
+    # sempre gera a chave canônica a partir de case_id/document_id.
 
 
 class RequestCreateSchema(BaseModel):
