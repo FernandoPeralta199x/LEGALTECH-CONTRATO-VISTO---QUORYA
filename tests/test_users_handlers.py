@@ -15,6 +15,8 @@ import pytest
 from src.handlers import users as u
 from src.handlers.users import hash_password
 
+SYSTEM_ORG_ID = "00000000-0000-0000-0000-000000000001"
+
 
 def _admin_conn():
     return psycopg2.connect(
@@ -38,17 +40,19 @@ def _seed_user(email, password, role="viewer", status="active"):
     conn.autocommit = True
     with conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO public.users (id, email, password_hash, name, role, status)"
-            " VALUES (%s, %s, %s, %s, %s, %s)",
-            (uid, email, hash_password(password), "Test", role, status),
+            "INSERT INTO public.users"
+            " (id, email, password_hash, name, role, status, organization_id)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (uid, email, hash_password(password), "Test", role, status, SYSTEM_ORG_ID),
         )
     conn.close()
     return uid
 
 
-def _event(user_id, role="viewer", body=None, path=None):
+def _event(user_id, role="viewer", body=None, path=None, org_id=SYSTEM_ORG_ID):
     return {
-        "requestContext": {"authorizer": {"user_id": user_id, "email": "u@t.c", "role": role}},
+        "requestContext": {"authorizer": {
+            "user_id": user_id, "email": "u@t.c", "role": role, "organization_id": org_id}},
         "body": json.dumps(body) if body is not None else None,
         "pathParameters": path or {},
         "queryStringParameters": {},
@@ -65,10 +69,12 @@ def _data(resp):
 
 
 # ── signup ────────────────────────────────────────────────────────────────
-def test_signup_creates_viewer(clean_users):
+def test_signup_creates_org_and_admin(clean_users):
     resp = u.create_user(_pub({"email": "a@b.c", "password": "Senha123", "name": "Ana"}), None)
     assert resp["statusCode"] == 201
-    assert _data(resp)["role"] == "viewer"
+    data = _data(resp)
+    assert data["role"] == "admin"
+    assert uuid.UUID(data["organization_id"])  # signup criou uma organização
 
 
 def test_signup_ignores_role_field(clean_users):
@@ -126,6 +132,13 @@ def test_login_token_has_no_email(clean_users):
     token = _data(u.login(_pub({"email": "a@b.c", "password": "Senha123"}), None))["token"]
     claims = jwt.decode(token, os.environ["JWT_SECRET_KEY"], algorithms=["HS256"])
     assert "email" not in claims and claims["role"] == "viewer"
+
+
+def test_login_token_carries_organization_id(clean_users):
+    u.create_user(_pub({"email": "org@b.c", "password": "Senha123", "name": "Org"}), None)
+    token = _data(u.login(_pub({"email": "org@b.c", "password": "Senha123"}), None))["token"]
+    claims = jwt.decode(token, os.environ["JWT_SECRET_KEY"], algorithms=["HS256"])
+    assert "organization_id" in claims and uuid.UUID(claims["organization_id"])
 
 
 # ── RBAC: get / list ───────────────────────────────────────────────────────

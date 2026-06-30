@@ -23,7 +23,7 @@ from src.schemas.user_schemas import (
     UserSignupSchema,
     UserUpdateSchema,
 )
-from src.services.database import simple_tx
+from src.services.database import signup_tx, simple_tx
 from src.services.email import email_service
 from src.utils.auth import create_access_token
 from src.utils.context import require_role, require_user
@@ -75,7 +75,7 @@ def _is_last_active_admin(cur, target_id) -> bool:
 
 # ── rotas públicas ───────────────────────────────────────────────────────────
 def create_user(event, context):
-    """Signup PÚBLICO. Cria sempre como `viewer` (menor privilégio)."""
+    """Signup PÚBLICO: cria uma organização nova e o usuário como admin dela."""
     body, err = _parse_body(event)
     if err:
         return err
@@ -85,15 +85,21 @@ def create_user(event, context):
         return error_response(400, f"Validação falhou: {_fmt(e)}")
 
     user_id = generate_uuid()
+    org_id = generate_uuid()
     try:
-        with simple_tx() as cur:
+        with signup_tx(org_id) as cur:
             cur.execute("SELECT 1 FROM public.users WHERE email = %s", (data.email,))
             if cur.fetchone():
                 return error_response(409, "Email já cadastrado")
             cur.execute(
-                "INSERT INTO public.users (id, email, password_hash, name, role, status)"
-                " VALUES (%s, %s, %s, %s, 'viewer', 'active')",
-                (user_id, data.email, hash_password(data.password), data.name),
+                "INSERT INTO public.organizations (id, name) VALUES (%s, %s)",
+                (org_id, f"Org de {data.name}"),
+            )
+            cur.execute(
+                "INSERT INTO public.users"
+                " (id, email, password_hash, name, role, status, organization_id)"
+                " VALUES (%s, %s, %s, %s, 'admin', 'active', %s)",
+                (user_id, data.email, hash_password(data.password), data.name, org_id),
             )
     except psycopg2.errors.UniqueViolation:
         # corrida: 2 signups simultâneos passam pelo SELECT; o índice único garante
@@ -104,9 +110,10 @@ def create_user(event, context):
                                  "pgcode": getattr(e, "pgcode", None)}))
         return error_response(500, "Erro ao criar usuário")
 
-    logger.info(json.dumps({"event": "USER_CREATED", "user_id": user_id, "role": "viewer"}))
+    logger.info(json.dumps({"event": "USER_CREATED", "user_id": user_id, "role": "admin"}))
     return success_response(201, "Usuário criado com sucesso",
-                            {"user_id": user_id, "role": "viewer"})
+                            {"user_id": user_id, "role": "admin",
+                             "organization_id": org_id})
 
 
 def login(event, context):
@@ -122,7 +129,7 @@ def login(event, context):
     try:
         with simple_tx() as cur:
             cur.execute(
-                "SELECT id, email, password_hash, role FROM public.users"
+                "SELECT id, email, password_hash, role, organization_id FROM public.users"
                 " WHERE email = %s AND status = 'active'",
                 (data.email,),
             )
@@ -141,10 +148,12 @@ def login(event, context):
 
     token = create_access_token({  # sem email no token (menos PII)
         "user_id": str(user["id"]), "role": user["role"],
+        "organization_id": str(user["organization_id"]),
     })
     logger.info(json.dumps({"event": "AUTH_LOGIN_SUCCESS", "user_id": str(user["id"])}))
     return success_response(200, "Login bem-sucedido", {
         "token": token, "user_id": str(user["id"]), "role": user["role"],
+        "organization_id": str(user["organization_id"]),
     })
 
 
