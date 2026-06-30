@@ -5,13 +5,15 @@ PostgreSQL rejeita (NaN/Infinity em jsonb, null byte em text) — que de outro m
 virariam 500 no INSERT.
 """
 import json
+import os
 import uuid
 
 from pydantic import ValidationError
 
 from src.utils.helpers import error_response
 
-_MAX_PAGE = 1_000_000  # teto de página (evita OFFSET que estoura bigint -> 500)
+_MAX_PAGE = 10_000  # teto de página (OFFSET caro/overflow; keyset fica p/ Fase 7)
+_MAX_BODY_BYTES = int(os.getenv("MAX_BODY_BYTES", "1000000"))  # 1 MB
 
 
 def _reject_constant(token):
@@ -36,14 +38,18 @@ def parse_json_body(event):
     Garante objeto JSON e rejeita valores que quebrariam no banco (NaN/Infinity,
     null byte), devolvendo 400 em vez de deixar virar 500.
     """
+    raw = event.get("body") or "{}"
+    if len(raw) > _MAX_BODY_BYTES:  # DoS: payload grande demais
+        return None, error_response(413, "Corpo da requisição excede o limite")
     try:
-        data = json.loads(event.get("body") or "{}", parse_constant=_reject_constant)
-    except (json.JSONDecodeError, ValueError):
+        data = json.loads(raw, parse_constant=_reject_constant)
+        if not isinstance(data, dict):
+            return None, error_response(400, "Corpo JSON deve ser um objeto")
+        if _has_null_byte(data):  # PostgreSQL rejeita null byte em text
+            return None, error_response(400, "Corpo JSON contém caractere nulo inválido")
+    except (json.JSONDecodeError, ValueError, RecursionError):
+        # RecursionError: JSON profundamente aninhado (DoS)
         return None, error_response(400, "Corpo JSON inválido")
-    if not isinstance(data, dict):
-        return None, error_response(400, "Corpo JSON deve ser um objeto")
-    if _has_null_byte(data):
-        return None, error_response(400, "Corpo JSON contém caractere nulo inválido")
     return data, None
 
 

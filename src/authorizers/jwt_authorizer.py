@@ -58,7 +58,8 @@ def authorize(event, context):
     
     try:
         # ✅ VALIDAR JWT NO API GATEWAY (antes da Lambda de negócio)
-        payload = jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
+        payload = jwt.decode(token, JWT_SECRET, algorithms=['HS256'],
+                             options={"require": ["exp"]})  # rejeita token sem expiração
         
         logger.info(json.dumps({
             "event": "AUTH_TOKEN_VALID",

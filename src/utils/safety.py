@@ -7,15 +7,21 @@ logger = logging.getLogger()
 # Valores padrão/inseguros que NÃO podem ir para staging/produção.
 _INSECURE_SECRETS = {"", "sua-chave-secreta", "sua-chave-secreta-aqui"}
 
+# Apenas estes ambientes são tratados como NÃO-produtivos. Qualquer outro stage
+# (prod, prd, staging, homolog, qa, sandbox, ...) é tratado como produtivo
+# (fail-safe: um stage desconhecido NÃO deve escapar das travas).
+_NON_PROD_ENVS = {"", "local", "dev", "development", "test", "testing"}
+
 
 def enforce_production_safety():
     """Trava fail-closed para Serverless: bloqueia o boot do container se houver
-    configuração insegura em staging/produção.
+    configuração insegura fora de ambientes de desenvolvimento.
 
-    Usa ``ENVIRONMENT`` (nome real definido no ``serverless.yml``).
+    Usa ``ENVIRONMENT`` (nome real definido no ``serverless.yml``). Fail-safe:
+    qualquer ambiente que não esteja na allowlist de dev é considerado produtivo.
     """
     environment = os.getenv("ENVIRONMENT", "local").lower()
-    if environment not in ("staging", "production", "prod"):
+    if environment in _NON_PROD_ENVS:
         return
 
     violations = []

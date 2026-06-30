@@ -5,12 +5,15 @@ from uuid import uuid4
 
 CORS_HEADERS = {
     "Content-Type": "application/json",
+    # CORS amplo no MVP; restringir por ambiente no deploy (Fase 7).
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS,HEAD",
     "Access-Control-Allow-Headers": (
         "Content-Type,X-Amz-Date,Authorization,X-Api-Key,"
         "X-Amz-Security-Token,X-Amz-User-Agent,X-Amzn-Trace-Id"
     ),
+    # respostas carregam token/PII -> não cachear (em proxies/navegador)
+    "Cache-Control": "no-store",
 }
 
 

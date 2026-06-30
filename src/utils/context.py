@@ -5,12 +5,9 @@ ao handler ACHATADO em ``event.requestContext.authorizer.<key>`` (valores como
 string). Aceitamos também o aninhado ``...authorizer.context`` (HTTP API / testes).
 Os handlers NÃO revalidam o token; apenas leem este contexto.
 """
-import logging
 import uuid
 
 from src.utils.helpers import error_response
-
-logger = logging.getLogger()
 
 VALID_ROLES = {"admin", "analyst", "viewer"}
 # Papéis autorizados a escrever (create/update/delete). `viewer` é somente leitura.

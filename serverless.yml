@@ -11,13 +11,13 @@ provider:
 
   environment:
     PYTHONPATH: /var/task:/opt/python
-    DB_HOST: ${ssm:/contrato-visto/db_host}
-    DB_USER: ${ssm:/contrato-visto/db_user}
-    DB_PASS: ${ssm:/contrato-visto/db_pass}
+    DB_HOST: ${ssm:/contrato-visto/${self:provider.stage}/db_host}
+    DB_USER: ${ssm:/contrato-visto/${self:provider.stage}/db_user}
+    DB_PASS: ${ssm:/contrato-visto/${self:provider.stage}/db_pass}
     DB_NAME: contrato_visto
     ENVIRONMENT: ${self:provider.stage}
     LOG_LEVEL: INFO
-    JWT_SECRET_KEY: ${ssm:/contrato-visto/jwt_secret}
+    JWT_SECRET_KEY: ${ssm:/contrato-visto/${self:provider.stage}/jwt_secret}
     DOCUMENTS_BUCKET: contrato-visto-documents-${self:provider.stage}
 
   iamRoleStatements:
@@ -37,7 +37,7 @@ provider:
     - Effect: Allow
       Action:
         - ssm:GetParameter
-      Resource: "arn:aws:ssm:sa-east-1:*:parameter/contrato-visto/*"
+      Resource: "arn:aws:ssm:sa-east-1:*:parameter/contrato-visto/${self:provider.stage}/*"
     - Effect: Allow
       Action:
         - logs:CreateLogGroup

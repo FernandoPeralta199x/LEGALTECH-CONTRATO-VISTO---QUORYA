@@ -10,14 +10,11 @@
 """
 from __future__ import annotations
 
-import logging
 import os
 from contextlib import contextmanager
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
-
-logger = logging.getLogger()
 
 # Timeouts de sessão (evitam queries/locks presos em Lambda)
 _STATEMENT_TIMEOUT_MS = int(os.getenv("DB_STATEMENT_TIMEOUT_MS", "8000"))

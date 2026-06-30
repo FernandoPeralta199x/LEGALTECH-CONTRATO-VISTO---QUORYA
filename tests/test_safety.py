@@ -27,6 +27,15 @@ def test_production_blocks_default_secret(monkeypatch):
         enforce_production_safety()
 
 
+def test_unknown_stage_is_treated_as_production(monkeypatch):
+    # fail-safe: stage não-dev (ex.: 'prd', 'qa', 'homolog') deve aplicar as travas
+    for stage in ("prd", "qa", "homolog", "sandbox"):
+        monkeypatch.setenv("ENVIRONMENT", stage)
+        monkeypatch.delenv("JWT_SECRET_KEY", raising=False)
+        with pytest.raises(RuntimeError):
+            enforce_production_safety()
+
+
 def test_production_blocks_mock_email_backend(monkeypatch):
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.setenv("JWT_SECRET_KEY", "um-segredo-forte-de-verdade-0123456789")

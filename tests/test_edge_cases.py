@@ -150,6 +150,25 @@ def test_page_overflow_does_not_500():
     assert r["statusCode"] in (200, 400)  # nunca 500
 
 
+def test_oversized_body_returns_413():
+    big = json.dumps({"x": "a" * 1_100_000})  # > 1 MB
+    assert cases.create_case(_ev(big), None)["statusCode"] == 413
+
+
+def test_authorizer_requires_exp():
+    import os
+
+    import jwt as _jwt
+
+    from src.authorizers import jwt_authorizer
+    tok = _jwt.encode({"user_id": "x", "role": "admin"},  # sem exp
+                      os.environ["JWT_SECRET_KEY"], algorithm="HS256")
+    res = jwt_authorizer.authorize(
+        {"type": "TOKEN", "authorizationToken": f"Bearer {tok}",
+         "methodArn": "arn:aws:execute-api:sa-east-1:1:a/dev/GET/x"}, None)
+    assert res["policyDocument"]["Statement"][0]["Effect"] == "Deny"
+
+
 def test_unicode_preserved(_clean_clients):
     name = "Açaí Müller 日本 😀 Ltda"
     resp = _create_client(name)
