@@ -180,3 +180,49 @@ def test_upload_blocked_on_finalized_case(client_id):
 
 def test_unauthenticated_blocked(client_id):
     assert d.get_document({"requestContext": {}}, None)["statusCode"] == 401
+
+
+# ── #26: PATCH /documents/{id} (rename + status) ─────────────────────────────
+def test_update_document_patch(client_id):
+    a = str(uuid.uuid4())
+    case_id = _make_case(a, client_id)
+    doc_id = _data(_upload(a, case_id))["document_id"]
+    upd = _data(d.update_document(_event(a, path={"docId": doc_id},
+                body={"filename": "renomeado.pdf", "status": "processed"}), None))
+    assert upd["filename"] == "renomeado.pdf"
+    assert upd["status"] == "processed"  # V2; persistido como ocr_status='done'
+    conn = _admin_conn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT file_name, ocr_status FROM public.documents WHERE id=%s", (doc_id,))
+        assert cur.fetchone() == ("renomeado.pdf", "done")
+    conn.close()
+
+
+def test_update_document_sem_campos_400(client_id):
+    a = str(uuid.uuid4())
+    case_id = _make_case(a, client_id)
+    doc_id = _data(_upload(a, case_id))["document_id"]
+    assert d.update_document(_event(a, path={"docId": doc_id}, body={}), None)["statusCode"] == 400
+
+
+def test_update_document_viewer_403(client_id):
+    v = str(uuid.uuid4())
+    assert d.update_document(_event(v, role="viewer", path={"docId": str(uuid.uuid4())},
+                body={"filename": "x.pdf"}), None)["statusCode"] == 403
+
+
+# ── #26: filtro ?status= em list_documents (V2 -> ocr_status) ─────────────────
+def test_list_documents_filtra_status(client_id):
+    a = str(uuid.uuid4())
+    case_id = _make_case(a, client_id)
+    doc1 = _data(_upload(a, case_id, file_name="a.pdf"))["document_id"]
+    doc2 = _data(_upload(a, case_id, file_name="b.pdf"))["document_id"]
+    d.process_document(_event(a, path={"docId": doc1}), None)  # doc1 -> ocr_status='done'
+    ev = _event(a)
+    ev["queryStringParameters"] = {"status": "processed"}
+    ids = {x["id"] for x in _data(d.list_documents(ev, None))}
+    assert doc1 in ids and doc2 not in ids
+    ev2 = _event(a)
+    ev2["queryStringParameters"] = {"status": "pending_upload"}
+    ids2 = {x["id"] for x in _data(d.list_documents(ev2, None))}
+    assert doc2 in ids2 and doc1 not in ids2

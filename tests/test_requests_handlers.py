@@ -42,6 +42,8 @@ def _seed_pricing_override(org, overrides):
     conn.autocommit = True
     with conn.cursor() as cur:
         cur.execute("SELECT set_config('app.organization_id', %s, false)", (org,))
+        # app.user_id também: o trigger de auditoria de pricing_configs (migration 013) exige
+        cur.execute("SELECT set_config('app.user_id', %s, false)", (str(uuid.uuid4()),))
         cur.execute("INSERT INTO public.pricing_configs (organization_id, module_overrides)"
                     " VALUES (%s, %s)", (org, json.dumps(overrides)))
     conn.close()

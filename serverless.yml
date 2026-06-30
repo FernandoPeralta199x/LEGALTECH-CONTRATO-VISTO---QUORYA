@@ -376,6 +376,17 @@ functions:
           cors: true
           authorizer: ${self:custom.jwtAuthorizer}
 
+  updateDocument:
+    handler: src/handlers/documents.update_document
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: documents/{docId}
+          method: patch
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
   getDocumentDownloadUrl:
     handler: src/handlers/documents.get_document_download_url
     timeout: 10

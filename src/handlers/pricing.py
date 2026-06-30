@@ -8,9 +8,9 @@ Portado de ``legaltech-aws/apps/api/src/modules/pricing/router.py``:
 - GET  /pricing/config/limit-check pode criar novo caso? (cases_limit)
 
 Leitura: qualquer usuário autenticado. Mutação de config: admin.
-Audit detalhado (PRICING_CHANGED old/new) fica para o hardening — o RLS de
-``audit.audit_log`` só permite escrita via função SECURITY DEFINER; aqui o
-rastro é version + updated_by + updated_at.
+Auditoria: mudanças em ``pricing_configs`` (INSERT/UPDATE) gravam change_before/
+change_after em ``audit.audit_log`` via trigger ``audit.log_audit`` (SECURITY DEFINER,
+migration 013) — além de version + updated_by + updated_at.
 """
 import json
 import logging

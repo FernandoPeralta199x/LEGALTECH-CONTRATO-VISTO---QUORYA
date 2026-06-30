@@ -101,7 +101,7 @@ def get_case(event, context):
                 " product_label, title, code, risk_level, progress, source_mode,"
                 " request_id, created_by, assigned_to, created_at, completed_at,"
                 " metadata, submitted_at"
-                " FROM public.cases WHERE id = %s",
+                " FROM public.cases WHERE id = %s AND deleted_at IS NULL",
                 (case_id,),
             )
             row = cur.fetchone()
@@ -156,7 +156,7 @@ def get_case_aggregate(event, context):
                 "SELECT id, request_id, code, created_by, product_type, product_label,"
                 " title, description, status, progress, risk_level, recommendation,"
                 " source_mode, is_local_simulation, created_at"
-                " FROM public.cases WHERE id = %s", (case_id,))
+                " FROM public.cases WHERE id = %s AND deleted_at IS NULL", (case_id,))
             c = cur.fetchone()
             if not c:
                 return error_response(404, "Caso não encontrado")
@@ -404,7 +404,10 @@ def delete_case(event, context):
         return error_response(400, "caseId inválido")
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
-            cur.execute("DELETE FROM public.cases WHERE id = %s", (case_id,))
+            # soft-delete: a UI promete arquivar (recuperável), não apaga de fato
+            cur.execute("UPDATE public.cases SET deleted_at = now()"
+                        " WHERE id = %s AND deleted_at IS NULL RETURNING deleted_at", (case_id,))
+            row = cur.fetchone()
             deleted = cur.rowcount
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_DELETE_ERROR",
@@ -413,8 +416,9 @@ def delete_case(event, context):
         return error_response(500, "Erro ao deletar caso")
     if not deleted:
         return error_response(404, "Caso não encontrado")
-    logger.info(json.dumps({"event": "CASE_DELETED", "case_id": case_id}))
-    return success_response(200, "Caso deletado com sucesso")
+    logger.info(json.dumps({"event": "CASE_SOFT_DELETED", "case_id": case_id}))
+    return success_response(200, "Caso arquivado com sucesso", {
+        "id": case_id, "deleted_at": str(row["deleted_at"]) if row else None})
 
 
 def _case_detail(cur, case_id, request_id) -> dict:

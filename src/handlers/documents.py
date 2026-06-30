@@ -209,6 +209,44 @@ def get_document(event, context):
 
 
 @require_user
+@require_writer
+def update_document(event, context):
+    """Atualização parcial do documento (PATCH). Campos suportados: ``filename`` (rename)
+    e ``status`` (V2 -> ocr_status legado). Escrita exige papel writer; a RLS filtra a org."""
+    user = event["user"]
+    doc_id = _valid_uuid((event.get("pathParameters") or {}).get("docId"))
+    if not doc_id:
+        return error_response(400, "docId inválido")
+    body, err = _parse_body(event)
+    if err:
+        return err
+    sets, vals = [], []
+    if "filename" in body and body["filename"]:
+        sets.append("file_name = %s")
+        vals.append(body["filename"])
+    if "status" in body and body["status"]:
+        sets.append("ocr_status = %s")
+        vals.append(_DOC_STATUS_REV.get(body["status"], body["status"]))
+    if not sets:
+        return error_response(400, "Nenhum campo atualizável (use 'filename' e/ou 'status')")
+    vals.append(doc_id)
+    try:
+        with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
+            cur.execute(
+                f"UPDATE public.documents SET {', '.join(sets)} WHERE id = %s"
+                " RETURNING id, case_id, file_name, file_type, file_size_bytes, file_hash,"
+                " ocr_status, uploaded_by, created_at", tuple(vals))
+            row = cur.fetchone()
+    except Exception as e:
+        logger.error(json.dumps({"event": "DOCUMENT_UPDATE_ERROR", "error": type(e).__name__,
+                                 "pgcode": getattr(e, "pgcode", None)}))
+        return error_response(500, "Erro ao atualizar documento")
+    if not row:
+        return error_response(404, "Documento não encontrado")
+    return success_response(200, "Documento atualizado", _serialize_v2(row))
+
+
+@require_user
 def get_document_download_url(event, context):
     """URL pré-assinada de download (shape DocumentDownloadUrl do frontend)."""
     user = event["user"]
@@ -248,13 +286,20 @@ def list_documents(event, context):
         case_id = _valid_uuid(params["case_id"])
         if not case_id:
             return error_response(400, "case_id inválido")
+    conditions, args = [], []
+    if case_id:
+        conditions.append("case_id = %s")
+        args.append(case_id)
+    if params.get("status"):
+        # filtro V2 do frontend -> ocr_status legado (inverso do _DOC_STATUS_MAP)
+        args.append(_DOC_STATUS_REV.get(params["status"], params["status"]))
+        conditions.append("ocr_status = %s")
     sql = ("SELECT id, case_id, file_name, file_type, file_size_bytes, file_hash,"
            " ocr_status, uploaded_by, created_at FROM public.documents")
-    args = ()
-    if case_id:
-        sql += " WHERE case_id = %s"
-        args = (case_id,)
+    if conditions:
+        sql += " WHERE " + " AND ".join(conditions)
     sql += " ORDER BY created_at DESC LIMIT 500"
+    args = tuple(args)
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
             cur.execute(sql, args)
@@ -267,6 +312,8 @@ def list_documents(event, context):
 
 # ocr_status (legado) -> status do documento V2 esperado pelo frontend
 _DOC_STATUS_MAP = {"pending": "pending_upload", "done": "processed"}
+# inverso: status V2 (filtro/PATCH do frontend) -> ocr_status legado
+_DOC_STATUS_REV = {"pending_upload": "pending", "processed": "done"}
 
 
 def _serialize_v2(row) -> dict:

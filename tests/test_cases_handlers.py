@@ -268,14 +268,32 @@ def test_case_result_blocked_on_finalized_case(client_id):
 
 
 def test_delete_case_audit_records_resource_id(client_id):
-    # Migration 002: auditoria de DELETE registra o resource_id (era NULL antes).
+    # #26: delete agora é soft (UPDATE deleted_at) -> auditado como UPDATE com o resource_id.
     a = str(uuid.uuid4())
     case_id = _data(_make_case(a, client_id))["id"]
     assert cases_h.delete_case(_event(a, path={"caseId": case_id}), None)["statusCode"] == 200
     conn = _admin_conn()
     with conn.cursor() as cur:
-        cur.execute("SELECT resource_id FROM audit.audit_log WHERE action='DELETE'"
+        cur.execute("SELECT resource_id, change_after FROM audit.audit_log WHERE action='UPDATE'"
                     " AND resource_type='cases' ORDER BY created_at DESC LIMIT 1")
         row = cur.fetchone()
     conn.close()
     assert row is not None and str(row[0]) == case_id
+    assert row[1] and row[1].get("deleted_at") is not None  # soft-delete registrado
+
+
+def test_soft_delete_preserva_linha_e_some_da_listagem(client_id):
+    # #26: a UI promete arquivar -> deleted_at marcado, linha preservada, fora da listagem
+    a = str(uuid.uuid4())
+    case_id = _data(_make_case(a, client_id))["id"]
+    assert cases_h.delete_case(_event(a, path={"caseId": case_id}), None)["statusCode"] == 200
+    conn = _admin_conn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT deleted_at FROM public.cases WHERE id=%s", (case_id,))
+        row = cur.fetchone()
+    conn.close()
+    assert row is not None and row[0] is not None  # linha preservada, soft
+    listed = _data(cases_h.list_cases(_event(a), None))
+    assert case_id not in {c["id"] for c in listed["items"]}
+    # 404 ao tentar deletar de novo (já arquivado)
+    assert cases_h.delete_case(_event(a, path={"caseId": case_id}), None)["statusCode"] == 404

@@ -166,3 +166,19 @@ def test_isolamento_config_por_org():
     # outra org não enxerga a config (RLS) -> default
     cfg_other = _data(pr_h.get_pricing_config(_event(b, org_id=OTHER_ORG), None))
     assert cfg_other["cases_limit"] is None and cfg_other["version"] == 0
+
+
+def test_update_config_grava_auditoria():
+    # #26 + migration 013: mudança de config grava change_after em audit.audit_log
+    a = str(uuid.uuid4())
+    _data(pr_h.update_pricing_config(_event(a, body={"cases_limit": 4242}), None))
+    conn = _admin_conn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT action, resource_type, change_after FROM audit.audit_log"
+                    " WHERE resource_type='pricing_configs'"
+                    " ORDER BY created_at DESC, id DESC LIMIT 1")
+        row = cur.fetchone()
+    conn.close()
+    assert row is not None
+    assert row[0] in ("INSERT", "UPDATE") and row[1] == "pricing_configs"
+    assert row[2] and row[2].get("cases_limit") == 4242  # change_after audita o novo valor
