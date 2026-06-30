@@ -85,8 +85,8 @@ docker start cv-pg18    # ou: docker run -d --name cv-pg18 -e POSTGRES_DB=contra
                         #     -p 5433:5432 pgvector/pgvector:pg18
 # 2) (se recriar) restaurar schema + role + policies
 docker exec -i cv-pg18 psql -U dbadmin -d contrato_visto < docs/schema_referencia.sql
-#   criar role cv_app (LOGIN, NÃO-owner) + grants; aplicar migrations/001_rls_policies.sql,
-#   migrations/002_fix_audit_delete.sql e migrations/003_perf_indexes.sql
+#   criar role cv_app (LOGIN, NÃO-owner) + grants; aplicar migrations/001..004 em ordem
+#   (001_rls_policies, 002_fix_audit_delete, 003_perf_indexes, 004_integrity_indexes)
 # 3) venv + deps
 cd apps/api ... (este repo)  python -m venv .venv
 .venv/Scripts/python -m pip install psycopg2-binary python-dotenv pydantic PyJWT bcrypt email-validator pytest
@@ -163,6 +163,18 @@ Achados confirmados em runtime (são REGRA, não bug de runtime — decisão do 
 8. **Lockout de admin**: `update_user`/`delete_user` permitem rebaixar/desativar o
    **último admin** → sistema sem administrador. Proteger (recusar se restaria 0 admin)?
    *(Risco operacional; alguns sistemas permitem e recuperam via SQL — por isso é decisão.)*
+9. **Case finalizado** (`completed`/`closed`) ainda aceita novos `case_result`/`document`
+   e troca de status livre. Definir **matriz de transição** + bloquear escrita em case
+   finalizado? (B4 do laudo). Decisão de produto.
+
+### Corrigidos na varredura #4
+- **B5** `completed_at` agora setado/limpo conforme status (era sempre NULL).
+- **B6** token de reset único por usuário (migration 004 UNIQUE + upsert atômico).
+- **Perf** (migrations 003/004): índices p/ RLS (created_by/uploaded_by), list_clients
+  (status,created_at), list_case_results (case_id,created_at), list_users (created_at);
+  removido índice duplicado. Validado via EXPLAIN (list_clients: Seq Scan→Index Scan).
+- **Diferidos Fase 7:** B2 revogação de sessão, B7 `delete_case` cleanup S3, M2 keyset
+  pagination, M3 constraint status×is_active, atualizar `schema_referencia.sql` com índices.
 
 ## Auditoria de qualidade (E2E — passo 3)
 
