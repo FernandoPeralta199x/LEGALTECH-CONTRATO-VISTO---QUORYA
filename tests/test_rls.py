@@ -13,6 +13,7 @@ from src.services.database import get_connection, tenant_tx
 # Org de sistema (migração 005) — a RLS de cases/clients ainda é por-dono nesta
 # fase; o organization_id é exigido pela assinatura de tenant_tx mas é inócuo aqui.
 SYSTEM_ORG_ID = "00000000-0000-0000-0000-000000000001"
+OTHER_ORG_ID = "00000000-0000-0000-0000-0000000000ff"
 
 
 def _new_user() -> str:
@@ -41,15 +42,15 @@ def _reset():
 def _seed_case(user_id: str) -> str:
     with tenant_tx(user_id, "analyst", SYSTEM_ORG_ID) as cur:
         cur.execute(
-            "INSERT INTO public.clients (legal_name, document_number, document_type)"
-            " VALUES ('Cliente Teste', %s, 'cnpj') RETURNING id",
-            (uuid.uuid4().hex[:14],),
+            "INSERT INTO public.clients (organization_id, legal_name, document_number, document_type)"
+            " VALUES (%s, 'Cliente Teste', %s, 'cnpj') RETURNING id",
+            (SYSTEM_ORG_ID, uuid.uuid4().hex[:14]),
         )
         client_id = cur.fetchone()["id"]
         cur.execute(
-            "INSERT INTO public.cases (client_id, case_type, created_by)"
-            " VALUES (%s, 'contract_analysis', %s) RETURNING id",
-            (client_id, user_id),
+            "INSERT INTO public.cases (organization_id, client_id, case_type, created_by)"
+            " VALUES (%s, %s, 'contract_analysis', %s) RETURNING id",
+            (SYSTEM_ORG_ID, client_id, user_id),
         )
         return cur.fetchone()["id"]
 
@@ -61,15 +62,17 @@ def clean_db():
     _reset()
 
 
-def test_owner_sees_case_other_user_does_not():
+def test_org_isolation_cases():
     user_a, user_b = _new_user(), _new_user()
-    _seed_case(user_a)
+    _seed_case(user_a)  # criado na org de sistema
 
-    with tenant_tx(user_a, "analyst", SYSTEM_ORG_ID) as cur:
+    # outro usuário da MESMA organização VÊ (isolamento agora é por org, não por dono)
+    with tenant_tx(user_b, "analyst", SYSTEM_ORG_ID) as cur:
         cur.execute("SELECT count(*) AS n FROM public.cases")
         assert cur.fetchone()["n"] == 1
 
-    with tenant_tx(user_b, "analyst", SYSTEM_ORG_ID) as cur:
+    # usuário de OUTRA organização NÃO vê
+    with tenant_tx(user_b, "analyst", OTHER_ORG_ID) as cur:
         cur.execute("SELECT count(*) AS n FROM public.cases")
         assert cur.fetchone()["n"] == 0
 
@@ -112,8 +115,8 @@ def test_update_fires_audit_trigger_with_app_user_id():
 def test_context_does_not_leak_between_users_on_reused_connection():
     user_a, user_b = _new_user(), _new_user()
     _seed_case(user_a)
-    # mesma conexão é reutilizada por get_connection; o SET LOCAL não pode vazar
-    with tenant_tx(user_b, "analyst", SYSTEM_ORG_ID) as cur:
+    # mesma conexão é reutilizada; o SET LOCAL da org não pode vazar entre invocações
+    with tenant_tx(user_b, "analyst", OTHER_ORG_ID) as cur:
         cur.execute("SELECT count(*) AS n FROM public.cases")
         assert cur.fetchone()["n"] == 0
 

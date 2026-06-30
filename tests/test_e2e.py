@@ -163,7 +163,8 @@ def test_rbac_and_rls_across_users(clean_db):
         "document_number": "529.982.247-25"}), None)["statusCode"] == 403
     assert cases_h.create_case(_ev(ctx_bob, body={
         "client_id": client_id, "case_type": "contract_analysis"}), None)["statusCode"] == 403
-    assert cases_h.get_case(_ev(ctx_bob, path={"caseId": case_id}), None)["statusCode"] == 404
+    # viewer da MESMA organização VÊ o caso (leitura por org), mas não escreve
+    assert cases_h.get_case(_ev(ctx_bob, path={"caseId": case_id}), None)["statusCode"] == 200
     assert users_h.list_users(_ev(ctx_bob), None)["statusCode"] == 403  # admin-only
 
 

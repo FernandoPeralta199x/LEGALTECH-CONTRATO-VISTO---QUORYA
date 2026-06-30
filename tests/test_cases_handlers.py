@@ -12,6 +12,9 @@ import pytest
 from src.handlers import case_results as cr_h
 from src.handlers import cases as cases_h
 
+SYSTEM_ORG = "00000000-0000-0000-0000-000000000001"
+OTHER_ORG = "00000000-0000-0000-0000-0000000000ff"
+
 
 def _admin_conn():
     return psycopg2.connect(
@@ -26,21 +29,22 @@ def _reset_and_seed_client() -> str:
     with conn.cursor() as cur:
         cur.execute("TRUNCATE public.cases, public.clients RESTART IDENTITY CASCADE")
         cur.execute("TRUNCATE audit.audit_log RESTART IDENTITY")
+        cur.execute("SELECT set_config('app.organization_id', %s, false)", (SYSTEM_ORG,))
         cur.execute(
-            "INSERT INTO public.clients (legal_name, document_number, document_type)"
-            " VALUES ('Cliente Teste', %s, 'cnpj') RETURNING id",
-            (uuid.uuid4().hex[:14],),
+            "INSERT INTO public.clients (organization_id, legal_name, document_number, document_type)"
+            " VALUES (%s, 'Cliente Teste', %s, 'cnpj') RETURNING id",
+            (SYSTEM_ORG, uuid.uuid4().hex[:14]),
         )
         cid = cur.fetchone()[0]
     conn.close()
     return str(cid)
 
 
-def _event(user_id, role="analyst", body=None, path=None, query=None):
+def _event(user_id, role="analyst", body=None, path=None, query=None, org_id=SYSTEM_ORG):
     # Shape REAL do REST API: claims do authorizer ACHATADOS em `authorizer.<key>`.
     return {
         "requestContext": {
-            "authorizer": {"user_id": user_id, "email": "u@t.c", "role": role, "organization_id": "00000000-0000-0000-0000-000000000001"}
+            "authorizer": {"user_id": user_id, "email": "u@t.c", "role": role, "organization_id": org_id}
         },
         "body": json.dumps(body) if body is not None else None,
         "pathParameters": path or {},
@@ -79,8 +83,10 @@ def test_case_isolation_and_admin(client_id):
     a, b = str(uuid.uuid4()), str(uuid.uuid4())
     case_id = _data(_make_case(a, client_id))["id"]
 
-    assert len(_data(cases_h.list_cases(_event(b), None))) == 0
-    assert cases_h.get_case(_event(b, path={"caseId": case_id}), None)["statusCode"] == 404
+    # usuário de OUTRA organização não vê os casos (RLS por org)
+    assert len(_data(cases_h.list_cases(_event(b, org_id=OTHER_ORG), None))) == 0
+    assert cases_h.get_case(_event(b, path={"caseId": case_id}, org_id=OTHER_ORG), None)["statusCode"] == 404
+    # admin da MESMA organização vê
     assert len(_data(cases_h.list_cases(_event(b, role="admin"), None))) == 1
 
 
@@ -139,11 +145,11 @@ def test_case_result_only_for_visible_case(client_id):
     assert ok["statusCode"] == 201
 
     blocked = cr_h.create_case_result(
-        _event(b, body={"case_id": case_id, "result_type": "due_diligence",
-                        "findings": {}, "risk_level": "low"}),
+        _event(b, org_id=OTHER_ORG, body={"case_id": case_id, "result_type": "due_diligence",
+                                          "findings": {}, "risk_level": "low"}),
         None,
     )
-    assert blocked["statusCode"] == 404  # caso não visível ao usuário B
+    assert blocked["statusCode"] == 404  # caso de OUTRA organização não é visível
 
 
 def test_viewer_cannot_write(client_id):
@@ -220,9 +226,9 @@ def test_case_result_isolation_and_rbac(client_id):
     case_id = _data(_make_case(a, client_id))["id"]
     rid = _data(_make_result(a, case_id))["id"]
 
-    # B não é dono do resultado (RLS case_results por created_by) → 404
-    assert cr_h.get_case_result(_event(b, path={"resultId": rid}), None)["statusCode"] == 404
-    # admin vê
+    # usuário de OUTRA organização não vê o resultado (RLS por org) → 404
+    assert cr_h.get_case_result(_event(b, path={"resultId": rid}, org_id=OTHER_ORG), None)["statusCode"] == 404
+    # admin da MESMA organização vê
     assert cr_h.get_case_result(_event(b, role="admin", path={"resultId": rid}),
                                 None)["statusCode"] == 200
     # viewer não escreve

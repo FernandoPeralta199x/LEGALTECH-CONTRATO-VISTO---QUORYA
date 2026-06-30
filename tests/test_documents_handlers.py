@@ -12,6 +12,9 @@ import pytest
 from src.handlers import cases as cases_h
 from src.handlers import documents as d
 
+SYSTEM_ORG = "00000000-0000-0000-0000-000000000001"
+OTHER_ORG = "00000000-0000-0000-0000-0000000000ff"
+
 
 def _admin_conn():
     return psycopg2.connect(
@@ -28,19 +31,20 @@ def client_id():
         cur.execute("TRUNCATE public.documents, public.cases, public.clients"
                     " RESTART IDENTITY CASCADE")
         cur.execute("TRUNCATE audit.audit_log RESTART IDENTITY")
+        cur.execute("SELECT set_config('app.organization_id', %s, false)", (SYSTEM_ORG,))
         cur.execute(
-            "INSERT INTO public.clients (legal_name, document_number, document_type)"
-            " VALUES ('Cliente Teste', %s, 'cnpj') RETURNING id",
-            (uuid.uuid4().hex[:14],),
+            "INSERT INTO public.clients (organization_id, legal_name, document_number, document_type)"
+            " VALUES (%s, 'Cliente Teste', %s, 'cnpj') RETURNING id",
+            (SYSTEM_ORG, uuid.uuid4().hex[:14]),
         )
         cid = cur.fetchone()[0]
     conn.close()
     return str(cid)
 
 
-def _event(user_id, role="analyst", body=None, path=None):
+def _event(user_id, role="analyst", body=None, path=None, org_id=SYSTEM_ORG):
     return {
-        "requestContext": {"authorizer": {"user_id": user_id, "email": "u@t.c", "role": role, "organization_id": "00000000-0000-0000-0000-000000000001"}},
+        "requestContext": {"authorizer": {"user_id": user_id, "email": "u@t.c", "role": role, "organization_id": org_id}},
         "body": json.dumps(body) if body is not None else None,
         "pathParameters": path or {},
         "queryStringParameters": {},
@@ -52,17 +56,18 @@ def _data(resp):
     return json.loads(resp["body"])["data"]
 
 
-def _make_case(user_id, client_id, role="analyst"):
+def _make_case(user_id, client_id, role="analyst", org_id=SYSTEM_ORG):
     resp = cases_h.create_case(
-        _event(user_id, role, body={"client_id": client_id, "case_type": "contract_analysis"}),
+        _event(user_id, role, body={"client_id": client_id, "case_type": "contract_analysis"},
+               org_id=org_id),
         None,
     )
     return _data(resp)["id"]
 
 
-def _upload(user_id, case_id, role="analyst", **over):
+def _upload(user_id, case_id, role="analyst", org_id=SYSTEM_ORG, **over):
     body = {"case_id": case_id, "file_name": "contrato.pdf", "file_type": "pdf", **over}
-    return d.upload_document(_event(user_id, role, body=body), None)
+    return d.upload_document(_event(user_id, role, body=body, org_id=org_id), None)
 
 
 def test_upload_and_get(client_id):
@@ -82,8 +87,8 @@ def test_upload_and_get(client_id):
 def test_upload_requires_visible_case(client_id):
     a, b = str(uuid.uuid4()), str(uuid.uuid4())
     case_id = _make_case(a, client_id)
-    # B não enxerga o case de A (RLS de cases) → upload bloqueado
-    assert _upload(b, case_id)["statusCode"] == 404
+    # B de OUTRA organização não enxerga o case de A (RLS por org) → upload bloqueado
+    assert _upload(b, case_id, org_id=OTHER_ORG)["statusCode"] == 404
 
 
 def test_upload_nonexistent_case_404(client_id):
@@ -97,13 +102,16 @@ def test_viewer_cannot_upload(client_id):
     assert _upload(a, case_id, role="viewer")["statusCode"] == 403
 
 
-def test_document_isolation_by_owner(client_id):
-    a, b = str(uuid.uuid4()), str(uuid.uuid4())
+def test_document_isolation_by_org(client_id):
+    a = str(uuid.uuid4())
     case_id = _make_case(a, client_id)
     doc_id = _data(_upload(a, case_id))["document_id"]
-    # B não é dono do documento (RLS uploaded_by) → 404; admin vê
-    assert d.get_document(_event(b, path={"docId": doc_id}), None)["statusCode"] == 404
-    assert d.get_document(_event(b, role="admin", path={"docId": doc_id}), None)["statusCode"] == 200
+    # usuário de OUTRA organização não vê o documento (RLS por org) → 404
+    assert d.get_document(
+        _event(str(uuid.uuid4()), path={"docId": doc_id}, org_id=OTHER_ORG), None)["statusCode"] == 404
+    # admin da MESMA organização vê
+    assert d.get_document(
+        _event(str(uuid.uuid4()), role="admin", path={"docId": doc_id}), None)["statusCode"] == 200
 
 
 def test_invalid_file_type_400(client_id):

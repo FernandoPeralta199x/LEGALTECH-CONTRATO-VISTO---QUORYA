@@ -16,6 +16,9 @@ from src.handlers import search as search_h
 from src.services import rag
 from src.services.embeddings import embeddings_service
 
+SYSTEM_ORG = "00000000-0000-0000-0000-000000000001"
+OTHER_ORG = "00000000-0000-0000-0000-0000000000ff"
+
 
 def _admin_conn():
     return psycopg2.connect(
@@ -33,19 +36,20 @@ def client_id():
                     " public.documents, public.cases, public.clients"
                     " RESTART IDENTITY CASCADE")
         cur.execute("TRUNCATE audit.audit_log RESTART IDENTITY")
+        cur.execute("SELECT set_config('app.organization_id', %s, false)", (SYSTEM_ORG,))
         cur.execute(
-            "INSERT INTO public.clients (legal_name, document_number, document_type)"
-            " VALUES ('Cliente Teste', %s, 'cnpj') RETURNING id",
-            (uuid.uuid4().hex[:14],),
+            "INSERT INTO public.clients (organization_id, legal_name, document_number, document_type)"
+            " VALUES (%s, 'Cliente Teste', %s, 'cnpj') RETURNING id",
+            (SYSTEM_ORG, uuid.uuid4().hex[:14]),
         )
         cid = cur.fetchone()[0]
     conn.close()
     return str(cid)
 
 
-def _event(user_id, role="analyst", body=None):
+def _event(user_id, role="analyst", body=None, org_id=SYSTEM_ORG):
     return {
-        "requestContext": {"authorizer": {"user_id": user_id, "email": "u@t.c", "role": role, "organization_id": "00000000-0000-0000-0000-000000000001"}},
+        "requestContext": {"authorizer": {"user_id": user_id, "email": "u@t.c", "role": role, "organization_id": org_id}},
         "body": json.dumps(body) if body is not None else None,
         "pathParameters": {}, "queryStringParameters": {},
     }
@@ -100,17 +104,17 @@ def test_search_ranks_most_similar_first(client_id):
 
 
 def test_search_is_rls_filtered(client_id):
-    a, b = str(uuid.uuid4()), str(uuid.uuid4())
+    a = str(uuid.uuid4())
     case_id = _make_case(a, client_id)
     _seed_doc_with_embeddings(a, case_id, _SEGMENTS)
 
-    # B não vê o case de A (RLS de cases) → 404 antes mesmo de gerar embedding
+    # usuário de OUTRA organização não vê o case de A (RLS por org) → 404
     blocked = search_h.search_clauses(
-        _event(b, body={"case_id": case_id, "query": "rescisão"}), None)
+        _event(str(uuid.uuid4()), body={"case_id": case_id, "query": "rescisão"}, org_id=OTHER_ORG), None)
     assert blocked["statusCode"] == 404
-    # admin vê o case e os documentos
+    # admin da MESMA organização vê o case e os documentos
     seen = _data(search_h.search_clauses(
-        _event(b, role="admin", body={"case_id": case_id, "query": "rescisão"}), None))
+        _event(str(uuid.uuid4()), role="admin", body={"case_id": case_id, "query": "rescisão"}), None))
     assert len(seen) == 3
 
 

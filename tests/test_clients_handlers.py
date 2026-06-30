@@ -11,6 +11,9 @@ import pytest
 
 from src.handlers import clients as c
 
+SYSTEM_ORG = "00000000-0000-0000-0000-000000000001"
+OTHER_ORG = "00000000-0000-0000-0000-0000000000ff"
+
 
 def _admin_conn():
     return psycopg2.connect(
@@ -28,10 +31,10 @@ def clean_clients():
     conn.close()
 
 
-def _event(role="analyst", body=None, path=None, query=None):
+def _event(role="analyst", body=None, path=None, query=None, org_id=SYSTEM_ORG):
     return {
         "requestContext": {"authorizer": {"user_id": str(uuid.uuid4()),
-                                          "email": "u@t.c", "role": role, "organization_id": "00000000-0000-0000-0000-000000000001"}},
+                                          "email": "u@t.c", "role": role, "organization_id": org_id}},
         "body": json.dumps(body) if body is not None else None,
         "pathParameters": path or {},
         "queryStringParameters": query or {},
@@ -101,9 +104,16 @@ def test_unauthenticated_blocked(clean_clients):
 # ── read (compartilhado) ────────────────────────────────────────────────────
 def test_list_is_shared_across_users(clean_clients):
     _create()
-    # outro usuário (viewer) enxerga o mesmo catálogo
+    # outro usuário (viewer) DA MESMA organização enxerga o mesmo catálogo
     listed = _data(c.list_clients(_event(role="viewer"), None))
     assert len(listed) == 1
+
+
+def test_clients_isolated_by_org(clean_clients):
+    cid = _data(_create())["id"]  # criado na org de sistema
+    # usuário de OUTRA organização não vê o cliente (RLS por org)
+    assert c.get_client(_event(path={"clientId": cid}, org_id=OTHER_ORG), None)["statusCode"] == 404
+    assert len(_data(c.list_clients(_event(org_id=OTHER_ORG), None))) == 0
 
 
 def test_get_nonexistent_404(clean_clients):
