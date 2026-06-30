@@ -188,6 +188,21 @@ def test_isolamento_outra_org_nao_ve_pedido():
         _event(b, path={"requestId": rid}, org_id=OTHER_ORG), None)["statusCode"] == 404
 
 
+def test_wizard_tolera_campos_extras_do_frontend():
+    # o frontend envia notes (raiz) + document com campos extras + parte com campo
+    # extra; o backend deve ignorá-los (extra="ignore"), não retornar 400.
+    a = str(uuid.uuid4())
+    p = _payload(product_type="reuniao_equipe", selected_modules=["ia_deepseek"])
+    p["notes"] = "Criado pelo Wizard operacional"
+    p["document"] = {"filename": "c.docx", "mime_type": "x", "size_bytes": 10,
+                     "original_filename": "c.docx", "storage_provider": "local",
+                     "status": "uploaded", "preview_available": False,
+                     "download_available": False}
+    p["parties"][0]["wizard_party_id"] = "abc-123"  # campo extra na parte
+    resp = req_h.create_request(_event(a, body=p), None)
+    assert resp["statusCode"] == 201, resp
+
+
 def test_produto_dados_partes_gera_plano_proprio():
     a = str(uuid.uuid4())
     p = _payload(product_type="dados_partes", selected_modules=["escavador", "targetdata", "ia_deepseek"])

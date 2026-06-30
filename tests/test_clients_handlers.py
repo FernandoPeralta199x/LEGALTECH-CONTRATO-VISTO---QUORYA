@@ -56,6 +56,20 @@ def _create(role="analyst", **over):
 
 
 # ── create ──────────────────────────────────────────────────────────────────
+def test_create_client_shape_v2_do_frontend(clean_clients):
+    # frontend envia name/cpf/person_type/contract_role/address (shape V2) — o backend
+    # mapeia name->legal_name, cpf->document_number e ignora os extras.
+    resp = c.create_client(_event(body={
+        "name": "Maria Teste", "cpf": "060.380.601-54", "document_type": "cpf",
+        "person_type": "individual", "contract_role": "contratada",
+        "address": "Rua X, 10 - Centro", "rg": "12.345.678-9"}), None)
+    assert resp["statusCode"] == 201, resp
+    data = json.loads(resp["body"])["data"]
+    assert data["name"] == "Maria Teste" and data["legal_name"] == "Maria Teste"
+    assert data["document_number"] == "06038060154"  # analyst vê completo
+
+
+# ── create ──────────────────────────────────────────────────────────────────
 def test_create_and_get(clean_clients):
     cid = _data(_create())["id"]
     got = _data(c.get_client(_event(path={"clientId": cid}), None))

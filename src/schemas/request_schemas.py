@@ -5,7 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class PartyInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     name: str = Field(min_length=1, max_length=255)
     role: str = Field(min_length=1, max_length=50)
@@ -18,7 +18,7 @@ class PartyInput(BaseModel):
 
 
 class DocumentInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     filename: str = Field(min_length=1, max_length=255)
     mime_type: str | None = Field(default=None, max_length=120)
@@ -29,7 +29,7 @@ class DocumentInput(BaseModel):
 class RequestCreateSchema(BaseModel):
     """Payload do wizard: produto + partes + documento + módulos selecionados."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     product_type: str = Field(min_length=1, max_length=64)
     product_label: str | None = Field(default=None, max_length=128)

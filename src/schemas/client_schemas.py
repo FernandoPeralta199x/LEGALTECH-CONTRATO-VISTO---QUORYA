@@ -47,8 +47,34 @@ def _valid_cnpj(cnpj: str) -> bool:
     return True
 
 
+def _map_client_aliases(data):
+    """Mapeia o shape V2 do frontend para os campos do schema (name->legal_name,
+    document/cpf/cnpj->document_number, address->address_street). Extras ignorados."""
+    if not isinstance(data, dict):
+        return data
+    d = dict(data)
+    if not d.get("legal_name"):
+        d["legal_name"] = (d.get("name") or d.get("full_name")
+                           or d.get("display_name") or d.get("company_name")
+                           or d.get("trade_name"))
+    if not d.get("document_number"):
+        d["document_number"] = d.get("document") or d.get("cpf") or d.get("cnpj")
+    if not d.get("document_type"):
+        if d.get("cnpj"):
+            d["document_type"] = "cnpj"
+        elif d.get("cpf"):
+            d["document_type"] = "cpf"
+        elif d.get("document_number"):
+            digits = re.sub(r"\D", "", str(d.get("document_number") or ""))
+            d["document_type"] = "cnpj" if len(digits) == 14 else "cpf"
+    if d.get("address") and not d.get("address_street"):
+        d["address_street"] = str(d["address"])[:255]
+    return d
+
+
 class ClientCreateSchema(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    # extra="ignore": aceita o shape V2 do frontend e ignora campos não mapeados
+    model_config = ConfigDict(extra="ignore")
 
     legal_name: str = Field(..., min_length=2, max_length=255)
     document_type: str = Field(..., pattern=DOC_TYPE_PATTERN)
@@ -59,6 +85,11 @@ class ClientCreateSchema(BaseModel):
     address_city: Optional[str] = Field(default=None, max_length=100)
     address_state: Optional[str] = Field(default=None, pattern=STATE_PATTERN)
     address_zip: Optional[str] = Field(default=None, max_length=10)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _aliases(cls, data):
+        return _map_client_aliases(data)
 
     @field_validator("document_number")
     @classmethod
@@ -82,7 +113,7 @@ class ClientCreateSchema(BaseModel):
 
 
 class ClientUpdateSchema(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     legal_name: Optional[str] = Field(default=None, min_length=2, max_length=255)
     email: Optional[EmailStr] = None
@@ -92,3 +123,8 @@ class ClientUpdateSchema(BaseModel):
     address_state: Optional[str] = Field(default=None, pattern=STATE_PATTERN)
     address_zip: Optional[str] = Field(default=None, max_length=10)
     status: Optional[str] = Field(default=None, pattern=STATUS_PATTERN)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _aliases(cls, data):
+        return _map_client_aliases(data)
