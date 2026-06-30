@@ -95,6 +95,18 @@ def test_update_and_delete_case(client_id):
     assert cases_h.get_case(_event(a, path={"caseId": case_id}), None)["statusCode"] == 404
 
 
+def test_update_status_completed_sets_completed_at(client_id):
+    a = str(uuid.uuid4())
+    case_id = _data(_make_case(a, client_id))["id"]
+    cases_h.update_case(_event(a, path={"caseId": case_id}, body={"status": "completed"}), None)
+    got = _data(cases_h.get_case(_event(a, path={"caseId": case_id}), None))
+    assert got["completed_at"] is not None  # completed_at preenchido
+    # reabrir limpa o completed_at
+    cases_h.update_case(_event(a, path={"caseId": case_id}, body={"status": "in_progress"}), None)
+    got2 = _data(cases_h.get_case(_event(a, path={"caseId": case_id}), None))
+    assert got2["completed_at"] is None
+
+
 def test_update_nonexistent_case_returns_404(client_id):
     a = str(uuid.uuid4())
     resp = cases_h.update_case(

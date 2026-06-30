@@ -198,6 +198,20 @@ def test_forgot_then_reset_flow(clean_users, monkeypatch):
     assert u.reset_password(_pub({"token": token, "password": "Outra1234"}), None)["statusCode"] == 400
 
 
+def test_forgot_keeps_single_token_per_user(clean_users, monkeypatch):
+    # B6: dois forgot seguidos não podem deixar 2 tokens válidos (UNIQUE user_id + upsert)
+    uid = _seed_user("a@b.c", "Senha123")
+    _capture_token(monkeypatch, {})
+    u.forgot_password(_pub({"email": "a@b.c"}), None)
+    u.forgot_password(_pub({"email": "a@b.c"}), None)
+    conn = _admin_conn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM public.password_resets WHERE user_id = %s", (uid,))
+        n = cur.fetchone()[0]
+    conn.close()
+    assert n == 1  # apenas 1 token por usuário
+
+
 def test_reset_token_stored_hashed(clean_users, monkeypatch):
     import hashlib
     _seed_user("a@b.c", "Senha123")

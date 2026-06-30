@@ -148,6 +148,8 @@ def update_case(event, context):
     if data.status is not None:
         fields.append("status = %s")
         values.append(data.status)
+        # completed_at coerente com o status (literal SQL; status é validado por pattern)
+        fields.append("completed_at = " + ("NOW()" if data.status == "completed" else "NULL"))
     if data.priority is not None:
         fields.append("priority = %s")
         values.append(data.priority)

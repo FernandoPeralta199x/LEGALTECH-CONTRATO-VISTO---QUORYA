@@ -152,11 +152,13 @@ def forgot_password(event, context):
             if not user:
                 return generic
             reset_token = secrets.token_urlsafe(32)  # vai em claro SÓ no e-mail
-            # invalida pedidos anteriores e guarda apenas o HASH do token
-            cur.execute("DELETE FROM public.password_resets WHERE user_id = %s", (user["id"],))
+            # upsert atômico: 1 token por usuário (UNIQUE user_id); evita corrida de
+            # múltiplos tokens válidos. Guarda apenas o HASH do token.
             cur.execute(
                 "INSERT INTO public.password_resets (user_id, token, expires_at)"
-                " VALUES (%s, %s, NOW() + INTERVAL '1 hour')",
+                " VALUES (%s, %s, NOW() + INTERVAL '1 hour')"
+                " ON CONFLICT (user_id) DO UPDATE SET token = EXCLUDED.token,"
+                " expires_at = EXCLUDED.expires_at, created_at = NOW()",
                 (user["id"], _token_hash(reset_token)),
             )
     except Exception as e:
