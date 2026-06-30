@@ -14,12 +14,16 @@ _COLS = (
     " reviewed_by, reviewed_at, review_notes, updated_at"
 )
 
-# código curto p/ cases.recommendation (varchar(32)) por nível de risco
-_REC_CODE = {"low": "apto", "medium": "prosseguir_com_ressalvas", "high": "nao_recomendado"}
+# recomendação: enum único alinhado à referência (ReportRecommendation) usado tanto
+# em case_reports.recommendation quanto em cases.recommendation (varchar(32)). O front
+# (recommendationLabel) só rotula esses códigos; texto livre apareceria cru.
+_REC_CODE = {"low": "proceed", "medium": "proceed_with_caution", "high": "do_not_proceed"}
+# explicação humana (não é o status/enum): vai para o summary, não para recommendation.
 _REC_TEXT = {
-    "low": "Apto a prosseguir; sem riscos relevantes identificados (simulado).",
-    "medium": "Prosseguir com ressalvas; recomenda-se revisão humana dos pontos sinalizados.",
-    "high": "Não recomendado sem mitigação prévia dos riscos identificados.",
+    "proceed": "Apto a prosseguir; sem riscos relevantes identificados (simulado).",
+    "proceed_with_caution": "Prosseguir com ressalvas; recomenda-se revisão humana dos pontos sinalizados.",
+    "do_not_proceed": "Não recomendado sem mitigação prévia dos riscos identificados.",
+    "human_review_required": "Evidências insuficientes; revisão humana obrigatória antes de decidir.",
 }
 
 
@@ -75,9 +79,12 @@ def generate_report(cur, org, case_id, user_id) -> dict:
     confs = [r["confidence"] for r in results if r["confidence"] is not None]
     confidence = round(sum(confs) / len(confs), 2) if confs else None
     risk = "high" if any("alto" in s for s in signals) else ("medium" if signals else "low")
+    # sem evidências -> revisão humana obrigatória; senão deriva do nível de risco
+    recommendation = "human_review_required" if not results else _REC_CODE[risk]
     missing = [] if results else ["Triagem ainda não executada — execute a triagem antes de gerar o relatório."]
     summary = (f"Parecer consolidado a partir de {len(modules)} módulos de triagem"
-               f" ({len(results)} resultados). Nível de risco estimado: {risk}.")
+               f" ({len(results)} resultados). Nível de risco estimado: {risk}."
+               f" {_REC_TEXT[recommendation]}")
     source_refs = [{"type": "triage_module", "module_key": m["module_key"],
                     "provider": m["provider"]} for m in modules]
     limitations = ["Parecer gerado em modo simulado (mock); não substitui análise jurídica real."]
@@ -87,9 +94,9 @@ def generate_report(cur, org, case_id, user_id) -> dict:
         " (organization_id, case_id, status, version, summary, findings, legal_risks,"
         "  commercial_risks, reputational_risks, contractual_risks, missing_information,"
         "  recommendation, confidence, limitations, source_refs, generated_by, generated_at)"
-        " VALUES (%s,%s,'generated',1,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())"
+        " VALUES (%s,%s,'ready',1,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())"
         " ON CONFLICT (organization_id, case_id) DO UPDATE SET"
-        "  status='generated', version = public.case_reports.version + 1,"
+        "  status='ready', version = public.case_reports.version + 1,"
         "  summary=EXCLUDED.summary, findings=EXCLUDED.findings,"
         "  legal_risks=EXCLUDED.legal_risks, commercial_risks=EXCLUDED.commercial_risks,"
         "  reputational_risks=EXCLUDED.reputational_risks,"
@@ -100,14 +107,14 @@ def generate_report(cur, org, case_id, user_id) -> dict:
         "  generated_by=EXCLUDED.generated_by, generated_at=now(), updated_at=now()"
         f" RETURNING {_COLS}",
         (org, case_id, summary, Json(findings), Json(legal), Json(commercial),
-         Json(reputational), Json(contractual), Json(missing), _REC_TEXT[risk],
+         Json(reputational), Json(contractual), Json(missing), recommendation,
          confidence, Json(limitations), Json(source_refs), user_id))
     row = cur.fetchone()
 
     cur.execute(
         "UPDATE public.cases SET status='report_generated', progress=85,"
         " risk_level=%s, recommendation=%s WHERE id = %s",
-        (risk, _REC_CODE[risk], case_id))
+        (risk, recommendation, case_id))
     cur.execute(
         "INSERT INTO public.timeline_events"
         " (organization_id, case_id, event_type, title, description, actor)"
@@ -118,9 +125,15 @@ def generate_report(cur, org, case_id, user_id) -> dict:
 
 def review_report(cur, org, case_id, user_id, status, notes=None,
                   summary=None, recommendation=None):
-    """Revisão humana: status 'reviewed' ou 'approved'; permite editar summary/recommendation."""
-    fields = ["status = %s", "reviewed_by = %s", "reviewed_at = now()", "updated_at = now()"]
-    values: list = [status, user_id]
+    """Revisão humana: status 'reviewed' ou 'approved'; permite editar summary/recommendation.
+
+    O status do relatório segue o enum da referência: 'ready' (gerado). Só 'approved'
+    promove o estado (FE-válido); 'reviewed' apenas registra o revisor sem regredir o status.
+    """
+    fields = ["reviewed_by = %s", "reviewed_at = now()", "updated_at = now()"]
+    values: list = [user_id]
+    if status == "approved":
+        fields.insert(0, "status = 'approved'")
     if notes is not None:
         fields.append("review_notes = %s")
         values.append(notes)

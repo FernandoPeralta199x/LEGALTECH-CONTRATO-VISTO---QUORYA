@@ -285,7 +285,7 @@ def get_case_aggregate(event, context):
         "case_id": str(c["id"]), "organization_id": str(org),
         "parties_count": len(parties), "documents_count": len(documents),
         "timeline_count": len(timeline), "triage_status": _triage_status(triage),
-        "report_status": report["status"] if report else "not_generated",
+        "report_status": report["status"] if report else "not_started",
         "risk_level": c["risk_level"] or "unknown",
         "recommendation": c["recommendation"], "progress": c["progress"] or 0,
         "latest_event_at": latest_event_at, "source_mode": c["source_mode"] or "local",

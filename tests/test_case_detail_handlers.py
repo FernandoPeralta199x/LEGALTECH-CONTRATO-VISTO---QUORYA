@@ -233,13 +233,16 @@ def test_gerar_revisar_relatorio_e_aggregate(case_id):
     a = str(uuid.uuid4())
     tr_h.run_triage(_event(a, path={"caseId": case_id}), None)  # gera evidências
     rep = _data(rep_h.generate_case_report(_event(a, path={"caseId": case_id}), None))
-    assert rep["status"] == "generated" and rep["version"] == 1
-    assert rep["summary"] and rep["recommendation"]
+    assert rep["status"] == "ready" and rep["version"] == 1  # enum da referência
+    assert rep["summary"]
+    # recommendation é enum (não texto livre): casa com recommendationLabel do front
+    assert rep["recommendation"] in (
+        "proceed", "proceed_with_caution", "do_not_proceed", "human_review_required")
     assert len(rep["source_refs"]) == 8  # 8 módulos de analise_contratual
     # aparece no aggregate + summary.report_status
     agg = _data(cases_h.get_case_aggregate(_event(a, path={"caseId": case_id}), None))
-    assert agg["report"] and agg["report"]["status"] == "generated"
-    assert agg["summary"]["report_status"] == "generated"
+    assert agg["report"] and agg["report"]["status"] == "ready"
+    assert agg["summary"]["report_status"] == "ready"
     # regerar -> version 2 (idempotente por caso)
     assert _data(rep_h.generate_case_report(_event(a, path={"caseId": case_id}), None))["version"] == 2
     # revisão humana -> approved fecha o caso
