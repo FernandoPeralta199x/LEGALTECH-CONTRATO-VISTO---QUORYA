@@ -375,16 +375,21 @@ def update_case(event, context):
                 f"UPDATE public.cases SET {', '.join(fields)} WHERE id = %s",
                 tuple(values),
             )
-            updated = cur.rowcount
+            if not cur.rowcount:
+                return error_response(404, "Caso não encontrado")
+            cur.execute(
+                "SELECT id, client_id, case_type, status, priority, product_type,"
+                " product_label, title, code, risk_level, progress, source_mode,"
+                " request_id, created_by, assigned_to, created_at, completed_at,"
+                " metadata, submitted_at FROM public.cases WHERE id = %s", (case_id,))
+            row = cur.fetchone()
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_UPDATE_ERROR",
                                  "error": type(e).__name__,
                                  "pgcode": getattr(e, "pgcode", None)}))
         return error_response(500, "Erro ao atualizar caso")
-    if not updated:
-        return error_response(404, "Caso não encontrado")
     logger.info(json.dumps({"event": "CASE_UPDATED", "case_id": case_id}))
-    return success_response(200, "Caso atualizado com sucesso")
+    return success_response(200, "Caso atualizado com sucesso", _serialize(row))
 
 
 @require_user

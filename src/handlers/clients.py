@@ -145,14 +145,15 @@ def update_client(event, context):
                 f"UPDATE public.clients SET {', '.join(fields)} WHERE id = %s",
                 tuple(values),
             )
-            updated = cur.rowcount
+            if not cur.rowcount:
+                return error_response(404, "Cliente não encontrado")
+            cur.execute(_SELECT_COLS + " WHERE id = %s", (client_id,))
+            row = cur.fetchone()
     except Exception as e:
         logger.error(json.dumps({"event": "CLIENT_UPDATE_ERROR", "error": type(e).__name__}))
         return error_response(500, "Erro ao atualizar cliente")
-    if not updated:
-        return error_response(404, "Cliente não encontrado")
     logger.info(json.dumps({"event": "CLIENT_UPDATED", "client_id": client_id}))
-    return success_response(200, "Cliente atualizado com sucesso")
+    return success_response(200, "Cliente atualizado com sucesso", _serialize(row, user["role"]))
 
 
 @require_user

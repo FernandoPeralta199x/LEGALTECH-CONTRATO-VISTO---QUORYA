@@ -119,6 +119,11 @@ functions:
           method: put
           cors: true
           authorizer: ${self:custom.jwtAuthorizer}
+      - http:
+          path: cases/{caseId}
+          method: patch
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
 
   deleteCase:
     handler: src/handlers/cases.delete_case
@@ -163,6 +168,28 @@ functions:
       - http:
           path: cases/{caseId}/parties
           method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  createCaseParty:
+    handler: src/handlers/case_parties.create_case_party
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: cases/{caseId}/parties
+          method: post
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  updateCaseParty:
+    handler: src/handlers/case_parties.update_case_party
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: cases/{caseId}/parties/{partyId}
+          method: patch
           cors: true
           authorizer: ${self:custom.jwtAuthorizer}
 
@@ -458,6 +485,11 @@ functions:
       - http:
           path: clients/{clientId}
           method: put
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+      - http:
+          path: clients/{clientId}
+          method: patch
           cors: true
           authorizer: ${self:custom.jwtAuthorizer}
 

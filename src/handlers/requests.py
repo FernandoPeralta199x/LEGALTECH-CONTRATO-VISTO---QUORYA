@@ -182,14 +182,27 @@ def create_request(event, context):
     logger.info(json.dumps({"event": "REQUEST_CREATED",
                             "request_id": request_id, "case_id": case_id}))
     return success_response(201, "Pedido criado com sucesso", {
+        "id": request_id,
         "request_id": request_id,
+        "code": code,
         "case_id": case_id,
         "case_code": code,
+        "organization_id": org,
+        "created_by": uid,
         "product_type": data.product_type,
+        "product_label": product_label,
+        "title": title,
+        "description": data.description or "",
         "status": "awaiting_triage",
+        "request_status": "created",
+        "case_status": "awaiting_triage",
+        "source_mode": data.source_mode,
+        "idempotency_key": data.idempotency_key,
         "total_price_cents": est["total_price_cents"],
         "parties_count": party_count,
+        "documents_count": 1,
         "triage_modules_count": len(modules),
+        "timeline_events_count": len(timeline),
     })
 
 

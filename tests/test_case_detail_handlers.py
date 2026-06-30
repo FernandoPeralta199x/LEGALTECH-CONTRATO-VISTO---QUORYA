@@ -172,3 +172,26 @@ def test_aggregate_isolamento_404(case_id):
     b = str(uuid.uuid4())
     assert cases_h.get_case_aggregate(
         _event(b, path={"caseId": case_id}, org_id=OTHER_ORG), None)["statusCode"] == 404
+
+
+def test_criar_e_editar_parte(case_id):
+    a = str(uuid.uuid4())
+    created = _data(cp_h.create_case_party(_event(a, path={"caseId": case_id}, body={
+        "party_type": "testemunha", "name": "Maria Souza", "document": "98765432100",
+        "email": "maria@x.com", "phone": "11999998888", "person_type": "individual"}), None))
+    assert created["party_type"] == "testemunha" and created["name"] == "Maria Souza"
+    assert created["document"] is None and created["document_masked"] == "***.***.***-00"
+    assert created["email"] is None and created["email_masked"] == "m****@x.com"
+    pid = created["id"]
+    # agora há 3 partes (2 do wizard + 1 criada)
+    assert len(_data(cp_h.list_case_parties(_event(a, path={"caseId": case_id}), None))) == 3
+    upd = _data(cp_h.update_case_party(
+        _event(a, path={"caseId": case_id, "partyId": pid}, body={"name": "Maria S. Souza"}), None))
+    assert upd["name"] == "Maria S. Souza"
+
+
+def test_criar_parte_viewer_403(case_id):
+    v = str(uuid.uuid4())
+    assert cp_h.create_case_party(
+        _event(v, role="viewer", path={"caseId": case_id},
+               body={"party_type": "x", "name": "y"}), None)["statusCode"] == 403
