@@ -9,6 +9,7 @@ import psycopg2
 import pytest
 
 from src.handlers import case_results, cases, clients, documents, search, users
+from src.utils import lambda_io
 
 _UID = str(uuid.uuid4())
 
@@ -109,6 +110,44 @@ def test_sql_injection_in_text_is_neutralized(_clean_clients):
     # tabela sobreviveu (não foi dropada) e o valor é literal
     assert got["statusCode"] == 200
     assert json.loads(got["body"])["data"]["legal_name"] == evil
+
+
+# parse_json_body deve barrar valores que o Python aceita mas o Postgres rejeita
+# (NaN/Infinity no jsonb; null byte em text) — senão viram 500 no INSERT.
+def _body_ev(s):
+    return {"body": s}
+
+
+def test_parse_rejects_nan():
+    data, err = lambda_io.parse_json_body(_body_ev('{"x": NaN}'))
+    assert data is None and err["statusCode"] == 400
+
+
+def test_parse_rejects_infinity():
+    data, err = lambda_io.parse_json_body(_body_ev('{"x": Infinity}'))
+    assert data is None and err["statusCode"] == 400
+
+
+def test_parse_rejects_null_byte():
+    data, err = lambda_io.parse_json_body(_body_ev(json.dumps({"x": "a" + chr(0) + "b"})))
+    assert data is None and err["statusCode"] == 400
+
+
+def test_parse_accepts_normal_body():
+    data, err = lambda_io.parse_json_body(_body_ev('{"x": 1, "y": "ok"}'))
+    assert err is None and data == {"x": 1, "y": "ok"}
+
+
+def test_null_byte_in_valid_field_returns_400(_clean_clients):
+    # campo válido (legal_name) com null byte: deve dar 400, não 500
+    body = json.dumps({"legal_name": "a" + chr(0) + "b", "document_type": "cnpj",
+                       "document_number": "11.222.333/0001-81"})
+    assert clients.create_client(_ev(body), None)["statusCode"] == 400
+
+
+def test_page_overflow_does_not_500():
+    r = cases.list_cases(_ev(None, query={"page": "9" * 25}), None)
+    assert r["statusCode"] in (200, 400)  # nunca 500
 
 
 def test_unicode_preserved(_clean_clients):

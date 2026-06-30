@@ -13,6 +13,7 @@ import logging
 import secrets
 
 import bcrypt
+import psycopg2
 from pydantic import ValidationError
 
 from src.schemas.user_schemas import (
@@ -27,7 +28,7 @@ from src.services.email import email_service
 from src.utils.auth import create_access_token
 from src.utils.context import require_role, require_user
 from src.utils.helpers import error_response, generate_uuid, success_response
-from src.utils.lambda_io import fmt_validation_error as _fmt, parse_json_body as _parse_body, valid_uuid as _valid_uuid
+from src.utils.lambda_io import fmt_validation_error as _fmt, parse_json_body as _parse_body, parse_pagination as _paginate, valid_uuid as _valid_uuid
 from src.utils.safety import enforce_production_safety
 
 enforce_production_safety()
@@ -80,6 +81,9 @@ def create_user(event, context):
                 " VALUES (%s, %s, %s, %s, 'viewer', 'active')",
                 (user_id, data.email, hash_password(data.password), data.name),
             )
+    except psycopg2.errors.UniqueViolation:
+        # corrida: 2 signups simultâneos passam pelo SELECT; o índice único garante
+        return error_response(409, "Email já cadastrado")
     except Exception as e:
         logger.error(json.dumps({"event": "USER_CREATE_ERROR",
                                  "error": type(e).__name__,
@@ -160,7 +164,10 @@ def forgot_password(event, context):
                                  "error": type(e).__name__}))
         return error_response(500, "Erro ao solicitar reset")
 
-    email_service.send_reset_password_email(data.email, reset_token, user["name"])
+    sent = email_service.send_reset_password_email(data.email, reset_token, user["name"])
+    if not sent:  # falha de envio não muda a resposta (anti-enumeração), mas é logada
+        logger.error(json.dumps({"event": "PASSWORD_RESET_EMAIL_FAILED",
+                                 "user_id": str(user["id"])}))
     logger.info(json.dumps({"event": "PASSWORD_RESET_REQUESTED", "user_id": str(user["id"])}))
     return generic
 
@@ -235,12 +242,10 @@ def get_user(event, context):
 @require_role("admin")
 def list_users(event, context):
     params = event.get("queryStringParameters") or {}
-    try:
-        page = max(int(params.get("page", 1)), 1)
-        page_size = min(max(int(params.get("page_size", 50)), 1), 100)
-    except (ValueError, TypeError):
-        return error_response(400, "page/page_size inválidos")
-    offset = (page - 1) * page_size
+    pag, perr = _paginate(params)
+    if perr:
+        return perr
+    page, page_size, offset = pag
     try:
         with simple_tx() as cur:
             cur.execute(

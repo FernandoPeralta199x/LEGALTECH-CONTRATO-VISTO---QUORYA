@@ -32,6 +32,10 @@ provider:
       Resource: "arn:aws:s3:::${self:provider.environment.DOCUMENTS_BUCKET}/*"
     - Effect: Allow
       Action:
+        - ses:SendEmail
+      Resource: "*"
+    - Effect: Allow
+      Action:
         - ssm:GetParameter
       Resource: "arn:aws:ssm:sa-east-1:*:parameter/contrato-visto/*"
     - Effect: Allow

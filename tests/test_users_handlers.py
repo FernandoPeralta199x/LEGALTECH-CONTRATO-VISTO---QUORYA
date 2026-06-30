@@ -207,6 +207,13 @@ def test_forgot_unknown_email_is_generic(clean_users):
     assert u.forgot_password(_pub({"email": "naoexiste@b.c"}), None)["statusCode"] == 200
 
 
+def test_forgot_returns_200_even_if_send_fails(clean_users, monkeypatch):
+    # falha de envio não pode mudar a resposta (anti-enumeração); é só logada
+    _seed_user("a@b.c", "Senha123")
+    monkeypatch.setattr(u.email_service, "send_reset_password_email", lambda *a, **k: False)
+    assert u.forgot_password(_pub({"email": "a@b.c"}), None)["statusCode"] == 200
+
+
 def test_reset_invalid_token_400(clean_users):
     assert u.reset_password(_pub({"token": "x" * 30, "password": "NovaSenha9"}),
                             None)["statusCode"] == 400

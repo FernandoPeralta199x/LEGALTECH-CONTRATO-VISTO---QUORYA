@@ -1,5 +1,8 @@
-"""Helpers comuns de I/O dos handlers Lambda: parse do body, validação de UUID e
-formatação de erros do Pydantic. Centralizados aqui para evitar duplicação.
+"""Helpers comuns de I/O dos handlers Lambda: parse do body, validação de UUID,
+formatação de erros do Pydantic e paginação. Centralizados aqui para evitar
+duplicação e para barrar, num único ponto, inputs que o Python aceita mas o
+PostgreSQL rejeita (NaN/Infinity em jsonb, null byte em text) — que de outro modo
+virariam 500 no INSERT.
 """
 import json
 import uuid
@@ -8,20 +11,39 @@ from pydantic import ValidationError
 
 from src.utils.helpers import error_response
 
+_MAX_PAGE = 1_000_000  # teto de página (evita OFFSET que estoura bigint -> 500)
+
+
+def _reject_constant(token):
+    # json.loads aceita NaN/Infinity/-Infinity (extensão); jsonb do Postgres não.
+    raise ValueError(f"constante JSON não permitida: {token}")
+
+
+def _has_null_byte(obj):
+    """Detecta `\\x00` recursivamente (PostgreSQL rejeita null byte em text)."""
+    if isinstance(obj, str):
+        return "\x00" in obj
+    if isinstance(obj, dict):
+        return any(_has_null_byte(k) or _has_null_byte(v) for k, v in obj.items())
+    if isinstance(obj, list):
+        return any(_has_null_byte(x) for x in obj)
+    return False
+
 
 def parse_json_body(event):
     """Retorna ``(dict, None)`` em sucesso ou ``(None, error_response(400))``.
 
-    Garante que o corpo é um OBJETO JSON: um JSON válido porém não-objeto (array,
-    número, string, null, bool) faria ``Schema(**body)`` levantar ``TypeError`` (não
-    ``ValidationError``) → 500 não tratado. Aqui devolvemos 400 antes disso.
+    Garante objeto JSON e rejeita valores que quebrariam no banco (NaN/Infinity,
+    null byte), devolvendo 400 em vez de deixar virar 500.
     """
     try:
-        data = json.loads(event.get("body") or "{}")
-    except json.JSONDecodeError:
+        data = json.loads(event.get("body") or "{}", parse_constant=_reject_constant)
+    except (json.JSONDecodeError, ValueError):
         return None, error_response(400, "Corpo JSON inválido")
     if not isinstance(data, dict):
         return None, error_response(400, "Corpo JSON deve ser um objeto")
+    if _has_null_byte(data):
+        return None, error_response(400, "Corpo JSON contém caractere nulo inválido")
     return data, None
 
 
@@ -38,3 +60,18 @@ def fmt_validation_error(err: ValidationError) -> str:
     return ", ".join(
         f"{(e['loc'][0] if e['loc'] else '?')}: {e['msg']}" for e in err.errors()
     )
+
+
+def parse_pagination(params, default_size=50, max_size=100):
+    """Lê page/page_size com limites. Retorna ``((page, page_size, offset), None)``
+    ou ``(None, error_response(400))``. Aplica teto de página para evitar OFFSET
+    que estoura bigint no PostgreSQL (→ 500)."""
+    params = params or {}
+    try:
+        page = int(params.get("page", 1))
+        page_size = int(params.get("page_size", default_size))
+    except (ValueError, TypeError):
+        return None, error_response(400, "page/page_size inválidos")
+    page = min(max(page, 1), _MAX_PAGE)
+    page_size = min(max(page_size, 1), max_size)
+    return (page, page_size, (page - 1) * page_size), None

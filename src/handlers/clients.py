@@ -16,7 +16,7 @@ from src.schemas.client_schemas import ClientCreateSchema, ClientUpdateSchema
 from src.services.database import simple_tx
 from src.utils.context import require_user, require_writer
 from src.utils.helpers import error_response, success_response
-from src.utils.lambda_io import fmt_validation_error as _fmt, parse_json_body as _parse_body, valid_uuid as _valid_uuid
+from src.utils.lambda_io import fmt_validation_error as _fmt, parse_json_body as _parse_body, parse_pagination as _paginate, valid_uuid as _valid_uuid
 from src.utils.safety import enforce_production_safety
 
 enforce_production_safety()
@@ -84,12 +84,10 @@ def get_client(event, context):
 def list_clients(event, context):
     user = event["user"]
     params = event.get("queryStringParameters") or {}
-    try:
-        page = max(int(params.get("page", 1)), 1)
-        page_size = min(max(int(params.get("page_size", 50)), 1), 100)
-    except (ValueError, TypeError):
-        return error_response(400, "page/page_size inválidos")
-    offset = (page - 1) * page_size
+    pag, perr = _paginate(params)
+    if perr:
+        return perr
+    page, page_size, offset = pag
     try:
         with simple_tx() as cur:
             cur.execute(
