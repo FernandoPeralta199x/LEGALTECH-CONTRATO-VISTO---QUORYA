@@ -61,13 +61,15 @@ def authorize(event, context):
         payload = jwt.decode(token, JWT_SECRET, algorithms=['HS256'],
                              options={"require": ["exp"]})  # rejeita token sem expiração
         
+        organization_id = payload['organization_id']  # KeyError → token inválido → deny
+
         logger.info(json.dumps({
             "event": "AUTH_TOKEN_VALID",
             "user_id": payload['user_id'],
             "role": payload['role'],  # sem email (PII)
             "methodArn": event.get('methodArn')
         }))
-        
+
         # ✅ Se OK, retornar política de PERMISSÃO + dados do usuário
         return {
             'principalId': payload['user_id'],  # ID único (obrigatório)
@@ -83,7 +85,8 @@ def authorize(event, context):
             },
             'context': {  # sem email (menos PII propagada aos handlers)
                 'user_id': payload['user_id'],
-                'role': payload['role']
+                'role': payload['role'],
+                'organization_id': organization_id
             }
         }
     

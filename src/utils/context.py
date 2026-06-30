@@ -33,10 +33,12 @@ def get_user_from_event(event):
     try:
         ctx = _authorizer_claims(event)
         user_id = str(uuid.UUID(str(ctx["user_id"])))  # canoniza; exige UUID válido
+        organization_id = str(uuid.UUID(str(ctx["organization_id"])))  # exige org
         role = ctx["role"]
         if role not in VALID_ROLES:
             return None
-        return {"user_id": user_id, "email": ctx.get("email", ""), "role": role}
+        return {"user_id": user_id, "organization_id": organization_id,
+                "email": ctx.get("email", ""), "role": role}
     except (KeyError, ValueError, TypeError):
         return None
 
