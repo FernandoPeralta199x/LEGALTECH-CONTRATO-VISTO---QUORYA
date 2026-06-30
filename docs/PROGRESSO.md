@@ -85,8 +85,8 @@ docker start cv-pg18    # ou: docker run -d --name cv-pg18 -e POSTGRES_DB=contra
                         #     -p 5433:5432 pgvector/pgvector:pg18
 # 2) (se recriar) restaurar schema + role + policies
 docker exec -i cv-pg18 psql -U dbadmin -d contrato_visto < docs/schema_referencia.sql
-#   criar role cv_app (LOGIN, NÃO-owner) + grants; aplicar migrations/001_rls_policies.sql
-#   e migrations/002_fix_audit_delete.sql
+#   criar role cv_app (LOGIN, NÃO-owner) + grants; aplicar migrations/001_rls_policies.sql,
+#   migrations/002_fix_audit_delete.sql e migrations/003_perf_indexes.sql
 # 3) venv + deps
 cd apps/api ... (este repo)  python -m venv .venv
 .venv/Scripts/python -m pip install psycopg2-binary python-dotenv pydantic PyJWT bcrypt email-validator pytest
