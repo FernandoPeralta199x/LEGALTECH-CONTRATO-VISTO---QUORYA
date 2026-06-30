@@ -11,12 +11,17 @@ RISK_LEVEL_PATTERN = "^(low|medium|high|critical)$"
 
 
 class CaseCreate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    # tolerante ao payload do "Criar caso rápido" do front (title/product/notes vêm
+    # dentro de metadata); extras desconhecidos são ignorados, não rejeitados.
+    model_config = ConfigDict(extra="ignore")
 
     client_id: str
     case_type: str = Field(..., pattern=CASE_TYPE_PATTERN)
     priority: str = Field(default="normal", pattern=PRIORITY_PATTERN)
     description: Optional[str] = None  # gravado em cases.metadata (jsonb)
+    title: Optional[str] = Field(default=None, max_length=255)
+    product_type: Optional[str] = Field(default=None, max_length=40)
+    metadata: Optional[dict] = None  # caso rápido: {title, product, notes, source}
 
 
 class CaseUpdate(BaseModel):

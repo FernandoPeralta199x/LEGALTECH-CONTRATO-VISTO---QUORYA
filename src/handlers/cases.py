@@ -13,6 +13,7 @@ from pydantic import ValidationError
 
 from src.schemas.case_schemas import CaseCreate, CaseUpdate
 from src.services.database import tenant_tx
+from src.handlers.requests import _next_request_code
 from src.utils.context import require_user, require_writer
 from src.services.report_generator import get_report as _get_report
 from src.utils.pii import mask_document, mask_email, mask_phone
@@ -47,7 +48,16 @@ def create_case(event, context):
     client_id = _valid_uuid(data.client_id)
     if not client_id:
         return error_response(400, "client_id inválido")
-    metadata = {"description": data.description} if data.description else None
+    # "Criar caso rápido": title/product/notes chegam dentro de metadata
+    meta_in = data.metadata or {}
+    title = (data.title or meta_in.get("title") or "").strip() or None
+    product = data.product_type or meta_in.get("product")
+    notes = (meta_in.get("notes") or "").strip() or None
+    description = data.description or notes
+    stored_meta = {k: v for k, v in {
+        "description": description, "notes": notes,
+        "source": meta_in.get("source", "api"),
+    }.items() if v}
 
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
@@ -59,16 +69,19 @@ def create_case(event, context):
                 raise _ClientNotFound()
             if crow["status"] != "active":
                 raise _ClientInactive()
+            code = _next_request_code(cur, user["organization_id"])
             cur.execute(
                 "INSERT INTO public.cases"
-                " (organization_id, client_id, case_type, priority, created_by, metadata)"
-                " VALUES (%s, %s, %s, %s, %s, %s)"
+                " (organization_id, client_id, case_type, priority, created_by, metadata,"
+                "  title, product_type, code, source_mode)"
+                " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'local')"
                 " RETURNING id, client_id, case_type, status, priority, product_type,"
                 " product_label, title, code, risk_level, progress, source_mode,"
                 " request_id, created_by, assigned_to, created_at, completed_at,"
                 " metadata, submitted_at",
                 (user["organization_id"], client_id, data.case_type, data.priority,
-                 user["user_id"], Json(metadata) if metadata else None),
+                 user["user_id"], Json(stored_meta) if stored_meta else None,
+                 title, product, code),
             )
             row = cur.fetchone()
     except _ClientNotFound:
