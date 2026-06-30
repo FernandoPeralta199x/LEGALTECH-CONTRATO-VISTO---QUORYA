@@ -70,6 +70,52 @@ def _upload(user_id, case_id, role="analyst", org_id=SYSTEM_ORG, **over):
     return d.upload_document(_event(user_id, role, body=body, org_id=org_id), None)
 
 
+def test_process_document_ingestao_e_idempotencia(client_id):
+    # SP2: OCR -> chunking -> embeddings, idempotente (limpa-e-regera)
+    a = str(uuid.uuid4())
+    case_id = _make_case(a, client_id)
+    doc_id = _data(_upload(a, case_id, file_size_bytes=1024))["document_id"]
+
+    out = _data(d.process_document(_event(a, path={"docId": doc_id}), None))
+    assert out["status"] == "done" and out["chunks"] >= 1
+    assert out["embeddings"] == out["chunks"]
+
+    conn = _admin_conn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM public.document_chunks WHERE document_id=%s", (doc_id,))
+        n_chunks = cur.fetchone()[0]
+        cur.execute("SELECT count(*) FROM public.document_embeddings WHERE document_id=%s", (doc_id,))
+        n_emb = cur.fetchone()[0]
+        cur.execute("SELECT ocr_status, extraction_status FROM public.documents WHERE id=%s", (doc_id,))
+        st = cur.fetchone()
+    conn.close()
+    assert n_chunks == out["chunks"] and n_emb == out["chunks"]
+    assert st == ("done", "done")
+
+    # reprocessar NÃO duplica (idempotente)
+    out2 = _data(d.process_document(_event(a, path={"docId": doc_id}), None))
+    assert out2["chunks"] == out["chunks"]
+    conn = _admin_conn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM public.document_chunks WHERE document_id=%s", (doc_id,))
+        assert cur.fetchone()[0] == n_chunks
+        cur.execute("SELECT count(*) FROM public.document_embeddings WHERE document_id=%s", (doc_id,))
+        assert cur.fetchone()[0] == n_emb
+    conn.close()
+
+
+def test_process_document_404(client_id):
+    a = str(uuid.uuid4())
+    assert d.process_document(
+        _event(a, path={"docId": str(uuid.uuid4())}), None)["statusCode"] == 404
+
+
+def test_viewer_nao_processa(client_id):
+    v = str(uuid.uuid4())
+    assert d.process_document(
+        _event(v, role="viewer", path={"docId": str(uuid.uuid4())}), None)["statusCode"] == 403
+
+
 def test_upload_and_get(client_id):
     a = str(uuid.uuid4())
     case_id = _make_case(a, client_id)

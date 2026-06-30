@@ -328,6 +328,23 @@ functions:
           cors: true
           authorizer: ${self:custom.jwtAuthorizer}
 
+  # SP2 - ingestão: OCR -> chunking -> embeddings (idempotente, mock-first)
+  processDocument:
+    handler: src/handlers/documents.process_document
+    timeout: 60
+    memorySize: 1024
+    events:
+      - http:
+          path: documents/{docId}/process
+          method: post
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+      - http:
+          path: documents/{docId}/enqueue-processing
+          method: post
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
   searchClauses:
     handler: src/handlers/search.search_clauses
     timeout: 10

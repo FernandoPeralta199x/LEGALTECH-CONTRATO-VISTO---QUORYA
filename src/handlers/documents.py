@@ -13,8 +13,12 @@ import uuid
 
 from pydantic import ValidationError
 
+from src.adapters.ocr import create_ocr_adapter
 from src.schemas.document_schemas import DocumentUploadSchema
+from src.services.chunking import chunk_text
 from src.services.database import tenant_tx
+from src.services.embeddings import embeddings_service
+from src.services.rag import store_chunk, store_embedding
 from src.services.storage import storage_service
 from src.utils.context import require_user, require_writer
 from src.utils.helpers import error_response, success_response
@@ -94,6 +98,70 @@ def upload_document(event, context):
         "s3_path": s3_key,
         "expires_in": storage_service.expires,
         "created_at": str(row["created_at"]),
+    })
+
+
+@require_user
+@require_writer
+def process_document(event, context):
+    """Ingestão do documento (SP2), idempotente: OCR -> chunking -> embeddings,
+    gravando document_chunks/document_embeddings. Mock-first (Textract/Bedrock na
+    fase AWS). Limpa-e-regera: apaga chunks/embeddings anteriores antes de gerar.
+    """
+    user = event["user"]
+    org = user["organization_id"]
+    doc_id = _valid_uuid((event.get("pathParameters") or {}).get("docId"))
+    if not doc_id:
+        return error_response(400, "docId inválido")
+    try:
+        with tenant_tx(user["user_id"], user["role"], org) as cur:
+            cur.execute(
+                "SELECT id, s3_path, file_type FROM public.documents WHERE id = %s", (doc_id,))
+            doc = cur.fetchone()
+            if not doc:
+                return error_response(404, "Documento não encontrado")
+            # idempotência (limpa-e-regera): remove embeddings antes dos chunks (FK)
+            cur.execute("DELETE FROM public.document_embeddings WHERE document_id = %s", (doc_id,))
+            cur.execute("DELETE FROM public.document_chunks WHERE document_id = %s", (doc_id,))
+
+            ocr = create_ocr_adapter()
+            res = ocr.extract_text(doc["s3_path"] or f"local/{doc_id}",
+                                   _content_type(doc.get("file_type") or "pdf"))
+            if not res.success or not res.data.get("text"):
+                cur.execute("UPDATE public.documents SET ocr_status='failed',"
+                            " extraction_status='failed' WHERE id = %s", (doc_id,))
+                return error_response(502, "Falha na extração de texto (OCR)")
+
+            text = res.data["text"]
+            pages = res.data.get("pages")
+            chunks = chunk_text(text)
+            for i, ch in enumerate(chunks):
+                chunk_id = store_chunk(cur, org, doc_id, i, ch, start_page=1, end_page=pages)
+                emb = embeddings_service.embed(ch)
+                store_embedding(cur, org, doc_id, chunk_id, ch, emb,
+                                segment_type="chunk", embedding_model=embeddings_service.model)
+            cur.execute(
+                "UPDATE public.documents SET ocr_status='done', extraction_status='done'"
+                " WHERE id = %s", (doc_id,))
+    except Exception as e:
+        logger.error(json.dumps({"event": "DOCUMENT_PROCESS_ERROR", "error": type(e).__name__,
+                                 "pgcode": getattr(e, "pgcode", None)}))
+        return error_response(500, "Erro ao processar documento")
+
+    logger.info(json.dumps({"event": "DOCUMENT_PROCESSED", "document_id": doc_id,
+                            "chunks": len(chunks)}))
+    return success_response(200, "Documento processado", {
+        "document_id": doc_id,
+        "status": "done",
+        # campos p/ o contrato enqueue-processing do frontend (execução síncrona
+        # por ora; a fila real (SQS) é o SP1):
+        "job_id": f"sync-{doc_id}",
+        "queue_backend": "inline",
+        "pages": pages,
+        "chunks": len(chunks),
+        "embeddings": len(chunks),
+        "ocr_source": res.source,
+        "embedding_model": embeddings_service.model,
     })
 
 
