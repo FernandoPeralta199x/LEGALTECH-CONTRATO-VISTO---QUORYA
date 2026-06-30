@@ -42,7 +42,9 @@ def create_client(event, context):
                 " (organization_id, legal_name, document_type, document_number, email, phone,"
                 "  address_street, address_city, address_state, address_zip)"
                 " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
-                " RETURNING id, status, created_at",
+                " RETURNING id, legal_name, document_type, document_number, email, phone,"
+                " address_street, address_city, address_state, address_zip, status,"
+                " created_at, updated_at",
                 (user["organization_id"], data.legal_name, data.document_type,
                  data.document_number, data.email, data.phone, data.address_street,
                  data.address_city, data.address_state, data.address_zip),
@@ -57,10 +59,7 @@ def create_client(event, context):
         return error_response(500, "Erro ao criar cliente")
 
     logger.info(json.dumps({"event": "CLIENT_CREATED", "client_id": str(row["id"])}))
-    return success_response(201, "Cliente criado com sucesso", {
-        "id": str(row["id"]), "status": row["status"],
-        "created_at": str(row["created_at"]),
-    })
+    return success_response(201, "Cliente criado com sucesso", _serialize(row, user["role"]))
 
 
 @require_user

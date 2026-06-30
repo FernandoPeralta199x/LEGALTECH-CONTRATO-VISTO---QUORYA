@@ -106,7 +106,7 @@ def get_document(event, context):
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
             cur.execute(
                 "SELECT id, case_id, s3_path, file_name, file_type, file_size_bytes,"
-                " file_hash, ocr_status, extraction_status, document_classification,"
+                " file_hash, ocr_status, extraction_status, uploaded_by,"
                 " created_at FROM public.documents WHERE id = %s",
                 (doc_id,),
             )
@@ -119,10 +119,36 @@ def get_document(event, context):
         return error_response(404, "Documento não encontrado")
 
     download_url = storage_service.presign_get(row["s3_path"]) if row["s3_path"] else None
-    data = _serialize(row)
+    # shape V2 esperado pelo frontend (mapBackendDocument) + url de download
+    data = _serialize_v2(row)
     data["download_url"] = download_url
     data["expires_in"] = storage_service.expires
     return success_response(200, "Documento encontrado", data)
+
+
+@require_user
+def get_document_download_url(event, context):
+    """URL pré-assinada de download (shape DocumentDownloadUrl do frontend)."""
+    user = event["user"]
+    doc_id = _valid_uuid((event.get("pathParameters") or {}).get("docId"))
+    if not doc_id:
+        return error_response(400, "docId inválido")
+    try:
+        with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
+            cur.execute("SELECT s3_path FROM public.documents WHERE id = %s", (doc_id,))
+            row = cur.fetchone()
+    except Exception as e:
+        logger.error(json.dumps({"event": "DOCUMENT_DOWNLOAD_URL_ERROR",
+                                 "error": type(e).__name__}))
+        return error_response(500, "Erro ao gerar URL de download")
+    if not row:
+        return error_response(404, "Documento não encontrado")
+    url = storage_service.presign_get(row["s3_path"]) if row["s3_path"] else None
+    return success_response(200, "URL de download", {
+        "url": url,
+        "expires_in_seconds": storage_service.expires,
+        "method": "GET",
+    })
 
 
 @require_user

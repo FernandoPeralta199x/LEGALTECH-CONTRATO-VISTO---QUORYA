@@ -62,7 +62,10 @@ def create_case(event, context):
                 "INSERT INTO public.cases"
                 " (organization_id, client_id, case_type, priority, created_by, metadata)"
                 " VALUES (%s, %s, %s, %s, %s, %s)"
-                " RETURNING id, status, created_at",
+                " RETURNING id, client_id, case_type, status, priority, product_type,"
+                " product_label, title, code, risk_level, progress, source_mode,"
+                " request_id, created_by, assigned_to, created_at, completed_at,"
+                " metadata, submitted_at",
                 (user["organization_id"], client_id, data.case_type, data.priority,
                  user["user_id"], Json(metadata) if metadata else None),
             )
@@ -81,10 +84,7 @@ def create_case(event, context):
         "event": "CASE_CREATED", "case_id": str(row["id"]),
         "created_by": user["user_id"],
     }))
-    return success_response(201, "Caso criado com sucesso", {
-        "id": str(row["id"]), "status": row["status"],
-        "created_at": str(row["created_at"]),
-    })
+    return success_response(201, "Caso criado com sucesso", _serialize(row))
 
 
 @require_user

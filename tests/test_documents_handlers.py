@@ -80,8 +80,12 @@ def test_upload_and_get(client_id):
     doc_id = out["document_id"]
 
     got = _data(d.get_document(_event(a, path={"docId": doc_id}), None))
-    assert got["file_name"] == "contrato.pdf" and got["ocr_status"] == "pending"
+    # get_document agora retorna o shape V2 (filename/status) esperado pelo frontend
+    assert got["filename"] == "contrato.pdf" and got["status"] == "pending"
     assert got["download_url"].startswith("https://")
+    # download-url dedicado
+    du = _data(d.get_document_download_url(_event(a, path={"docId": doc_id}), None))
+    assert du["url"].startswith("https://") and du["method"] == "GET"
 
 
 def test_upload_requires_visible_case(client_id):
