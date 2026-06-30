@@ -720,7 +720,7 @@ resources:
       Type: AWS::SQS::Queue
       Properties:
         QueueName: contrato-visto-doc-processing-${self:provider.stage}
-        VisibilityTimeout: 180   # >= 6x o timeout (120s) da Lambda worker
+        VisibilityTimeout: 720   # >= 6x o timeout (120s) da Lambda worker (recomendação AWS)
         MessageRetentionPeriod: 345600  # 4 dias
         RedrivePolicy:
           deadLetterTargetArn: !GetAtt DocumentProcessingDLQ.Arn

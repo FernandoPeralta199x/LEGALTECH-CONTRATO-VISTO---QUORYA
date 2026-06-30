@@ -13,8 +13,10 @@ from src.handlers import documents as doc_h
 from src.handlers import requests as req_h
 from src.handlers import worker as worker_h
 from src.schemas.queue_schemas import DocumentProcessingJob
+from src.services import agent_executions as ae
 from src.services import document_worker
 from src.services.database import tenant_tx
+from src.services.document_ingestion import OcrFailed
 
 SYSTEM_ORG = "00000000-0000-0000-0000-000000000001"
 
@@ -79,6 +81,15 @@ def _count(sql, params):
         n = cur.fetchone()[0]
     conn.close()
     return n
+
+
+def _rows(sql, params):
+    conn = _admin_conn()
+    with conn.cursor() as cur:
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+    conn.close()
+    return rows
 
 
 @pytest.fixture()
@@ -169,13 +180,65 @@ def test_job_falha_quando_documento_inexistente(ctx):
                   (str(job.job_id),)) == 1
 
 
-def test_falha_de_ingestao_marca_failed(ctx):
-    def _boom(cur, org, doc_id):
-        raise RuntimeError("ocr_down")
+def test_falha_deterministica_ocr_marca_failed_e_ack(ctx):
+    def _ocr_fail(cur, org, doc_id):
+        raise OcrFailed(str(doc_id))
     job = _job(ctx)
     with tenant_tx(ctx["admin"], "admin", SYSTEM_ORG) as cur:
-        r = document_worker.process_job(cur, SYSTEM_ORG, job, ingest=_boom)
-    assert r.status == "failed" and r.reason == "RuntimeError"
+        r = document_worker.process_job(cur, SYSTEM_ORG, job, ingest=_ocr_fail)
+    assert r.status == "failed" and r.reason == "OcrFailed"
+    # determinística: o registro 'failed' persiste (ack, sem retry)
+    assert _count("SELECT count(*) FROM public.agent_executions WHERE job_id=%s AND status='failed'",
+                  (str(job.job_id),)) == 1
+
+
+def test_falha_transitoria_propaga_e_faz_rollback(ctx):
+    def _boom(cur, org, doc_id):
+        raise RuntimeError("infra_down")  # transitória: deve PROPAGAR
+    job = _job(ctx)
+    with pytest.raises(RuntimeError):
+        with tenant_tx(ctx["admin"], "admin", SYSTEM_ORG) as cur:
+            document_worker.process_job(cur, SYSTEM_ORG, job, ingest=_boom)
+    # rollback total: nem execução nem chunks persistem
+    assert _count("SELECT count(*) FROM public.agent_executions WHERE job_id=%s",
+                  (str(job.job_id),)) == 0
+    assert _count("SELECT count(*) FROM public.document_chunks WHERE document_id=%s",
+                  (ctx["doc_id"],)) == 0
+
+
+def test_falha_transitoria_nao_deixa_chunks_parciais(ctx):
+    def _parcial(cur, org, doc_id):
+        # grava 1 chunk e então falha (simula embed cair no meio do loop)
+        cur.execute("INSERT INTO public.document_chunks"
+                    " (organization_id, document_id, chunk_index, chunk_text)"
+                    " VALUES (%s,%s,0,'parcial')", (SYSTEM_ORG, str(doc_id)))
+        raise RuntimeError("embed_down")
+    job = _job(ctx)
+    with pytest.raises(RuntimeError):
+        with tenant_tx(ctx["admin"], "admin", SYSTEM_ORG) as cur:
+            document_worker.process_job(cur, SYSTEM_ORG, job, ingest=_parcial)
+    assert _count("SELECT count(*) FROM public.document_chunks WHERE document_id=%s",
+                  (ctx["doc_id"],)) == 0
+
+
+def test_job_already_running_skip(ctx):
+    job = _job(ctx)
+    # cria a execução e a deixa 'running' (em andamento)
+    with tenant_tx(ctx["admin"], "admin", SYSTEM_ORG) as cur:
+        ex = ae.create_queued(cur, SYSTEM_ORG, job)
+        ae.mark_running(cur, ex["id"], job.attempt)
+    # mesmo job_id chega de novo -> skipped (job_already_running)
+    with tenant_tx(ctx["admin"], "admin", SYSTEM_ORG) as cur:
+        r = document_worker.process_job(cur, SYSTEM_ORG, job)
+    assert r.status == "skipped" and r.reason == "job_already_running"
+
+
+def test_timeline_de_auditoria_registrada(ctx):
+    with tenant_tx(ctx["admin"], "admin", SYSTEM_ORG) as cur:
+        document_worker.process_job(cur, SYSTEM_ORG, _job(ctx))
+    tipos = {r[0] for r in _rows(
+        "SELECT event_type FROM public.timeline_events WHERE case_id=%s", (ctx["case_id"],))}
+    assert {"document_processing_started", "document_processed"} <= tipos
 
 
 def test_max_attempts_excedido(ctx):
