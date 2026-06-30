@@ -167,6 +167,9 @@ Achados confirmados em runtime (são REGRA, não bug de runtime — decisão do 
    e troca de status livre. Definir **matriz de transição** + bloquear escrita em case
    finalizado? (B4 do laudo). Decisão de produto.
 
+✅ **B1/B3/B4 IMPLEMENTADOS** (29/06, commit `27a7757`): B3 → 409 cliente inativo;
+B4 → 409 escrita em case finalizado; B1 → 409 anti-lockout do último admin. **141 testes.**
+
 ### Corrigidos na varredura #4
 - **B5** `completed_at` agora setado/limpo conforme status (era sempre NULL).
 - **B6** token de reset único por usuário (migration 004 UNIQUE + upsert atômico).
