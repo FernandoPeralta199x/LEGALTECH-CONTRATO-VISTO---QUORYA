@@ -112,7 +112,7 @@ def generate_report(cur, org, case_id, user_id) -> dict:
     row = cur.fetchone()
 
     cur.execute(
-        "UPDATE public.cases SET status='report_generated', progress=85,"
+        "UPDATE public.cases SET status='report_ready', progress=85,"
         " risk_level=%s, recommendation=%s WHERE id = %s",
         (risk, recommendation, case_id))
     cur.execute(
