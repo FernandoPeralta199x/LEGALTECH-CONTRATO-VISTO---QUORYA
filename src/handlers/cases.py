@@ -26,6 +26,10 @@ class _ClientNotFound(Exception):
     """O client_id informado não existe."""
 
 
+class _ClientInactive(Exception):
+    """O client_id existe mas está inativo (não aceita novos casos)."""
+
+
 @require_user
 @require_writer
 def create_case(event, context):
@@ -45,10 +49,14 @@ def create_case(event, context):
 
     try:
         with tenant_tx(user["user_id"], user["role"]) as cur:
-            # Valida a existência do cliente para evitar erro de FK (→ 500 opaco).
-            cur.execute("SELECT 1 FROM public.clients WHERE id = %s", (client_id,))
-            if cur.fetchone() is None:
+            # Cliente deve existir (evita FK→500) e estar ATIVO (não criar caso
+            # para cliente desativado).
+            cur.execute("SELECT status FROM public.clients WHERE id = %s", (client_id,))
+            crow = cur.fetchone()
+            if crow is None:
                 raise _ClientNotFound()
+            if crow["status"] != "active":
+                raise _ClientInactive()
             cur.execute(
                 "INSERT INTO public.cases"
                 " (client_id, case_type, priority, created_by, metadata)"
@@ -60,6 +68,8 @@ def create_case(event, context):
             row = cur.fetchone()
     except _ClientNotFound:
         return error_response(400, "client_id inexistente")
+    except _ClientInactive:
+        return error_response(409, "cliente inativo não aceita novos casos")
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_CREATE_ERROR",
                                  "error": type(e).__name__,

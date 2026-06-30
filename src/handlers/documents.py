@@ -28,6 +28,10 @@ class _CaseNotVisible(Exception):
     """O case referenciado não existe ou não é visível ao usuário (RLS)."""
 
 
+class _CaseFinalized(Exception):
+    """O case existe mas está finalizado (completed/closed) — não aceita upload."""
+
+
 @require_user
 @require_writer
 def upload_document(event, context):
@@ -57,7 +61,8 @@ def upload_document(event, context):
                 "  file_size_bytes, file_hash, document_classification,"
                 "  ocr_status, extraction_status, uploaded_by)"
                 " SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', 'pending', %s"
-                " WHERE EXISTS (SELECT 1 FROM public.cases WHERE id = %s)"
+                " WHERE EXISTS (SELECT 1 FROM public.cases WHERE id = %s"
+                "               AND status NOT IN ('completed','closed'))"
                 " RETURNING id, created_at",
                 (doc_id, case_id, s3_url, s3_key, data.file_name, data.file_type,
                  data.file_size_bytes, data.file_hash, data.document_classification,
@@ -65,9 +70,14 @@ def upload_document(event, context):
             )
             row = cur.fetchone()
             if row is None:
-                raise _CaseNotVisible()
+                cur.execute("SELECT 1 FROM public.cases WHERE id = %s", (case_id,))
+                if cur.fetchone() is None:
+                    raise _CaseNotVisible()
+                raise _CaseFinalized()
     except _CaseNotVisible:
         return error_response(404, "Caso não encontrado ou sem acesso")
+    except _CaseFinalized:
+        return error_response(409, "caso finalizado não aceita novos documentos")
     except Exception as e:
         logger.error(json.dumps({"event": "DOCUMENT_UPLOAD_ERROR",
                                  "error": type(e).__name__,

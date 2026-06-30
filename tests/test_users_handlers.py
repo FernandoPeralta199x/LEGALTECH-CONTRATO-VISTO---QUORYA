@@ -166,6 +166,30 @@ def test_admin_can_change_role(clean_users):
     assert _row_role(uid) == "analyst"
 
 
+def test_cannot_demote_last_admin(clean_users):
+    # B1: rebaixar o único admin é bloqueado (evita lockout)
+    admin = _seed_user("admin@b.c", "Senha123", role="admin")
+    resp = u.update_user(_event(admin, role="admin", path={"userId": admin},
+                                body={"role": "viewer"}), None)
+    assert resp["statusCode"] == 409
+    assert _row_role(admin) == "admin"
+
+
+def test_cannot_delete_last_admin(clean_users):
+    admin = _seed_user("admin@b.c", "Senha123", role="admin")
+    resp = u.delete_user(_event(str(uuid.uuid4()), role="admin", path={"userId": admin}), None)
+    assert resp["statusCode"] == 409
+
+
+def test_can_demote_admin_when_another_exists(clean_users):
+    a1 = _seed_user("a1@b.c", "Senha123", role="admin")
+    a2 = _seed_user("a2@b.c", "Senha123", role="admin")
+    resp = u.update_user(_event(a2, role="admin", path={"userId": a1},
+                                body={"role": "analyst"}), None)
+    assert resp["statusCode"] == 200
+    assert _row_role(a1) == "analyst"
+
+
 def test_delete_user_is_soft_and_admin_only(clean_users):
     uid = _seed_user("a@b.c", "Senha123")
     assert u.delete_user(_event(str(uuid.uuid4()), role="viewer", path={"userId": uid}),

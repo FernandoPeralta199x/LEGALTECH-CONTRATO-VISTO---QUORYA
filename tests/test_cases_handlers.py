@@ -236,6 +236,30 @@ def test_case_result_get_nonexistent_404(client_id):
                                 None)["statusCode"] == 404
 
 
+def test_create_case_inactive_client_409(client_id):
+    # B3: cliente inativo não aceita novos casos
+    conn = _admin_conn()
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute("UPDATE public.clients SET status='inactive' WHERE id=%s", (client_id,))
+    conn.close()
+    a = str(uuid.uuid4())
+    resp = cases_h.create_case(
+        _event(a, body={"client_id": client_id, "case_type": "contract_analysis"}), None)
+    assert resp["statusCode"] == 409
+
+
+def test_case_result_blocked_on_finalized_case(client_id):
+    # B4: case completed/closed não aceita novos resultados
+    a = str(uuid.uuid4())
+    case_id = _data(_make_case(a, client_id))["id"]
+    cases_h.update_case(_event(a, path={"caseId": case_id}, body={"status": "completed"}), None)
+    resp = cr_h.create_case_result(
+        _event(a, body={"case_id": case_id, "result_type": "dd",
+                        "findings": {}, "risk_level": "low"}), None)
+    assert resp["statusCode"] == 409
+
+
 def test_delete_case_audit_records_resource_id(client_id):
     # Migration 002: auditoria de DELETE registra o resource_id (era NULL antes).
     a = str(uuid.uuid4())

@@ -59,6 +59,20 @@ def _token_hash(raw: str) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+class _LastAdmin(Exception):
+    """A operação deixaria o sistema sem nenhum administrador ativo."""
+
+
+def _is_last_active_admin(cur, target_id) -> bool:
+    """True se `target_id` é admin ativo e é o ÚNICO admin ativo do sistema."""
+    cur.execute("SELECT role, status FROM public.users WHERE id = %s", (target_id,))
+    t = cur.fetchone()
+    if not t or t["role"] != "admin" or t["status"] != "active":
+        return False
+    cur.execute("SELECT count(*) AS n FROM public.users WHERE role='admin' AND status='active'")
+    return cur.fetchone()["n"] <= 1
+
+
 # ── rotas públicas ───────────────────────────────────────────────────────────
 def create_user(event, context):
     """Signup PÚBLICO. Cria sempre como `viewer` (menor privilégio)."""
@@ -298,13 +312,19 @@ def update_user(event, context):
     fields.append("updated_at = NOW()")
     values.append(target)
 
+    demoting = user["role"] == "admin" and data.role is not None and data.role != "admin"
+    deactivating = user["role"] == "admin" and data.status == "inactive"
     try:
         with simple_tx() as cur:
+            if (demoting or deactivating) and _is_last_active_admin(cur, target):
+                raise _LastAdmin()
             cur.execute(
                 f"UPDATE public.users SET {', '.join(fields)} WHERE id = %s",
                 tuple(values),
             )
             updated = cur.rowcount
+    except _LastAdmin:
+        return error_response(409, "não é possível rebaixar/desativar o último administrador")
     except Exception as e:
         logger.error(json.dumps({"event": "USER_UPDATE_ERROR", "error": type(e).__name__}))
         return error_response(500, "Erro ao atualizar usuário")
@@ -324,12 +344,16 @@ def delete_user(event, context):
         return error_response(400, "userId inválido")
     try:
         with simple_tx() as cur:
+            if _is_last_active_admin(cur, target):
+                raise _LastAdmin()
             cur.execute(
                 "UPDATE public.users SET status = 'inactive', updated_at = NOW()"
                 " WHERE id = %s",
                 (target,),
             )
             updated = cur.rowcount
+    except _LastAdmin:
+        return error_response(409, "não é possível desativar o último administrador")
     except Exception as e:
         logger.error(json.dumps({"event": "USER_DELETE_ERROR", "error": type(e).__name__}))
         return error_response(500, "Erro ao deletar usuário")

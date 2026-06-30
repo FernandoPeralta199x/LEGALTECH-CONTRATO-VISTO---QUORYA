@@ -25,6 +25,10 @@ class _CaseNotVisible(Exception):
     """O case referenciado não existe ou não é visível ao usuário (RLS)."""
 
 
+class _CaseFinalized(Exception):
+    """O case existe mas está finalizado (completed/closed) — não aceita escrita."""
+
+
 @require_user
 @require_writer
 def create_case_result(event, context):
@@ -51,7 +55,8 @@ def create_case_result(event, context):
                 "  confidence_score, summary_text, detailed_findings,"
                 "  recommendations, created_by)"
                 " SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s, %s"
-                " WHERE EXISTS (SELECT 1 FROM public.cases WHERE id = %s)"
+                " WHERE EXISTS (SELECT 1 FROM public.cases WHERE id = %s"
+                "               AND status NOT IN ('completed','closed'))"
                 " RETURNING id, created_at",
                 (case_id, data.result_type, data.result_title, Json(data.findings),
                  data.risk_level, data.confidence_score, data.summary_text,
@@ -60,9 +65,15 @@ def create_case_result(event, context):
             )
             row = cur.fetchone()
             if row is None:
-                raise _CaseNotVisible()
+                # distingue caso inexistente/sem acesso de caso finalizado
+                cur.execute("SELECT 1 FROM public.cases WHERE id = %s", (case_id,))
+                if cur.fetchone() is None:
+                    raise _CaseNotVisible()
+                raise _CaseFinalized()
     except _CaseNotVisible:
         return error_response(404, "Caso não encontrado ou sem acesso")
+    except _CaseFinalized:
+        return error_response(409, "caso finalizado não aceita novos resultados")
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_RESULT_CREATE_ERROR",
                                  "error": type(e).__name__,

@@ -112,5 +112,13 @@ def test_invalid_file_type_400(client_id):
     assert _upload(a, case_id, file_type="exe")["statusCode"] == 400
 
 
+def test_upload_blocked_on_finalized_case(client_id):
+    # B4: case finalizado (completed) não aceita novos documentos
+    a = str(uuid.uuid4())
+    case_id = _make_case(a, client_id)
+    cases_h.update_case(_event(a, path={"caseId": case_id}, body={"status": "completed"}), None)
+    assert _upload(a, case_id)["statusCode"] == 409
+
+
 def test_unauthenticated_blocked(client_id):
     assert d.get_document({"requestContext": {}}, None)["statusCode"] == 401
