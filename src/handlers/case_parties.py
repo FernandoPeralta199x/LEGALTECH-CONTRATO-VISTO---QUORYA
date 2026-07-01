@@ -9,6 +9,11 @@ import logging
 
 from psycopg2.extras import Json
 
+from src.services.case_lifecycle import (
+    CaseFinalized,
+    CaseNotVisible,
+    assert_case_writable,
+)
 from src.services.database import tenant_tx
 from src.utils.context import require_user, require_writer
 from src.utils.helpers import error_response, success_response
@@ -102,9 +107,8 @@ def create_case_party(event, context):
             metadata[k] = v
     try:
         with tenant_tx(user["user_id"], user["role"], org) as cur:
-            cur.execute("SELECT 1 FROM public.cases WHERE id = %s AND deleted_at IS NULL", (case_id,))
-            if cur.fetchone() is None:
-                return error_response(404, "Caso não encontrado")
+            # CVS-007: 404 se inexistente/deletado; 409 se finalizado
+            assert_case_writable(cur, case_id)
             cur.execute(
                 "INSERT INTO public.case_parties"
                 " (organization_id, case_id, party_type, name, document, metadata)"
@@ -116,6 +120,10 @@ def create_case_party(event, context):
                 " (organization_id, case_id, event_type, title, description, actor)"
                 " VALUES (%s,%s,'party_added','Parte adicionada','Parte registrada no caso.','user')",
                 (org, case_id))
+    except CaseNotVisible:
+        return error_response(404, "Caso não encontrado")
+    except CaseFinalized:
+        return error_response(409, "caso finalizado não aceita novas partes")
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_PARTY_CREATE_ERROR", "error": type(e).__name__}))
         return error_response(500, "Erro ao criar parte")
@@ -138,6 +146,8 @@ def update_case_party(event, context):
         return err
     try:
         with tenant_tx(user["user_id"], user["role"], org) as cur:
+            # CVS-007: 404 se caso inexistente/deletado; 409 se finalizado
+            assert_case_writable(cur, case_id)
             cur.execute(
                 "SELECT metadata FROM public.case_parties"
                 " WHERE id = %s AND case_id = %s AND deleted_at IS NULL", (party_id, case_id))
@@ -171,6 +181,10 @@ def update_case_party(event, context):
                 f"UPDATE public.case_parties SET {', '.join(fields)}"
                 " WHERE id = %s AND case_id = %s" + _RETURN_COLS, tuple(values))
             row = cur.fetchone()
+    except CaseNotVisible:
+        return error_response(404, "Caso não encontrado")
+    except CaseFinalized:
+        return error_response(409, "caso finalizado não aceita alteração de partes")
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_PARTY_UPDATE_ERROR", "error": type(e).__name__}))
         return error_response(500, "Erro ao atualizar parte")

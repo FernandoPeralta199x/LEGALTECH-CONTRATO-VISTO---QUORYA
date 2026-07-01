@@ -1,6 +1,12 @@
 """Coração — testes do catálogo de pricing + estimativa (com overrides)."""
+import pytest
+
 from src.services.pricing import config as pc
-from src.services.pricing.estimate import effective_module_price_cents, estimate
+from src.services.pricing.estimate import (
+    effective_module_price_cents,
+    estimate,
+    normalize_selected_modules,
+)
 
 
 def test_catalogo_4_produtos_7_modulos():
@@ -42,3 +48,20 @@ def test_estimate_aplica_override_da_org():
 def test_effective_price_default_e_override():
     assert effective_module_price_cents("escavador") == 6000
     assert effective_module_price_cents("escavador", {"escavador": {"price_cents": 6500}}) == 6500
+
+
+def test_cvs008_normalize_forca_obrigatorios_reuniao_equipe():
+    # CVS-008: em reuniao_equipe (base 0) o cliente NAO pode remover os obrigatorios
+    required = [c for c, cfg in pc.MATRIX.get("reuniao_equipe", {}).items() if cfg.required]
+    assert required, "reuniao_equipe deve ter modulos obrigatorios"
+    norm = normalize_selected_modules("reuniao_equipe", [])  # cliente nao enviou nada
+    assert set(required) <= set(norm)
+    # sem a normalizacao o preco seria 0 (furo); com ela, cobra os obrigatorios
+    vuln = estimate("reuniao_equipe", [])["total_price_cents"]
+    fixed = estimate("reuniao_equipe", norm)["total_price_cents"]
+    assert vuln == 0 and fixed > 0
+
+
+def test_cvs008_normalize_rejeita_modulo_desconhecido():
+    with pytest.raises(ValueError):
+        normalize_selected_modules("reuniao_equipe", ["modulo_inexistente_xyz"])

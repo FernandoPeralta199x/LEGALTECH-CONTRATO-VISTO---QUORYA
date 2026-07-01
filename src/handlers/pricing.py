@@ -22,7 +22,10 @@ from src.schemas.pricing_schemas import PricingEstimateRequest, UpdatePricingCon
 from src.services.database import tenant_tx
 from src.services.pricing.catalog import build_catalog
 from src.services.pricing.config import MODULES, PRODUCTS
-from src.services.pricing.estimate import estimate as compute_estimate
+from src.services.pricing.estimate import (
+    estimate as compute_estimate,
+    normalize_selected_modules,
+)
 from src.utils.context import require_role, require_user
 from src.utils.helpers import error_response, success_response
 from src.utils.lambda_io import fmt_validation_error as _fmt, parse_json_body as _parse_body
@@ -70,10 +73,15 @@ def estimate_pricing(event, context):
     invalid = [m for m in data.modules if m not in MODULES]
     if invalid:
         return error_response(400, f"módulos inválidos: {', '.join(invalid)}")
+    # CVS-008: normaliza (força obrigatórios) para o preview bater com o cobrado
+    try:
+        selected = normalize_selected_modules(data.product, data.modules)
+    except ValueError as e:
+        return error_response(400, str(e))
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
             overrides = _org_module_overrides(cur, user["organization_id"])
-        est = compute_estimate(data.product, list(data.modules), overrides)
+        est = compute_estimate(data.product, selected, overrides)
     except Exception as e:
         logger.error(json.dumps({"event": "PRICING_ESTIMATE_ERROR", "error": type(e).__name__}))
         return error_response(500, "Erro ao estimar pricing")

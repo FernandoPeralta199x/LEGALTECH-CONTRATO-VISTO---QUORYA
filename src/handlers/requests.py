@@ -17,8 +17,8 @@ import uuid
 
 from src.schemas.request_schemas import RequestCreateSchema
 from src.services.database import tenant_tx
-from src.services.pricing.config import MATRIX, PRODUCTS
-from src.services.pricing.estimate import estimate
+from src.services.pricing.config import PRODUCTS
+from src.services.pricing.estimate import estimate, normalize_selected_modules
 from src.services.storage import storage_service
 from src.services.triage_plan import plan_for_product
 from src.utils.context import require_user, require_writer
@@ -76,11 +76,13 @@ def create_request(event, context):
     product = PRODUCTS[data.product_type]
     product_label = data.product_label or product.title
     title = data.title or product.title
-    # módulos: usa os selecionados; se vazio, os required/default do produto
-    selected = data.selected_modules or [
-        code for code, cfg in MATRIX.get(data.product_type, {}).items()
-        if cfg.required or cfg.default
-    ]
+    # módulos: normaliza server-side (CVS-008) — força os obrigatórios, valida os
+    # enviados e trata igual ao preview /pricing/estimate (consistência de billing).
+    # Lista vazia/omitida => só obrigatórios (mesmo resultado do preview).
+    try:
+        selected = normalize_selected_modules(data.product_type, data.selected_modules)
+    except ValueError as e:
+        return error_response(400, str(e))
     request_id = generate_uuid()
     case_id = generate_uuid()
     modules = plan_for_product(data.product_type)

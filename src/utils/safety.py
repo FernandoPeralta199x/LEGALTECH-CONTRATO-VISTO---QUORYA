@@ -36,6 +36,11 @@ def enforce_production_safety():
         violations.append("STORAGE_BACKEND=local/mock em ambiente produtivo (sem S3 real)")
     if os.getenv("EMBEDDINGS_BACKEND", "mock") == "mock":
         violations.append("EMBEDDINGS_BACKEND=mock em ambiente produtivo (embeddings falsos)")
+    # create_ocr_adapter só trata "real" como adapter real; qualquer outro valor
+    # (ausente, mock, typo, ou "textract" ainda não implementado) cai no mock.
+    # Fail-closed: exigir exatamente "real" em produção.
+    if os.getenv("OCR_BACKEND", "mock") != "real":
+        violations.append("OCR_BACKEND != 'real' em ambiente produtivo (OCR falso/mock)")
 
     if violations:
         message = f"BOOT BLOQUEADO ({environment}): " + "; ".join(violations)

@@ -66,6 +66,26 @@ def test_production_blocks_mock_embeddings(monkeypatch):
         enforce_production_safety()
 
 
+def test_production_blocks_mock_ocr(monkeypatch):
+    # CVS-005: OCR mock/ausente em producao geraria texto fabricado -> fail-closed
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("JWT_SECRET_KEY", "um-segredo-forte-de-verdade-0123456789")
+    monkeypatch.delenv("AI_ANALYSIS_BACKEND", raising=False)
+    monkeypatch.setenv("EMAIL_BACKEND", "ses")
+    monkeypatch.setenv("STORAGE_BACKEND", "s3")
+    monkeypatch.setenv("EMBEDDINGS_BACKEND", "openai")
+    monkeypatch.delenv("OCR_BACKEND", raising=False)  # ausente -> default mock
+    with pytest.raises(RuntimeError):
+        enforce_production_safety()
+    monkeypatch.setenv("OCR_BACKEND", "mock")  # explicitamente mock
+    with pytest.raises(RuntimeError):
+        enforce_production_safety()
+    # backend desconhecido (create_ocr_adapter cai no mock p/ != 'real') -> bloqueia
+    monkeypatch.setenv("OCR_BACKEND", "textract")
+    with pytest.raises(RuntimeError):
+        enforce_production_safety()
+
+
 def test_production_passes_with_strong_secret(monkeypatch):
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.setenv("JWT_SECRET_KEY", "um-segredo-forte-de-verdade-0123456789")
@@ -73,4 +93,5 @@ def test_production_passes_with_strong_secret(monkeypatch):
     monkeypatch.setenv("EMAIL_BACKEND", "ses")  # envio real configurado
     monkeypatch.setenv("STORAGE_BACKEND", "s3")  # S3 real configurado
     monkeypatch.setenv("EMBEDDINGS_BACKEND", "openai")  # embeddings reais
+    monkeypatch.setenv("OCR_BACKEND", "real")  # OCR real configurado
     enforce_production_safety()  # não levanta com tudo configurado para produção

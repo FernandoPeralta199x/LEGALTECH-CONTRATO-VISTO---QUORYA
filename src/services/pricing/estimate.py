@@ -50,6 +50,31 @@ def _unique_preserving_order(values) -> list[str]:
     return out
 
 
+def normalize_selected_modules(product_code: str, selected_module_codes) -> list[str]:
+    """Blindagem de billing (CVS-008): o backend NÃO confia só nos módulos
+    enviados pelo cliente. Força os módulos ``required`` do produto (que não
+    podem ser removidos para reduzir o preço) e valida os selecionados.
+
+    Levanta ``ValueError`` para módulo desconhecido ou não aplicável ao produto
+    (o handler traduz em 400)."""
+    matrix = MATRIX.get(product_code, {})
+    codes = _unique_preserving_order(list(selected_module_codes or []))
+    if not codes:
+        # omitido/vazio => baseline do produto (obrigatórios + defaults). Mantém o
+        # comportamento antigo e evita dropar defaults sem o usuário ter removido.
+        return [code for code, cfg in matrix.items() if cfg.required or cfg.default]
+    required = [code for code, cfg in matrix.items() if cfg.required]
+    result = list(required)  # obrigatórios sempre entram, venham ou não do cliente
+    for code in codes:
+        if code not in MODULES:
+            raise ValueError(f"módulo desconhecido: {code}")
+        if code not in matrix:
+            raise ValueError(f"módulo não disponível para o produto {product_code}: {code}")
+        if code not in result:
+            result.append(code)
+    return result
+
+
 def estimate(product_code: str, selected_module_codes, module_overrides: dict | None = None) -> dict:
     """Estimativa completa (espelha o legaltech-aws).
 
