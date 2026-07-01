@@ -11,7 +11,11 @@ CASE_TYPE_PATTERN = (
     "^(contract_analysis|due_diligence|due_diligence_party|due_diligence_asset"
     "|compra_venda|prestacao_servicos|locacao|confidencialidade|parceria|outro)$"
 )
-CASE_STATUS_PATTERN = "^(open|in_progress|completed|closed)$"
+# Status de caso realmente usados: open (default), awaiting_triage (wizard),
+# report_ready (após geração do relatório), in_progress/completed/closed (ciclo).
+CASE_STATUS_PATTERN = (
+    "^(open|in_progress|awaiting_triage|report_ready|completed|closed)$"
+)
 PRIORITY_PATTERN = "^(low|normal|high|urgent)$"
 RISK_LEVEL_PATTERN = "^(low|medium|high|critical)$"
 
