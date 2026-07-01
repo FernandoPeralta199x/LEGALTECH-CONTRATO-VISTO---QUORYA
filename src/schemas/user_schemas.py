@@ -45,7 +45,7 @@ class UserSignupSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     email: EmailStr
-    password: str = Field(..., min_length=PASSWORD_MIN_LENGTH, max_length=128)
+    password: str = Field(..., min_length=PASSWORD_MIN_LENGTH, max_length=18)
     name: str = Field(..., min_length=2, max_length=255)
 
     @field_validator("password")
@@ -74,7 +74,7 @@ class ResetPasswordSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     token: str = Field(..., min_length=20)
-    password: str = Field(..., min_length=8, max_length=128)
+    password: str = Field(..., min_length=8, max_length=18)
 
     @field_validator("password")
     @classmethod
