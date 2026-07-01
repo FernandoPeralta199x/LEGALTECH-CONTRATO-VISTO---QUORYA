@@ -1,8 +1,11 @@
 """Execução da triagem (SP3) — roda os triage_modules de um caso, gravando
 evidências em external_queries_cache (cache por org+provider+hash) e o resultado
-normalizado em provider_results. Mock-first: os resultados são simulados por tipo
-de provider; na fase AWS (SP4 real) os runners chamam os RealAdapters (HTTP) com
-o mesmo contrato de cache. Tudo no cursor de uma transação tenant_tx (RLS por org).
+normalizado em provider_results. A EVIDÊNCIA (payload normalizado) vem da camada de
+adapters, resolvida pelo registry central (``src/adapters/registry.py``): hoje cai
+no Mock (``*_BACKEND=mock``), e na Fase 7 basta implementar os ``Real*Adapter`` +
+``*_BACKEND=real`` que este runner passa a consumir dados reais sem mudar. A
+INTERPRETAÇÃO de triagem (risco/confiança/resumo) fica aqui, na camada de negócio.
+Tudo no cursor de uma transação tenant_tx (RLS por org).
 """
 from __future__ import annotations
 
@@ -10,29 +13,30 @@ import hashlib
 
 from psycopg2.extras import Json
 
+from src.adapters.registry import query_provider
 
-def _mock_result(provider: str, module_key: str):
-    """Resultado mock (normalized, risk_signals, confidence, summary) por provider."""
+
+def _interpret(provider: str, module_key: str):
+    """Sinais de risco, confiança e resumo de triagem por provider (camada de negócio).
+
+    Independe de a evidência vir do Mock ou do Real — só traduz o provider em
+    semântica de triagem. Retorna ``(risk_signals, confidence, summary)``."""
     p = provider.lower()
     if "serasa" in p:
-        return ({"score": 742, "restricoes": 0, "situacao": "regular"},
-                ["score_saudavel"], 0.9, "Score saudável, sem restrições (mock).")
+        return (["score_saudavel"], 0.9, "Score saudável, sem restrições (mock).")
     if "procon" in p:
-        return ({"reclamacoes": 0, "indice_resolucao": 1.0},
-                [], 0.85, "Sem reclamações no Procon (mock).")
+        return ([], 0.85, "Sem reclamações no Procon (mock).")
     if "escavador" in p:
-        return ({"processos": 1, "como_autor": 0, "como_reu": 1},
-                ["litigio_baixo"], 0.8, "1 processo público encontrado (mock).")
+        return (["litigio_baixo"], 0.8, "1 processo público encontrado (mock).")
+    if "targetdata" in p:
+        return ([], 0.82, "Cadastro localizado e regular (mock).")
     if "ai_report" in p:
-        return ({"riscos": ["cláusula de rescisão ampla"], "recomendacao": "revisar"},
-                ["clausula_revisar"], 0.75, "Pré-relatório simulado com 1 risco (mock).")
+        return (["clausula_revisar"], 0.75, "Pré-relatório simulado com 1 risco (mock).")
     if "ai_summary" in p:
-        return ({"resumo": "Contrato de prestação de serviços; prazo 12 meses."},
-                [], 0.78, "Resumo simulado do documento (mock).")
+        return ([], 0.78, "Resumo simulado do documento (mock).")
     if "document_parser" in p or "ocr" in p:
-        return ({"paginas": 3, "campos_extraidos": ["objeto", "prazo", "valor"]},
-                [], 0.95, "Documento lido e estruturado (mock).")
-    return ({"ok": True, "module_key": module_key}, [], 0.7, "Módulo simulado (mock).")
+        return ([], 0.95, "Documento lido e estruturado (mock).")
+    return ([], 0.7, "Módulo simulado (mock).")
 
 
 def _run_module(cur, org, case_id, user_id, module) -> list[str]:
@@ -41,7 +45,31 @@ def _run_module(cur, org, case_id, user_id, module) -> list[str]:
     module_key = module["module_key"]
     module_id = module["id"]
     qhash = hashlib.sha256(f"{case_id}:{provider}:{module_key}".encode("utf-8")).hexdigest()
-    normalized, signals, confidence, summary = _mock_result(provider, module_key)
+
+    # Evidência: resolvida pelo registry (adapter mock agora, real na Fase 7). Providers
+    # locais (validação de partes) não têm adapter externo -> payload local mínimo.
+    #
+    # WIRING DA FASE 7 (antes de ligar *_BACKEND=real) — dois pontos:
+    #  1) POPULAR o ctx com os insumos reais do caso: cpf_cnpj/name de case_parties
+    #     (Serasa/Procon/Escavador/CNJ/TargetData) e file_path/text do documento
+    #     ingerido (OCR/IA). Hoje o ctx só tem case_id/module_key e os mock ignoram o
+    #     resto. ATENÇÃO LGPD: mascarar PII antes de gravar em external_queries_cache/
+    #     provider_results (ver CVS-006) — os providers podem ecoar o documento na
+    #     resposta. Fan-out por parte é decisão de produto.
+    #  2) CACHE-FIRST: consultar external_queries_cache por (org, provider, qhash) e
+    #     reusar o payload 'done' ANTES de chamar query_provider, evitando repetir
+    #     chamada externa paga/rate-limited numa reexecução (idempotência real;
+    #     provavelmente exige rastrear source_mode no cache).
+    ctx = {"case_id": str(case_id), "module_key": module_key}
+    adapter_result = query_provider(provider, ctx)
+    if adapter_result is not None and adapter_result.success:
+        normalized = adapter_result.data
+        source_mode = adapter_result.source  # "mock" | "real"
+    else:
+        normalized = {"module_key": module_key, "ok": True}
+        source_mode = "mock"
+
+    signals, confidence, summary = _interpret(provider, module_key)
     req_payload = {"case_id": str(case_id), "module_key": module_key, "provider": provider}
 
     # cache de evidência (idempotente por org+provider+hash)
@@ -63,8 +91,8 @@ def _run_module(cur, org, case_id, user_id, module) -> list[str]:
         "INSERT INTO public.provider_results"
         " (organization_id, case_id, triage_module_id, provider, source_mode, status,"
         "  input_hash, normalized_result, summary, risk_signals, confidence)"
-        " VALUES (%s,%s,%s,%s,'mock','done',%s,%s,%s,%s,%s)",
-        (org, case_id, module_id, provider, qhash, Json(normalized), summary,
+        " VALUES (%s,%s,%s,%s,%s,'done',%s,%s,%s,%s,%s)",
+        (org, case_id, module_id, provider, source_mode, qhash, Json(normalized), summary,
          Json(signals), confidence))
 
     cur.execute(

@@ -12,6 +12,12 @@ from src.adapters.serasa import create_serasa_adapter
 from src.adapters.cnj import create_cnj_adapter
 from src.adapters.ocr import create_ocr_adapter
 from src.adapters.ai_analysis import create_ai_analysis_adapter
+from src.adapters.procon import (
+    ProconPort, MockProconAdapter, create_procon_adapter,
+)
+from src.adapters.targetdata import (
+    TargetDataPort, MockTargetDataAdapter, create_targetdata_adapter,
+)
 
 
 def test_escavador_mock():
@@ -61,6 +67,36 @@ def test_ai_mock_and_real():
         create_ai_analysis_adapter("real", provider="bedrock").generate_summary("x")
 
 
+def test_procon_mock_and_real():
+    a = create_procon_adapter("mock")
+    assert isinstance(a, ProconPort)  # Protocol runtime_checkable
+    r = a.check_complaints("12345678900")
+    assert isinstance(r, AdapterResult) and r.success and r.source == "mock"
+    assert r.data["complaints"] == 0 and r.data["resolution_rate"] == 1.0
+    with pytest.raises(ValueError):
+        create_procon_adapter("real", api_key=None)
+    real = create_procon_adapter("real", api_key="k")
+    with pytest.raises(NotImplementedError):
+        real.check_complaints("x")
+
+
+def test_targetdata_mock_and_real():
+    a = create_targetdata_adapter("mock")
+    assert isinstance(a, TargetDataPort)  # Protocol runtime_checkable
+    r = a.lookup("12345678900")
+    assert isinstance(r, AdapterResult) and r.success and r.source == "mock"
+    assert r.data["found"] is True and r.data["registration_status"] == "regular"
+    with pytest.raises(ValueError):
+        create_targetdata_adapter("real", api_key=None)
+    real = create_targetdata_adapter("real", api_key="k")
+    with pytest.raises(NotImplementedError):
+        real.lookup("x")
+
+
 def test_factory_defaults_to_mock_from_env(monkeypatch):
     monkeypatch.delenv("ESCAVADOR_BACKEND", raising=False)
     assert isinstance(create_escavador_adapter(), MockEscavadorAdapter)
+    monkeypatch.delenv("PROCON_BACKEND", raising=False)
+    assert isinstance(create_procon_adapter(), MockProconAdapter)
+    monkeypatch.delenv("TARGETDATA_BACKEND", raising=False)
+    assert isinstance(create_targetdata_adapter(), MockTargetDataAdapter)
