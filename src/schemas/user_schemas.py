@@ -1,8 +1,12 @@
 """Schemas de usuários (Pydantic 2). Alinhados ao schema real de `public.users`:
 role ∈ {admin, analyst, viewer}; status ∈ {active, inactive}.
 
-Signup público NÃO aceita `role` (criado sempre como `viewer` — menor privilégio);
-a promoção de papel é feita por admin via `update_user`.
+Signup público NÃO aceita `role` (extra=forbid): o handler cria o primeiro usuário da
+nova organização como `admin` (dono do tenant). Promoção/alteração de papel é por admin
+via `update_user`. (Rate limit / verificação de e-mail no signup ficam para a Fase 7.)
+
+Política de senha (S-03): alinhada ao frontend (getPasswordRequirements) — mínimo 12
+caracteres, com letra maiúscula, minúscula e caractere especial.
 """
 from typing import Optional
 
@@ -10,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 ROLE_PATTERN = "^(admin|analyst|viewer)$"
 STATUS_PATTERN = "^(active|inactive)$"
+PASSWORD_MIN_LENGTH = 12
 
 
 def _check_password_strength(v: str) -> str:
@@ -17,10 +22,14 @@ def _check_password_strength(v: str) -> str:
     # para devolver 400 em vez de estourar no hash (500).
     if len(v.encode("utf-8")) > 72:
         raise ValueError("não pode exceder 72 bytes")
+    if len(v) < PASSWORD_MIN_LENGTH:
+        raise ValueError(f"deve ter pelo menos {PASSWORD_MIN_LENGTH} caracteres")
     if not any(c.isupper() for c in v):
         raise ValueError("deve conter pelo menos uma letra maiúscula")
-    if not any(c.isdigit() for c in v):
-        raise ValueError("deve conter pelo menos um número")
+    if not any(c.islower() for c in v):
+        raise ValueError("deve conter pelo menos uma letra minúscula")
+    if not any(not c.isalnum() for c in v):
+        raise ValueError("deve conter pelo menos um caractere especial")
     return v
 
 
@@ -36,7 +45,7 @@ class UserSignupSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     email: EmailStr
-    password: str = Field(..., min_length=8, max_length=128)
+    password: str = Field(..., min_length=PASSWORD_MIN_LENGTH, max_length=128)
     name: str = Field(..., min_length=2, max_length=255)
 
     @field_validator("password")

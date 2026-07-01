@@ -22,6 +22,10 @@ provider:
     # o deploy em stages que não têm o parâmetro (ex.: dev com backend mock)
     OPENAI_API_KEY: ${ssm:/contrato-visto/${self:provider.stage}/openai_key, ''}
     DOCUMENTS_BUCKET: contrato-visto-documents-${self:provider.stage}
+    # SP1 — fila assíncrona de processamento de documentos
+    QUEUE_BACKEND: sqs
+    DOCUMENT_PROCESSING_QUEUE_URL: !Ref DocumentProcessingQueue
+    DOCUMENT_PROCESSING_MAX_ATTEMPTS: '3'
 
   iamRoleStatements:
     - Effect: Allow
@@ -37,6 +41,15 @@ provider:
       Action:
         - ses:SendEmail
       Resource: "*"
+    - Effect: Allow
+      Action:
+        - sqs:SendMessage
+        - sqs:ReceiveMessage
+        - sqs:DeleteMessage
+        - sqs:GetQueueAttributes
+      Resource:
+        - !GetAtt DocumentProcessingQueue.Arn
+        - !GetAtt DocumentProcessingDLQ.Arn
     - Effect: Allow
       Action:
         - ssm:GetParameter
@@ -87,6 +100,17 @@ functions:
           cors: true
           authorizer: ${self:custom.jwtAuthorizer}
 
+  getCaseAggregate:
+    handler: src/handlers/cases.get_case_aggregate
+    timeout: 15
+    memorySize: 512
+    events:
+      - http:
+          path: cases/{caseId}/aggregate
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
   listCases:
     handler: src/handlers/cases.list_cases
     timeout: 10
@@ -108,6 +132,11 @@ functions:
           method: put
           cors: true
           authorizer: ${self:custom.jwtAuthorizer}
+      - http:
+          path: cases/{caseId}
+          method: patch
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
 
   deleteCase:
     handler: src/handlers/cases.delete_case
@@ -117,6 +146,199 @@ functions:
       - http:
           path: cases/{caseId}
           method: delete
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  # TIER 1 - Requests (wizard "Novo Pedido" -> orquestra case/partes/doc/triagem)
+  createRequest:
+    handler: src/handlers/requests.create_request
+    timeout: 15
+    memorySize: 512
+    events:
+      - http:
+          path: requests
+          method: post
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  getRequest:
+    handler: src/handlers/requests.get_request
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: requests/{requestId}
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  # TIER 1 - Detalhe do caso (abas: Partes / Timeline / Triagem)
+  listCaseParties:
+    handler: src/handlers/case_parties.list_case_parties
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: cases/{caseId}/parties
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  createCaseParty:
+    handler: src/handlers/case_parties.create_case_party
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: cases/{caseId}/parties
+          method: post
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  updateCaseParty:
+    handler: src/handlers/case_parties.update_case_party
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: cases/{caseId}/parties/{partyId}
+          method: patch
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  listCaseTimeline:
+    handler: src/handlers/timeline.list_timeline
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: cases/{caseId}/timeline
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  listCaseTriage:
+    handler: src/handlers/triage.list_triage
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: cases/{caseId}/triage
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  # SP3 - executa a triagem do caso (roda os módulos mock, grava evidências)
+  runCaseTriage:
+    handler: src/handlers/triage.run_triage
+    timeout: 60
+    memorySize: 512
+    events:
+      - http:
+          path: cases/{caseId}/triage/run
+          method: post
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  # SP3 - relatório/parecer do caso (gerar, revisar, obter)
+  getCaseReport:
+    handler: src/handlers/reports.get_case_report
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: cases/{caseId}/report
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  generateCaseReport:
+    handler: src/handlers/reports.generate_case_report
+    timeout: 30
+    memorySize: 512
+    events:
+      - http:
+          path: cases/{caseId}/report/generate
+          method: post
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  reviewCaseReport:
+    handler: src/handlers/reports.review_case_report
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: cases/{caseId}/report/review
+          method: post
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  # TIER 1 - Dashboard (visão geral da organização)
+  getDashboardStats:
+    handler: src/handlers/dashboard.get_stats
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: dashboard/stats
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  # TIER 1 - Pricing (catálogo + estimativa + config por organização)
+  getPricing:
+    handler: src/handlers/pricing.get_pricing
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: pricing
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  estimatePricing:
+    handler: src/handlers/pricing.estimate_pricing
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: pricing/estimate
+          method: post
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  getPricingConfig:
+    handler: src/handlers/pricing.get_pricing_config
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: pricing/config
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  updatePricingConfig:
+    handler: src/handlers/pricing.update_pricing_config
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: pricing/config
+          method: put
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  checkCasesLimit:
+    handler: src/handlers/pricing.check_cases_limit
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: pricing/config/limit-check
+          method: get
           cors: true
           authorizer: ${self:custom.jwtAuthorizer}
 
@@ -132,6 +354,17 @@ functions:
           cors: true
           authorizer: ${self:custom.jwtAuthorizer}
 
+  listDocuments:
+    handler: src/handlers/documents.list_documents
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: documents
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
   getDocument:
     handler: src/handlers/documents.get_document
     timeout: 10
@@ -142,6 +375,63 @@ functions:
           method: get
           cors: true
           authorizer: ${self:custom.jwtAuthorizer}
+
+  updateDocument:
+    handler: src/handlers/documents.update_document
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: documents/{docId}
+          method: patch
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  getDocumentDownloadUrl:
+    handler: src/handlers/documents.get_document_download_url
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: documents/{docId}/download-url
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  # SP2 - ingestão síncrona (force-reprocess): OCR -> chunking -> embeddings
+  processDocument:
+    handler: src/handlers/documents.process_document
+    timeout: 60
+    memorySize: 1024
+    events:
+      - http:
+          path: documents/{docId}/process
+          method: post
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  # SP1 - enfileira o processamento (publica na SQS; resposta 'queued')
+  enqueueProcessing:
+    handler: src/handlers/documents.enqueue_processing
+    timeout: 30
+    memorySize: 512
+    events:
+      - http:
+          path: documents/{docId}/enqueue-processing
+          method: post
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  # SP1 - worker assíncrono disparado pela SQS (processa os jobs idempotentemente)
+  documentProcessingWorker:
+    handler: src/handlers/worker.document_processing_worker
+    timeout: 120
+    memorySize: 1024
+    events:
+      - sqs:
+          arn: !GetAtt DocumentProcessingQueue.Arn
+          batchSize: 5
+          functionResponseType: ReportBatchItemFailures
 
   searchClauses:
     handler: src/handlers/search.search_clauses
@@ -174,6 +464,40 @@ functions:
           path: users/login
           method: post
           cors: true
+
+  # Aliases de auth esperados pelo frontend (/api/v1/auth/*)
+  authLogin:
+    handler: src/handlers/users.login
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: auth/login
+          method: post
+          cors: true
+
+  authMe:
+    handler: src/handlers/users.me
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: auth/me
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  # alias /me esperado pelo frontend (validateDevTokenWithBackend)
+  me:
+    handler: src/handlers/users.me
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: me
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
 
   getUser:
     handler: src/handlers/users.get_user
@@ -279,6 +603,11 @@ functions:
           method: put
           cors: true
           authorizer: ${self:custom.jwtAuthorizer}
+      - http:
+          path: clients/{clientId}
+          method: patch
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
 
   deleteClient:
     handler: src/handlers/clients.delete_client
@@ -377,6 +706,7 @@ package:
     - '!tests/**'
     - '!docs/**'
     - '!migrations/**'
+    - '!tools/**'
     - '!.env'
     - '!.env.*'
     - '!**/__pycache__/**'
@@ -387,3 +717,30 @@ package:
     - '!conftest.py'
     - '!requirements-dev.txt'
     - '!**/*.md'
+
+# SP1 — infraestrutura da fila assíncrona: fila principal + DLQ (redrive por maxReceiveCount)
+resources:
+  Resources:
+    DocumentProcessingDLQ:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: contrato-visto-doc-processing-dlq-${self:provider.stage}
+        MessageRetentionPeriod: 1209600  # 14 dias
+
+    DocumentProcessingQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: contrato-visto-doc-processing-${self:provider.stage}
+        VisibilityTimeout: 720   # >= 6x o timeout (120s) da Lambda worker (recomendação AWS)
+        MessageRetentionPeriod: 345600  # 4 dias
+        RedrivePolicy:
+          deadLetterTargetArn: !GetAtt DocumentProcessingDLQ.Arn
+          maxReceiveCount: 3
+
+  Outputs:
+    DocumentProcessingQueueUrl:
+      Value: !Ref DocumentProcessingQueue
+    DocumentProcessingQueueArn:
+      Value: !GetAtt DocumentProcessingQueue.Arn
+    DocumentProcessingDLQArn:
+      Value: !GetAtt DocumentProcessingDLQ.Arn

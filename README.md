@@ -185,4 +185,15 @@ Runbook completo em **`docs/PLANO_FASE7_DEPLOY.md`**. Resumo:
 - Endurecimentos de produção pendentes: revogação de sessão (token versioning),
   rate limiting/WAF, confirmação de upload (`HeadObject`) + cleanup S3 no delete,
   keyset pagination, auditoria persistente de acesso a PII.
-- Pipeline assíncrono de ingestão de embeddings (chunking/embedding) — backoffice.
+- Worker assíncrono da triagem (SP3) via fila — hoje a triagem roda síncrona; só a
+  ingestão de documentos (SP1) tem fila SQS/DLQ.
+
+## Fila assíncrona de processamento de documentos (SP1)
+
+`POST /documents/{id}/enqueue-processing` enfileira a ingestão (OCR→chunks→embeddings).
+Na AWS publica em SQS (`DocumentProcessingQueue`) e a Lambda `documentProcessingWorker`
+processa cada mensagem; falhas transitórias voltam à fila e, após `maxReceiveCount=3`,
+vão para a DLQ. Idempotência por `(organization_id, job_id)` em `agent_executions` +
+lock por documento; falhas determinísticas são marcadas e confirmadas (ack). Em dev
+(`QUEUE_BACKEND` ausente) o processamento é inline/síncrono. `POST /documents/{id}/process`
+segue como reprocessamento síncrono (force).

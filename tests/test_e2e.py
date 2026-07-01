@@ -2,8 +2,13 @@
 
 Diferente dos testes por fase (que injetam o contexto do authorizer), este exercita
 a CADEIA REAL: login → jwt_authorizer.authorize() → handlers de negócio, com tokens
-JWT verdadeiros. Cobre o fluxo completo signup→login→authorizer→clients→cases→
+JWT verdadeiros. Cobre o fluxo completo login→authorizer→clients→cases→
 case_results→documents→search e os cortes transversais de RLS/RBAC/erro.
+
+Multi-tenant (Fundação V2): membros da operação são semeados na MESMA organização
+(o signup público passa a criar uma organização própria — testado em
+test_users_handlers). A RLS de cases/case_results/documents ainda é por-dono nesta
+fase (Parte 1A); a virada para por-organização é a Parte 1B.
 """
 import json
 import uuid
@@ -21,6 +26,8 @@ from src.handlers import search as search_h
 from src.handlers import users as users_h
 from src.services import rag
 from src.services.embeddings import embeddings_service
+
+ORG_ID = "00000000-0000-0000-0000-000000000001"  # org de sistema (migração 005)
 
 
 def _admin_conn():
@@ -45,23 +52,29 @@ def clean_db():
 
 
 # ── helpers da cadeia real ───────────────────────────────────────────────────
-def _seed_admin(email="admin@acme.com", password="Admin1234"):
+def _seed_user(email, password, role="viewer", org_id=ORG_ID):
+    """Cria um usuário diretamente numa organização (membros da mesma operação)."""
     uid = str(uuid.uuid4())
     conn = _admin_conn()
     conn.autocommit = True
     with conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO public.users (id, email, password_hash, name, role, status)"
-            " VALUES (%s, %s, %s, 'Admin', 'admin', 'active')",
-            (uid, email, users_h.hash_password(password)))
+            "INSERT INTO public.users"
+            " (id, email, password_hash, name, role, status, organization_id)"
+            " VALUES (%s, %s, %s, 'User', %s, 'active', %s)",
+            (uid, email, users_h.hash_password(password), role, org_id))
     conn.close()
     return uid
+
+
+def _seed_admin(email="admin@acme.com", password="Admin1234", org_id=ORG_ID):
+    return _seed_user(email, password, role="admin", org_id=org_id)
 
 
 def _login(email, password):
     resp = users_h.login({"body": json.dumps({"email": email, "password": password})}, None)
     assert resp["statusCode"] == 200, resp
-    return json.loads(resp["body"])["data"]["token"]
+    return json.loads(resp["body"])["data"]["access_token"]
 
 
 def _authctx(token):
@@ -87,22 +100,18 @@ def _ok(resp):
     return json.loads(resp["body"]).get("data")
 
 
-def _signup(email, password="Senha1234", name="User"):
-    return users_h.create_user(
-        {"body": json.dumps({"email": email, "password": password, "name": name})}, None)
-
-
 # ── fluxo feliz, ponta a ponta ───────────────────────────────────────────────
 def test_full_flow(clean_db):
     # 1) bootstrap admin + login real + authorizer
     _seed_admin()
     ctx_admin = _authctx(_login("admin@acme.com", "Admin1234"))
     assert ctx_admin["role"] == "admin"
+    assert ctx_admin["organization_id"] == ORG_ID
 
-    # 2) signup público (viewer) + admin promove a analyst
-    assert _signup("ana@acme.com")["statusCode"] == 201
+    # 2) membro viewer da MESMA organização + admin promove a analyst
+    ana_id = _seed_user("ana@acme.com", "Senha1234", role="viewer")
     listed = _ok(users_h.list_users(_ev(ctx_admin), None))
-    ana_id = next(u["id"] for u in listed if u["email"] == "ana@acme.com")
+    assert any(u["id"] == ana_id for u in listed)  # admin enxerga membro da sua org
     assert _ok(users_h.get_user(_ev(ctx_admin, path={"userId": ana_id}), None))["role"] == "viewer"
     assert users_h.update_user(
         _ev(ctx_admin, path={"userId": ana_id}, body={"role": "analyst"}), None)["statusCode"] == 200
@@ -145,8 +154,8 @@ def test_rbac_and_rls_across_users(clean_db):
     case_id = _ok(cases_h.create_case(_ev(ctx_admin, body={
         "client_id": client_id, "case_type": "contract_analysis"}), None))["id"]
 
-    # viewer (signup) não escreve e não vê case alheio
-    _signup("bob@acme.com")
+    # viewer (mesma org) não escreve e não vê case alheio (RLS por-dono nesta fase)
+    _seed_user("bob@acme.com", "Senha1234", role="viewer")
     ctx_bob = _authctx(_login("bob@acme.com", "Senha1234"))
     assert ctx_bob["role"] == "viewer"
     assert clients_h.create_client(_ev(ctx_bob, body={
@@ -154,7 +163,8 @@ def test_rbac_and_rls_across_users(clean_db):
         "document_number": "529.982.247-25"}), None)["statusCode"] == 403
     assert cases_h.create_case(_ev(ctx_bob, body={
         "client_id": client_id, "case_type": "contract_analysis"}), None)["statusCode"] == 403
-    assert cases_h.get_case(_ev(ctx_bob, path={"caseId": case_id}), None)["statusCode"] == 404
+    # viewer da MESMA organização VÊ o caso (leitura por org), mas não escreve
+    assert cases_h.get_case(_ev(ctx_bob, path={"caseId": case_id}), None)["statusCode"] == 200
     assert users_h.list_users(_ev(ctx_bob), None)["statusCode"] == 403  # admin-only
 
 
@@ -177,8 +187,9 @@ def _seed_embeddings(doc_id, segments):
     conn = _admin_conn()
     conn.autocommit = True
     cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT set_config('app.organization_id', %s, false)", (ORG_ID,))
     for i, text in enumerate(segments):
-        chunk_id = rag.store_chunk(cur, doc_id, i, text)
-        rag.store_embedding(cur, doc_id, chunk_id, text, embeddings_service.embed(text))
+        chunk_id = rag.store_chunk(cur, ORG_ID, doc_id, i, text)
+        rag.store_embedding(cur, ORG_ID, doc_id, chunk_id, text, embeddings_service.embed(text))
     cur.close()
     conn.close()

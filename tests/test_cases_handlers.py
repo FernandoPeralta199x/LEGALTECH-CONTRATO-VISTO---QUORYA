@@ -12,6 +12,9 @@ import pytest
 from src.handlers import case_results as cr_h
 from src.handlers import cases as cases_h
 
+SYSTEM_ORG = "00000000-0000-0000-0000-000000000001"
+OTHER_ORG = "00000000-0000-0000-0000-0000000000ff"
+
 
 def _admin_conn():
     return psycopg2.connect(
@@ -26,21 +29,22 @@ def _reset_and_seed_client() -> str:
     with conn.cursor() as cur:
         cur.execute("TRUNCATE public.cases, public.clients RESTART IDENTITY CASCADE")
         cur.execute("TRUNCATE audit.audit_log RESTART IDENTITY")
+        cur.execute("SELECT set_config('app.organization_id', %s, false)", (SYSTEM_ORG,))
         cur.execute(
-            "INSERT INTO public.clients (legal_name, document_number, document_type)"
-            " VALUES ('Cliente Teste', %s, 'cnpj') RETURNING id",
-            (uuid.uuid4().hex[:14],),
+            "INSERT INTO public.clients (organization_id, legal_name, document_number, document_type)"
+            " VALUES (%s, 'Cliente Teste', %s, 'cnpj') RETURNING id",
+            (SYSTEM_ORG, uuid.uuid4().hex[:14]),
         )
         cid = cur.fetchone()[0]
     conn.close()
     return str(cid)
 
 
-def _event(user_id, role="analyst", body=None, path=None, query=None):
+def _event(user_id, role="analyst", body=None, path=None, query=None, org_id=SYSTEM_ORG):
     # Shape REAL do REST API: claims do authorizer ACHATADOS em `authorizer.<key>`.
     return {
         "requestContext": {
-            "authorizer": {"user_id": user_id, "email": "u@t.c", "role": role}
+            "authorizer": {"user_id": user_id, "email": "u@t.c", "role": role, "organization_id": org_id}
         },
         "body": json.dumps(body) if body is not None else None,
         "pathParameters": path or {},
@@ -71,7 +75,7 @@ def test_create_get_list_case(client_id):
     case_id = _data(_make_case(a, client_id))["id"]
 
     assert cases_h.get_case(_event(a, path={"caseId": case_id}), None)["statusCode"] == 200
-    listed = _data(cases_h.list_cases(_event(a), None))
+    listed = _data(cases_h.list_cases(_event(a), None))["items"]
     assert len(listed) == 1 and listed[0]["id"] == case_id
 
 
@@ -79,9 +83,11 @@ def test_case_isolation_and_admin(client_id):
     a, b = str(uuid.uuid4()), str(uuid.uuid4())
     case_id = _data(_make_case(a, client_id))["id"]
 
-    assert len(_data(cases_h.list_cases(_event(b), None))) == 0
-    assert cases_h.get_case(_event(b, path={"caseId": case_id}), None)["statusCode"] == 404
-    assert len(_data(cases_h.list_cases(_event(b, role="admin"), None))) == 1
+    # usuário de OUTRA organização não vê os casos (RLS por org)
+    assert len(_data(cases_h.list_cases(_event(b, org_id=OTHER_ORG), None))["items"]) == 0
+    assert cases_h.get_case(_event(b, path={"caseId": case_id}, org_id=OTHER_ORG), None)["statusCode"] == 404
+    # admin da MESMA organização vê
+    assert len(_data(cases_h.list_cases(_event(b, role="admin"), None))["items"]) == 1
 
 
 def test_update_and_delete_case(client_id):
@@ -139,11 +145,11 @@ def test_case_result_only_for_visible_case(client_id):
     assert ok["statusCode"] == 201
 
     blocked = cr_h.create_case_result(
-        _event(b, body={"case_id": case_id, "result_type": "due_diligence",
-                        "findings": {}, "risk_level": "low"}),
+        _event(b, org_id=OTHER_ORG, body={"case_id": case_id, "result_type": "due_diligence",
+                                          "findings": {}, "risk_level": "low"}),
         None,
     )
-    assert blocked["statusCode"] == 404  # caso não visível ao usuário B
+    assert blocked["statusCode"] == 404  # caso de OUTRA organização não é visível
 
 
 def test_viewer_cannot_write(client_id):
@@ -168,7 +174,8 @@ def test_nested_authorizer_shape_still_works(client_id):
     a = str(uuid.uuid4())
     ev = {
         "requestContext": {"authorizer": {"context": {
-            "user_id": a, "email": "u@t.c", "role": "analyst"}}},
+            "user_id": a, "email": "u@t.c", "role": "analyst",
+            "organization_id": "00000000-0000-0000-0000-000000000001"}}},
         "body": json.dumps({"client_id": client_id, "case_type": "contract_analysis"}),
         "pathParameters": {}, "queryStringParameters": {},
     }
@@ -219,9 +226,9 @@ def test_case_result_isolation_and_rbac(client_id):
     case_id = _data(_make_case(a, client_id))["id"]
     rid = _data(_make_result(a, case_id))["id"]
 
-    # B não é dono do resultado (RLS case_results por created_by) → 404
-    assert cr_h.get_case_result(_event(b, path={"resultId": rid}), None)["statusCode"] == 404
-    # admin vê
+    # usuário de OUTRA organização não vê o resultado (RLS por org) → 404
+    assert cr_h.get_case_result(_event(b, path={"resultId": rid}, org_id=OTHER_ORG), None)["statusCode"] == 404
+    # admin da MESMA organização vê
     assert cr_h.get_case_result(_event(b, role="admin", path={"resultId": rid}),
                                 None)["statusCode"] == 200
     # viewer não escreve
@@ -261,14 +268,49 @@ def test_case_result_blocked_on_finalized_case(client_id):
 
 
 def test_delete_case_audit_records_resource_id(client_id):
-    # Migration 002: auditoria de DELETE registra o resource_id (era NULL antes).
+    # #26: delete agora é soft (UPDATE deleted_at) -> auditado como UPDATE com o resource_id.
     a = str(uuid.uuid4())
     case_id = _data(_make_case(a, client_id))["id"]
     assert cases_h.delete_case(_event(a, path={"caseId": case_id}), None)["statusCode"] == 200
     conn = _admin_conn()
     with conn.cursor() as cur:
-        cur.execute("SELECT resource_id FROM audit.audit_log WHERE action='DELETE'"
+        cur.execute("SELECT resource_id, change_after FROM audit.audit_log WHERE action='UPDATE'"
                     " AND resource_type='cases' ORDER BY created_at DESC LIMIT 1")
         row = cur.fetchone()
     conn.close()
     assert row is not None and str(row[0]) == case_id
+    assert row[1] and row[1].get("deleted_at") is not None  # soft-delete registrado
+
+
+def test_soft_delete_preserva_linha_e_some_da_listagem(client_id):
+    # #26: a UI promete arquivar -> deleted_at marcado, linha preservada, fora da listagem
+    a = str(uuid.uuid4())
+    case_id = _data(_make_case(a, client_id))["id"]
+    assert cases_h.delete_case(_event(a, path={"caseId": case_id}), None)["statusCode"] == 200
+    conn = _admin_conn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT deleted_at FROM public.cases WHERE id=%s", (case_id,))
+        row = cur.fetchone()
+    conn.close()
+    assert row is not None and row[0] is not None  # linha preservada, soft
+    listed = _data(cases_h.list_cases(_event(a), None))
+    assert case_id not in {c["id"] for c in listed["items"]}
+    # 404 ao tentar deletar de novo (já arquivado)
+    assert cases_h.delete_case(_event(a, path={"caseId": case_id}), None)["statusCode"] == 404
+
+
+def test_triggers_de_auditoria_existem_nas_migracoes():
+    # FE4-26-B2: migrations 013/014 garantem os triggers de auditoria em deploy limpo
+    conn = _admin_conn()
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT c.relname, t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid"
+            " WHERE NOT t.tgisinternal AND t.tgname LIKE 'audit_%'"
+            " AND c.relname IN ('cases','documents','pricing_configs')")
+        found = {(r[0], r[1]) for r in cur.fetchall()}
+    conn.close()
+    assert ("cases", "audit_cases_update") in found
+    assert ("cases", "audit_cases_delete") in found
+    assert ("documents", "audit_documents_delete") in found
+    assert ("pricing_configs", "audit_pricing_configs_insert") in found
+    assert ("pricing_configs", "audit_pricing_configs_update") in found

@@ -46,27 +46,29 @@ def create_case_result(event, context):
         return error_response(400, "case_id inválido")
 
     try:
-        with tenant_tx(user["user_id"], user["role"]) as cur:
+        with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
             # Atômico (sem TOCTOU): só insere se o case for VISÍVEL ao usuário —
             # a RLS de `cases` filtra o EXISTS; 0 linhas inseridas => 404.
             cur.execute(
                 "INSERT INTO public.case_results"
-                " (case_id, result_type, result_title, result_data, risk_level,"
+                " (organization_id, case_id, result_type, result_title, result_data, risk_level,"
                 "  confidence_score, summary_text, detailed_findings,"
                 "  recommendations, created_by)"
-                " SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s, %s"
+                " SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s"
                 " WHERE EXISTS (SELECT 1 FROM public.cases WHERE id = %s"
+                "               AND deleted_at IS NULL"
                 "               AND status NOT IN ('completed','closed'))"
                 " RETURNING id, created_at",
-                (case_id, data.result_type, data.result_title, Json(data.findings),
-                 data.risk_level, data.confidence_score, data.summary_text,
-                 data.detailed_findings, data.recommendations, user["user_id"],
-                 case_id),
+                (user["organization_id"], case_id, data.result_type, data.result_title,
+                 Json(data.findings), data.risk_level, data.confidence_score,
+                 data.summary_text, data.detailed_findings, data.recommendations,
+                 user["user_id"], case_id),
             )
             row = cur.fetchone()
             if row is None:
                 # distingue caso inexistente/sem acesso de caso finalizado
-                cur.execute("SELECT 1 FROM public.cases WHERE id = %s", (case_id,))
+                cur.execute("SELECT 1 FROM public.cases WHERE id = %s AND deleted_at IS NULL",
+                            (case_id,))
                 if cur.fetchone() is None:
                     raise _CaseNotVisible()
                 raise _CaseFinalized()
@@ -97,7 +99,7 @@ def get_case_result(event, context):
     if not result_id:
         return error_response(400, "resultId inválido")
     try:
-        with tenant_tx(user["user_id"], user["role"]) as cur:
+        with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
             cur.execute(
                 "SELECT id, case_id, result_type, result_title, result_data,"
                 " risk_level, confidence_score, summary_text, created_at"
@@ -127,7 +129,7 @@ def list_case_results(event, context):
         return perr
     page, page_size, offset = pag
     try:
-        with tenant_tx(user["user_id"], user["role"]) as cur:
+        with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
             cur.execute(
                 "SELECT id, case_id, result_type, result_title, risk_level,"
                 " confidence_score, created_at FROM public.case_results"
@@ -175,7 +177,7 @@ def update_case_result(event, context):
     values.append(result_id)
 
     try:
-        with tenant_tx(user["user_id"], user["role"]) as cur:
+        with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
             cur.execute(
                 f"UPDATE public.case_results SET {', '.join(fields)} WHERE id = %s",
                 tuple(values),
@@ -199,7 +201,7 @@ def delete_case_result(event, context):
     if not result_id:
         return error_response(400, "resultId inválido")
     try:
-        with tenant_tx(user["user_id"], user["role"]) as cur:
+        with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
             cur.execute(
                 "DELETE FROM public.case_results WHERE id = %s", (result_id,)
             )

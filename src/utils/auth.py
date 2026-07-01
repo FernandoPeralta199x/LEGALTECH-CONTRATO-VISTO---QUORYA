@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 import jwt
 
 _TOKEN_TTL_HOURS = int(os.getenv("JWT_TTL_HOURS", "8"))
+TOKEN_TTL_SECONDS = _TOKEN_TTL_HOURS * 3600  # exposto no login (expires_in)
 
 
 def create_access_token(payload: dict) -> str:

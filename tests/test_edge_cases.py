@@ -12,11 +12,12 @@ from src.handlers import case_results, cases, clients, documents, search, users
 from src.utils import lambda_io
 
 _UID = str(uuid.uuid4())
+_ORG = "00000000-0000-0000-0000-000000000001"
 
 
 def _ev(body, role="analyst", path=None, query=None):
     return {
-        "requestContext": {"authorizer": {"user_id": _UID, "role": role}},
+        "requestContext": {"authorizer": {"user_id": _UID, "role": role, "organization_id": _ORG}},
         "body": body,
         "pathParameters": path or {},
         "queryStringParameters": query or {},
@@ -44,7 +45,7 @@ def test_rls_context_does_not_leak_between_transactions():
     que reusa a mesma conexão global — senão um usuário veria dados de outro."""
     from src.services.database import get_connection, tenant_tx
     a = str(uuid.uuid4())
-    with tenant_tx(a, "analyst") as cur:
+    with tenant_tx(a, "analyst", _ORG) as cur:
         cur.execute("SELECT current_setting('app.user_id', true)")
         assert cur.fetchone()["current_setting"] == a  # ativo dentro da tx
     # depois do commit, na MESMA conexão, o contexto não persiste
@@ -63,11 +64,11 @@ def test_connection_recovers_after_aborted_transaction():
     from src.services.database import tenant_tx
     a = str(uuid.uuid4())
     try:
-        with tenant_tx(a, "analyst") as cur:
+        with tenant_tx(a, "analyst", _ORG) as cur:
             cur.execute("SELECT 1/0")  # erro de banco -> transação abortada
     except Exception:
         pass
-    with tenant_tx(a, "analyst") as cur:  # próxima invocação reusa a conexão
+    with tenant_tx(a, "analyst", _ORG) as cur:  # próxima invocação reusa a conexão
         cur.execute("SELECT 1 AS v")
         assert cur.fetchone()["v"] == 1
 

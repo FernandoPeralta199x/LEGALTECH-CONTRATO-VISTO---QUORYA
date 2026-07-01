@@ -23,9 +23,9 @@ from src.schemas.user_schemas import (
     UserSignupSchema,
     UserUpdateSchema,
 )
-from src.services.database import simple_tx
+from src.services.database import signup_tx, simple_tx
 from src.services.email import email_service
-from src.utils.auth import create_access_token
+from src.utils.auth import TOKEN_TTL_SECONDS, create_access_token
 from src.utils.context import require_role, require_user
 from src.utils.helpers import error_response, generate_uuid, success_response
 from src.utils.lambda_io import fmt_validation_error as _fmt, parse_json_body as _parse_body, parse_pagination as _paginate, valid_uuid as _valid_uuid
@@ -63,19 +63,22 @@ class _LastAdmin(Exception):
     """A operação deixaria o sistema sem nenhum administrador ativo."""
 
 
-def _is_last_active_admin(cur, target_id) -> bool:
-    """True se `target_id` é admin ativo e é o ÚNICO admin ativo do sistema."""
-    cur.execute("SELECT role, status FROM public.users WHERE id = %s", (target_id,))
+def _is_last_active_admin(cur, target_id, organization_id) -> bool:
+    """True se `target_id` é admin ativo e é o ÚNICO admin ativo da sua organização."""
+    cur.execute("SELECT role, status FROM public.users WHERE id = %s AND organization_id = %s",
+                (target_id, organization_id))
     t = cur.fetchone()
     if not t or t["role"] != "admin" or t["status"] != "active":
         return False
-    cur.execute("SELECT count(*) AS n FROM public.users WHERE role='admin' AND status='active'")
+    cur.execute("SELECT count(*) AS n FROM public.users"
+                " WHERE role='admin' AND status='active' AND organization_id = %s",
+                (organization_id,))
     return cur.fetchone()["n"] <= 1
 
 
 # ── rotas públicas ───────────────────────────────────────────────────────────
 def create_user(event, context):
-    """Signup PÚBLICO. Cria sempre como `viewer` (menor privilégio)."""
+    """Signup PÚBLICO: cria uma organização nova e o usuário como admin dela."""
     body, err = _parse_body(event)
     if err:
         return err
@@ -85,15 +88,21 @@ def create_user(event, context):
         return error_response(400, f"Validação falhou: {_fmt(e)}")
 
     user_id = generate_uuid()
+    org_id = generate_uuid()
     try:
-        with simple_tx() as cur:
+        with signup_tx(org_id) as cur:
             cur.execute("SELECT 1 FROM public.users WHERE email = %s", (data.email,))
             if cur.fetchone():
                 return error_response(409, "Email já cadastrado")
             cur.execute(
-                "INSERT INTO public.users (id, email, password_hash, name, role, status)"
-                " VALUES (%s, %s, %s, %s, 'viewer', 'active')",
-                (user_id, data.email, hash_password(data.password), data.name),
+                "INSERT INTO public.organizations (id, name) VALUES (%s, %s)",
+                (org_id, f"Org de {data.name}"),
+            )
+            cur.execute(
+                "INSERT INTO public.users"
+                " (id, email, password_hash, name, role, status, organization_id)"
+                " VALUES (%s, %s, %s, %s, 'admin', 'active', %s)",
+                (user_id, data.email, hash_password(data.password), data.name, org_id),
             )
     except psycopg2.errors.UniqueViolation:
         # corrida: 2 signups simultâneos passam pelo SELECT; o índice único garante
@@ -104,9 +113,10 @@ def create_user(event, context):
                                  "pgcode": getattr(e, "pgcode", None)}))
         return error_response(500, "Erro ao criar usuário")
 
-    logger.info(json.dumps({"event": "USER_CREATED", "user_id": user_id, "role": "viewer"}))
+    logger.info(json.dumps({"event": "USER_CREATED", "user_id": user_id, "role": "admin"}))
     return success_response(201, "Usuário criado com sucesso",
-                            {"user_id": user_id, "role": "viewer"})
+                            {"user_id": user_id, "role": "admin",
+                             "organization_id": org_id})
 
 
 def login(event, context):
@@ -122,8 +132,8 @@ def login(event, context):
     try:
         with simple_tx() as cur:
             cur.execute(
-                "SELECT id, email, password_hash, role FROM public.users"
-                " WHERE email = %s AND status = 'active'",
+                "SELECT id, email, name, password_hash, role, organization_id"
+                " FROM public.users WHERE email = %s AND status = 'active'",
                 (data.email,),
             )
             user = cur.fetchone()
@@ -141,10 +151,49 @@ def login(event, context):
 
     token = create_access_token({  # sem email no token (menos PII)
         "user_id": str(user["id"]), "role": user["role"],
+        "organization_id": str(user["organization_id"]),
+        # claims exigidos pelo frontend (sessão local): sub + token_use
+        "sub": str(user["id"]), "token_use": "dev",
     })
     logger.info(json.dumps({"event": "AUTH_LOGIN_SUCCESS", "user_id": str(user["id"])}))
+    # Shape alinhado ao contrato do frontend (authApi.AuthTokenResult).
     return success_response(200, "Login bem-sucedido", {
-        "token": token, "user_id": str(user["id"]), "role": user["role"],
+        "access_token": token,
+        "token_type": "bearer",
+        "expires_in": TOKEN_TTL_SECONDS,
+        "user": {
+            "id": str(user["id"]),
+            "email": user["email"],
+            "name": user["name"],
+            "role": user["role"],
+            "organization_id": str(user["organization_id"]),
+        },
+    })
+
+
+@require_user
+def me(event, context):
+    """Retorna o usuário autenticado (GET /auth/me). Mantém a sessão no frontend."""
+    user = event["user"]
+    try:
+        with simple_tx() as cur:
+            cur.execute(
+                "SELECT id, email, name, role, organization_id FROM public.users"
+                " WHERE id = %s AND status = 'active'",
+                (user["user_id"],),
+            )
+            row = cur.fetchone()
+    except Exception as e:
+        logger.error(json.dumps({"event": "AUTH_ME_ERROR", "error": type(e).__name__}))
+        return error_response(500, "Erro ao obter usuário atual")
+    if not row:
+        return error_response(404, "Usuário não encontrado")
+    return success_response(200, "Usuário atual", {
+        "id": str(row["id"]),
+        "email": row["email"],
+        "name": row["name"],
+        "role": row["role"],
+        "organization_id": str(row["organization_id"]),
     })
 
 
@@ -242,8 +291,8 @@ def get_user(event, context):
         with simple_tx() as cur:
             cur.execute(
                 "SELECT id, email, name, role, status, created_at"
-                " FROM public.users WHERE id = %s",
-                (target,),
+                " FROM public.users WHERE id = %s AND organization_id = %s",
+                (target, user["organization_id"]),
             )
             row = cur.fetchone()
     except Exception as e:
@@ -266,8 +315,9 @@ def list_users(event, context):
         with simple_tx() as cur:
             cur.execute(
                 "SELECT id, email, name, role, status, created_at FROM public.users"
+                " WHERE organization_id = %s"
                 " ORDER BY created_at DESC LIMIT %s OFFSET %s",
-                (page_size, offset),
+                (event["user"]["organization_id"], page_size, offset),
             )
             rows = cur.fetchall()
     except Exception as e:
@@ -316,11 +366,14 @@ def update_user(event, context):
     deactivating = user["role"] == "admin" and data.status == "inactive"
     try:
         with simple_tx() as cur:
-            if (demoting or deactivating) and _is_last_active_admin(cur, target):
+            if (demoting or deactivating) and _is_last_active_admin(
+                cur, target, user["organization_id"]
+            ):
                 raise _LastAdmin()
             cur.execute(
-                f"UPDATE public.users SET {', '.join(fields)} WHERE id = %s",
-                tuple(values),
+                f"UPDATE public.users SET {', '.join(fields)}"
+                " WHERE id = %s AND organization_id = %s",
+                (*values, user["organization_id"]),
             )
             updated = cur.rowcount
     except _LastAdmin:
@@ -344,12 +397,12 @@ def delete_user(event, context):
         return error_response(400, "userId inválido")
     try:
         with simple_tx() as cur:
-            if _is_last_active_admin(cur, target):
+            if _is_last_active_admin(cur, target, user["organization_id"]):
                 raise _LastAdmin()
             cur.execute(
                 "UPDATE public.users SET status = 'inactive', updated_at = NOW()"
-                " WHERE id = %s",
-                (target,),
+                " WHERE id = %s AND organization_id = %s",
+                (target, user["organization_id"]),
             )
             updated = cur.rowcount
     except _LastAdmin:

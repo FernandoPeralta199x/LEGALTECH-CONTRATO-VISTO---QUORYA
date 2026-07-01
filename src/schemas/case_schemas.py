@@ -4,19 +4,34 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-CASE_TYPE_PATTERN = "^(due_diligence_party|due_diligence_asset|contract_analysis)$"
-CASE_STATUS_PATTERN = "^(open|in_progress|completed|closed)$"
+# Tipos aceitos = os oferecidos pelo frontend (contractTypes) + os do modelo de
+# due diligence. case_type é apenas armazenado/exibido (nenhuma lógica ramifica
+# por valor), então ampliar a lista é seguro.
+CASE_TYPE_PATTERN = (
+    "^(contract_analysis|due_diligence|due_diligence_party|due_diligence_asset"
+    "|compra_venda|prestacao_servicos|locacao|confidencialidade|parceria|outro)$"
+)
+# Status de caso realmente usados: open (default), awaiting_triage (wizard),
+# report_ready (após geração do relatório), in_progress/completed/closed (ciclo).
+CASE_STATUS_PATTERN = (
+    "^(open|in_progress|awaiting_triage|report_ready|completed|closed)$"
+)
 PRIORITY_PATTERN = "^(low|normal|high|urgent)$"
 RISK_LEVEL_PATTERN = "^(low|medium|high|critical)$"
 
 
 class CaseCreate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    # tolerante ao payload do "Criar caso rápido" do front (title/product/notes vêm
+    # dentro de metadata); extras desconhecidos são ignorados, não rejeitados.
+    model_config = ConfigDict(extra="ignore")
 
     client_id: str
     case_type: str = Field(..., pattern=CASE_TYPE_PATTERN)
     priority: str = Field(default="normal", pattern=PRIORITY_PATTERN)
     description: Optional[str] = None  # gravado em cases.metadata (jsonb)
+    title: Optional[str] = Field(default=None, max_length=255)
+    product_type: Optional[str] = Field(default=None, max_length=40)
+    metadata: Optional[dict] = None  # caso rápido: {title, product, notes, source}
 
 
 class CaseUpdate(BaseModel):

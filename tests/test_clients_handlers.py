@@ -11,6 +11,9 @@ import pytest
 
 from src.handlers import clients as c
 
+SYSTEM_ORG = "00000000-0000-0000-0000-000000000001"
+OTHER_ORG = "00000000-0000-0000-0000-0000000000ff"
+
 
 def _admin_conn():
     return psycopg2.connect(
@@ -28,10 +31,10 @@ def clean_clients():
     conn.close()
 
 
-def _event(role="analyst", body=None, path=None, query=None):
+def _event(role="analyst", body=None, path=None, query=None, org_id=SYSTEM_ORG):
     return {
         "requestContext": {"authorizer": {"user_id": str(uuid.uuid4()),
-                                          "email": "u@t.c", "role": role}},
+                                          "email": "u@t.c", "role": role, "organization_id": org_id}},
         "body": json.dumps(body) if body is not None else None,
         "pathParameters": path or {},
         "queryStringParameters": query or {},
@@ -40,7 +43,11 @@ def _event(role="analyst", body=None, path=None, query=None):
 
 def _data(resp):
     assert resp["statusCode"] in (200, 201), resp
-    return json.loads(resp["body"])["data"]
+    d = json.loads(resp["body"])["data"]
+    # listagem paginada retorna envelope {items,total,...}; testes tratam como lista
+    if isinstance(d, dict) and "items" in d:
+        return d["items"]
+    return d
 
 
 _VALID = {"legal_name": "Empresa XYZ", "document_type": "cnpj",
@@ -50,6 +57,29 @@ _VALID = {"legal_name": "Empresa XYZ", "document_type": "cnpj",
 def _create(role="analyst", **over):
     body = {**_VALID, **over}
     return c.create_client(_event(role, body=body), None)
+
+
+def test_list_clients_busca_q(clean_clients):
+    # #27: busca textual (?q=) por nome do cliente
+    _create(legal_name="Zebra Advocacia")
+    achados = _data(c.list_clients(_event(query={"q": "zebra"}), None))
+    assert any(x["name"] == "Zebra Advocacia" for x in achados)
+    # termo sem correspondência -> vazio (sem falso-positivo)
+    assert _data(c.list_clients(_event(query={"q": "qqqnaoexiste"}), None)) == []
+
+
+# ── create ──────────────────────────────────────────────────────────────────
+def test_create_client_shape_v2_do_frontend(clean_clients):
+    # frontend envia name/cpf/person_type/contract_role/address (shape V2) — o backend
+    # mapeia name->legal_name, cpf->document_number e ignora os extras.
+    resp = c.create_client(_event(body={
+        "name": "Maria Teste", "cpf": "060.380.601-54", "document_type": "cpf",
+        "person_type": "individual", "contract_role": "contratada",
+        "address": "Rua X, 10 - Centro", "rg": "12.345.678-9"}), None)
+    assert resp["statusCode"] == 201, resp
+    data = json.loads(resp["body"])["data"]
+    assert data["name"] == "Maria Teste" and data["legal_name"] == "Maria Teste"
+    assert data["document_number"] == "06038060154"  # analyst vê completo
 
 
 # ── create ──────────────────────────────────────────────────────────────────
@@ -101,9 +131,16 @@ def test_unauthenticated_blocked(clean_clients):
 # ── read (compartilhado) ────────────────────────────────────────────────────
 def test_list_is_shared_across_users(clean_clients):
     _create()
-    # outro usuário (viewer) enxerga o mesmo catálogo
+    # outro usuário (viewer) DA MESMA organização enxerga o mesmo catálogo
     listed = _data(c.list_clients(_event(role="viewer"), None))
     assert len(listed) == 1
+
+
+def test_clients_isolated_by_org(clean_clients):
+    cid = _data(_create())["id"]  # criado na org de sistema
+    # usuário de OUTRA organização não vê o cliente (RLS por org)
+    assert c.get_client(_event(path={"clientId": cid}, org_id=OTHER_ORG), None)["statusCode"] == 404
+    assert len(_data(c.list_clients(_event(org_id=OTHER_ORG), None))) == 0
 
 
 def test_get_nonexistent_404(clean_clients):
