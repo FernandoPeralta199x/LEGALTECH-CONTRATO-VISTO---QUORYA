@@ -321,11 +321,15 @@ def list_cases(event, context):
     page, page_size, offset = pag
     # busca textual opcional (?q=) por título ou código do caso (header global)
     q = (params.get("q") or "").strip()
+    status = (params.get("status") or "").strip()
     where, fargs = "WHERE deleted_at IS NULL", []
     if q:
         where += " AND (title ILIKE %s OR code ILIKE %s)"
         like = f"%{q}%"
         fargs = [like, like]
+    if status:
+        where += " AND status = %s"
+        fargs.append(status)
     try:
         # A RLS já filtra os casos visíveis ao usuário (não filtramos por mão).
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:

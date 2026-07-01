@@ -4,7 +4,13 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-CASE_TYPE_PATTERN = "^(due_diligence_party|due_diligence_asset|contract_analysis)$"
+# Tipos aceitos = os oferecidos pelo frontend (contractTypes) + os do modelo de
+# due diligence. case_type é apenas armazenado/exibido (nenhuma lógica ramifica
+# por valor), então ampliar a lista é seguro.
+CASE_TYPE_PATTERN = (
+    "^(contract_analysis|due_diligence|due_diligence_party|due_diligence_asset"
+    "|compra_venda|prestacao_servicos|locacao|confidencialidade|parceria|outro)$"
+)
 CASE_STATUS_PATTERN = "^(open|in_progress|completed|closed)$"
 PRIORITY_PATTERN = "^(low|normal|high|urgent)$"
 RISK_LEVEL_PATTERN = "^(low|medium|high|critical)$"

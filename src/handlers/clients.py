@@ -97,6 +97,8 @@ def list_clients(event, context):
         fargs = [like, like]
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
+            cur.execute(f"SELECT count(*) AS n FROM public.clients {where}", tuple(fargs))
+            total = cur.fetchone()["n"]
             cur.execute(
                 _SELECT_COLS + f" {where}"
                 " ORDER BY created_at DESC LIMIT %s OFFSET %s",
@@ -106,10 +108,14 @@ def list_clients(event, context):
     except Exception as e:
         logger.error(json.dumps({"event": "CLIENT_LIST_ERROR", "error": type(e).__name__}))
         return error_response(500, "Erro ao listar clientes")
-    return success_response(
-        200, f"{len(rows)} clientes encontrados",
-        [_serialize(r, user["role"]) for r in rows]
-    )
+    total_pages = (total + page_size - 1) // page_size if page_size else 1
+    return success_response(200, f"{total} clientes encontrados", {
+        "items": [_serialize(r, user["role"]) for r in rows],
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "total_pages": total_pages,
+    })
 
 
 @require_user

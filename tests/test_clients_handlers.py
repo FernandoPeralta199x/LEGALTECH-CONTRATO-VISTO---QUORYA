@@ -43,7 +43,11 @@ def _event(role="analyst", body=None, path=None, query=None, org_id=SYSTEM_ORG):
 
 def _data(resp):
     assert resp["statusCode"] in (200, 201), resp
-    return json.loads(resp["body"])["data"]
+    d = json.loads(resp["body"])["data"]
+    # listagem paginada retorna envelope {items,total,...}; testes tratam como lista
+    if isinstance(d, dict) and "items" in d:
+        return d["items"]
+    return d
 
 
 _VALID = {"legal_name": "Empresa XYZ", "document_type": "cnpj",
