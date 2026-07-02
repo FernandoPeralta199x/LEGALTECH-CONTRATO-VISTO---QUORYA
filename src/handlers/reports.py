@@ -65,10 +65,13 @@ def generate_case_report(event, context):
         return error_response(400, "caseId inválido")
     try:
         with tenant_tx(user["user_id"], user["role"], org) as cur:
-            cur.execute("SELECT 1 FROM public.cases WHERE id = %s AND deleted_at IS NULL", (case_id,))
-            if cur.fetchone() is None:
-                return error_response(404, "Caso não encontrado")
+            # CVS-007: caso inexistente/deletado (404) ou finalizado (409) não regera relatório.
+            assert_case_writable(cur, case_id)
             report = _generate(cur, org, case_id, user["user_id"])
+    except CaseNotVisible:
+        return error_response(404, "Caso não encontrado")
+    except CaseFinalized:
+        return error_response(409, "caso finalizado não aceita regeneração de relatório")
     except Exception as e:
         logger.error(json.dumps({"event": "REPORT_GENERATE_ERROR", "error": type(e).__name__,
                                  "pgcode": getattr(e, "pgcode", None)}))

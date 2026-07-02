@@ -251,6 +251,10 @@ def test_gerar_revisar_relatorio_e_aggregate(case_id):
     assert rev["status"] == "approved" and rev["reviewed_by"]
     case = _data(cases_h.get_case(_event(a, path={"caseId": case_id}), None))
     assert case["status"] == "completed"
+    # CVS-007: caso concluído não aceita nova triagem nem regeneração de relatório (409)
+    assert tr_h.run_triage(_event(a, path={"caseId": case_id}), None)["statusCode"] == 409
+    assert rep_h.generate_case_report(
+        _event(a, path={"caseId": case_id}), None)["statusCode"] == 409
 
 
 def test_get_report_antes_de_gerar_404(case_id):
