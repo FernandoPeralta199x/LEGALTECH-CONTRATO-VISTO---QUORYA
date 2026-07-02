@@ -339,7 +339,10 @@ def list_cases(event, context):
                 "SELECT id, client_id, case_type, status, priority, product_type,"
                 " product_label, title, code, risk_level, progress, source_mode,"
                 " request_id, created_by, assigned_to, created_at, completed_at,"
-                " metadata, submitted_at"
+                " metadata, submitted_at,"
+                " (SELECT count(*) FROM public.case_parties cp"
+                "  WHERE cp.case_id = public.cases.id AND cp.deleted_at IS NULL)"
+                " AS parties_count"
                 f" FROM public.cases {where}"
                 " ORDER BY created_at DESC LIMIT %s OFFSET %s",
                 tuple(fargs + [page_size, offset]),
@@ -491,6 +494,7 @@ def _serialize(row) -> dict:
         "created_by": str(row["created_by"]) if row["created_by"] else None,
         "assigned_to": str(row["assigned_to"]) if row["assigned_to"] else None,
         "metadata": row.get("metadata") or {},
+        "parties_count": row.get("parties_count") or 0,
         "submitted_at": str(row["submitted_at"]) if row.get("submitted_at") else None,
         "created_at": str(row["created_at"]) if row["created_at"] else None,
         # cases não rastreia updated_at próprio; usa created_at como aproximação.
