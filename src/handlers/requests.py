@@ -97,6 +97,19 @@ def create_request(event, context):
             row = cur.fetchone()
             overrides = row["module_overrides"] if row else None
             est = estimate(data.product_type, selected, overrides)
+
+            # cliente vinculado (opcional): valida UUID + existência/visibilidade (RLS)
+            client_id = _valid_uuid(data.client_id) if data.client_id else None
+            if data.client_id and not client_id:
+                return error_response(400, "client_id inválido")
+            if client_id:
+                cur.execute(
+                    "SELECT 1 FROM public.clients WHERE id = %s",
+                    (client_id,),
+                )
+                if cur.fetchone() is None:
+                    return error_response(400, "client_id não encontrado")
+
             code = _next_request_code(cur, org)
 
             # FK circular requests.case_id <-> cases.request_id (NOT DEFERRABLE):
@@ -115,8 +128,8 @@ def create_request(event, context):
                 "INSERT INTO public.cases"
                 " (id, organization_id, request_id, client_id, case_type, product_type,"
                 "  product_label, title, description, status, source_mode, created_by, code)"
-                " VALUES (%s,%s,%s,NULL,%s,%s,%s,%s,%s,'awaiting_triage',%s,%s,%s)",
-                (case_id, org, request_id, data.product_type, data.product_type,
+                " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'awaiting_triage',%s,%s,%s)",
+                (case_id, org, request_id, client_id, data.product_type, data.product_type,
                  product_label, title, data.description, data.source_mode, uid, code),
             )
             cur.execute(

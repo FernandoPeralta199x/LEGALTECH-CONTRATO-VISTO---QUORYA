@@ -166,9 +166,12 @@ def get_case_aggregate(event, context):
     try:
         with tenant_tx(user["user_id"], user["role"], org) as cur:
             cur.execute(
-                "SELECT id, request_id, code, created_by, product_type, product_label,"
+                "SELECT id, request_id, code, created_by, client_id, product_type, product_label,"
                 " title, description, status, progress, risk_level, recommendation,"
-                " source_mode, is_local_simulation, created_at"
+                " source_mode, is_local_simulation, created_at,"
+                " (SELECT cl.legal_name FROM public.clients cl"
+                "  WHERE cl.id = public.cases.client_id)"
+                " AS client_name"
                 " FROM public.cases WHERE id = %s AND deleted_at IS NULL", (case_id,))
             c = cur.fetchone()
             if not c:
@@ -285,6 +288,8 @@ def get_case_aggregate(event, context):
     case_obj = {
         "id": str(c["id"]), "request_id": str(c["request_id"]) if c["request_id"] else None,
         "code": c["code"] or "", "organization_id": str(org),
+        "client_id": str(c["client_id"]) if c["client_id"] else None,
+        "client_name": c.get("client_name"),
         "created_by": str(c["created_by"]) if c["created_by"] else "",
         "product_type": c["product_type"] or "", "product_label": c["product_label"] or "",
         "title": c["title"] or "", "description": c["description"] or "",
@@ -342,7 +347,10 @@ def list_cases(event, context):
                 " metadata, submitted_at,"
                 " (SELECT count(*) FROM public.case_parties cp"
                 "  WHERE cp.case_id = public.cases.id AND cp.deleted_at IS NULL)"
-                " AS parties_count"
+                " AS parties_count,"
+                " (SELECT cl.legal_name FROM public.clients cl"
+                "  WHERE cl.id = public.cases.client_id)"
+                " AS client_name"
                 f" FROM public.cases {where}"
                 " ORDER BY created_at DESC LIMIT %s OFFSET %s",
                 tuple(fargs + [page_size, offset]),
@@ -480,6 +488,7 @@ def _serialize(row) -> dict:
     return {
         "id": str(row["id"]),
         "client_id": str(row["client_id"]) if row["client_id"] else None,
+        "client_name": row.get("client_name"),
         "case_type": row["case_type"],
         "status": row["status"],
         "priority": row["priority"],

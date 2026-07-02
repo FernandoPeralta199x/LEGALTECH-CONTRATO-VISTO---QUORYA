@@ -37,6 +37,7 @@ class RequestCreateSchema(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     product_type: str = Field(min_length=1, max_length=64)
+    client_id: str | None = Field(default=None, max_length=36)
     product_label: str | None = Field(default=None, max_length=128)
     title: str | None = Field(default=None, max_length=255)
     description: str | None = Field(default=None, max_length=2000)
