@@ -278,6 +278,26 @@ def get_case_aggregate(event, context):
                     "created_at": str(t["created_at"]), "updated_at": str(t["updated_at"]),
                 })
 
+            cur.execute(
+                "SELECT id, case_id, triage_module_id, provider, source_mode, status,"
+                " input_hash, normalized_result, summary, risk_signals, confidence,"
+                " created_at, updated_at FROM public.provider_results"
+                " WHERE case_id = %s ORDER BY created_at, id", (case_id,))
+            provider_results = []
+            for r in cur.fetchall():
+                provider_results.append({
+                    "id": str(r["id"]), "case_id": str(r["case_id"]),
+                    "triage_module_id": str(r["triage_module_id"]),
+                    "organization_id": str(org), "provider": r["provider"],
+                    "provider_request_id": None, "source_mode": r["source_mode"],
+                    "status": r["status"], "input_hash": r["input_hash"],
+                    "raw_result_ref": None, "normalized_result": r["normalized_result"] or {},
+                    "summary": r["summary"], "risk_signals": r["risk_signals"] or [],
+                    "confidence": float(r["confidence"]) if r["confidence"] is not None else None,
+                    "error_code": None, "error_message": None,
+                    "created_at": str(r["created_at"]), "updated_at": str(r["updated_at"]),
+                })
+
             report = _get_report(cur, org, case_id)
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_AGGREGATE_ERROR", "error": type(e).__name__,
@@ -312,7 +332,7 @@ def get_case_aggregate(event, context):
     return success_response(200, "Detalhe do caso", {
         "case": case_obj, "request": request_obj, "parties": parties,
         "documents": documents, "timeline": timeline, "triage_modules": triage,
-        "provider_results": [], "report": report, "summary": summary,
+        "provider_results": provider_results, "report": report, "summary": summary,
     })
 
 
