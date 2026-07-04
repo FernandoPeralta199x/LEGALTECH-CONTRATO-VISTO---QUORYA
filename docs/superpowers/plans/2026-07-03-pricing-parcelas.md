@@ -67,8 +67,9 @@ def test_config_desabilitada_so_1x():
     opts = compute_installment_options(10000, _cfg(enabled=False), REF)
     assert [o["parcelas"] for o in opts] == [1]
 
-def test_total_zero_retorna_1x_de_zero():
+def test_total_zero_retorna_somente_1x_de_zero():
     opts = compute_installment_options(0, _cfg(), REF)
+    assert len(opts) == 1  # spec §4.6: total 0 => APENAS 1x
     assert opts[0]["parcelas"] == 1 and opts[0]["valor_total_cents"] == 0
 
 def test_total_negativo_falha():
@@ -183,7 +184,10 @@ def _amounts_price(total_cents: int, n: int, config: InstallmentConfig):
 
 def compute_installment_options(total_cents: int, config: InstallmentConfig,
                                 reference_date: date) -> list[dict]:
-    max_n = config.max_parcelas if config.enabled else 1
+    if total_cents < 0:
+        raise ValueError("total_cents não pode ser negativo")
+    # total 0 ou config desabilitada => apenas 1x (spec §4.6)
+    max_n = config.max_parcelas if (config.enabled and total_cents > 0) else 1
     options: list[dict] = []
     for n in range(1, max_n + 1):
         amounts, valor_total, acrescimo, has_juros = _amounts(total_cents, n, config)
@@ -331,7 +335,7 @@ def test_factory_default_mock():
     assert isinstance(prov, MockPaymentProvider)
 
 def test_real_placeholder_falha_claro():
-    prov = RealPaymentProvider(api_key="x")
+    prov = RealPaymentProvider(provider="pagarme", mode="sandbox", api_key="x")
     with pytest.raises(NotImplementedError):
         prov.create_charge(_req())
 
@@ -448,8 +452,20 @@ Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
+- [ ] **Step 5: Documentar env** — se existir `.env.example`, adicionar:
+
+```env
+# Pagamento (seam) — mock nesta fase; gateway real na Fase 7
+PAYMENT_PROVIDER=mock
+PAYMENT_MODE=mock
+PAYMENT_API_KEY=
+PAYMENT_WEBHOOK_SECRET=
+```
+
+- [ ] **Step 6: Commit**
+
 ```bash
-git add src/adapters/payment.py tests/test_payment_adapter.py
+git add src/adapters/payment.py tests/test_payment_adapter.py .env.example
 git commit -m "feat(payment): seam de pagamento (Mock+Real placeholder+factory)"
 ```
 
@@ -639,8 +655,9 @@ def _org_installment(cur, org) -> tuple[InstallmentConfig, int]:
 3. No `_config_payload`, incluir `installment_config` (default quando ausente):
 
 ```python
-    # dentro do dict de retorno (row existente e no default):
-    "installment_config": (row["installment_config"] if row and row["installment_config"] else {}),
+    # dentro do dict de retorno (row existente e no default) — default COMPLETO, não {}:
+    "installment_config": (row["installment_config"] if row and row["installment_config"]
+                           else InstallmentConfig().model_dump()),
 ```
 
 E no `SELECT` de `get_pricing_config` e no `RETURNING` de `update_pricing_config`, adicionar a coluna `installment_config`.
@@ -649,13 +666,19 @@ E no `SELECT` de `get_pricing_config` e no `RETURNING` de `update_pricing_config
 
 ```python
             cur_inst = cur_row["installment_config"] if cur_row else {}
-            new_inst = (data.installment_config.model_dump()
-                        if "installment_config" in changed and data.installment_config
-                        else cur_inst)
-            # incluir installment_config no INSERT ... ON CONFLICT (colunas + EXCLUDED) com Json(new_inst)
+            if "installment_config" in changed:
+                # Semântica ATÔMICA por campo (mesma convenção de product/module_overrides no
+                # handler atual): quando presente, o front envia o objeto completo; o Pydantic
+                # InstallmentConfig preenche defaults e valida a config FINAL (cross-fields).
+                # null explícito => volta ao default (desabilitado).
+                new_inst = (data.installment_config.model_dump()
+                            if data.installment_config is not None else {})
+            else:
+                new_inst = cur_inst
 ```
 
-(Adicionar `installment_config` à lista de colunas do `INSERT`, ao `VALUES`, ao `ON CONFLICT DO UPDATE`, e ao `SELECT` inicial `cur_row`.)
+(Adicionar `installment_config` à lista de colunas do `INSERT`, ao `VALUES` com `Json(new_inst)`, ao
+`ON CONFLICT DO UPDATE`, ao `RETURNING`, e ao `SELECT` inicial que popula `cur_row`.)
 
 - [ ] **Step 4: Rodar e ver passar**
 
@@ -742,10 +765,66 @@ git commit -m "feat(requests): caso nasce com payment_status=pending"
 
 ```python
 # tests/test_payments_handler.py
-import json, uuid, psycopg2, pytest
+import json
+import uuid
+
+import psycopg2
+import pytest
+
 from src.handlers import payments as pay_h
 from src.handlers import pricing as pr_h
-# reusar _event/_admin_conn/_data/_create_case do padrão dos outros testes
+from src.handlers import requests as req_h
+
+SYSTEM_ORG = "00000000-0000-0000-0000-000000000001"
+
+
+def _admin_conn():
+    return psycopg2.connect(host="localhost", port=5433, user="dbadmin",
+                            password="localdev_cv", dbname="contrato_visto", connect_timeout=5)
+
+
+def _reset():
+    conn = _admin_conn(); conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute("TRUNCATE public.requests, public.cases, public.pricing_configs"
+                    " RESTART IDENTITY CASCADE")
+    conn.close()
+
+
+def _event(user_id, role="admin", body=None, path=None, org_id=SYSTEM_ORG):
+    return {"requestContext": {"authorizer": {"user_id": user_id, "email": "u@t.c",
+                                              "role": role, "organization_id": org_id}},
+            "body": json.dumps(body) if body is not None else None,
+            "pathParameters": path or {}, "queryStringParameters": {}}
+
+
+def _data(resp):
+    assert resp["statusCode"] in (200, 201), resp
+    return json.loads(resp["body"])["data"]
+
+
+@pytest.fixture(autouse=True)
+def _clean():
+    _reset()
+    yield
+
+
+@pytest.fixture
+def seed_case_and_config():
+    """Caso pending + parcelamento habilitado (6x, 3 sem juros, cartão até 6x)."""
+    admin = str(uuid.uuid4())
+    pr_h.update_pricing_config(_event(admin, body={"installment_config": {
+        "enabled": True, "max_parcelas": 6, "sem_juros_ate": 3, "juros_mensal_bps": 299,
+        "valor_minimo_parcela_cents": 0, "primeiro_vencimento_dias": 30, "dia_vencimento": 10,
+        "allowed_methods": {"cartao": {"enabled": True, "max_parcelas": 6}}}}), None)
+    resp = req_h.create_request(_event(admin, body={
+        "product_type": "analise_contratual",
+        "title": "Contrato de teste de pagamento",
+        "parties": [{"name": "Empresa X LTDA", "role": "contratante", "person_type": "company"}],
+        "selected_modules": ["ia_deepseek", "analise_contratual_ia"],
+        "idempotency_key": str(uuid.uuid4()),
+    }), None)
+    return _data(resp)["case_id"], admin
 
 def test_pagamento_grava_plano_e_status(seed_case_and_config):
     case_id, admin = seed_case_and_config  # caso pending + config habilitada
@@ -806,7 +885,8 @@ from src.services.database import tenant_tx
 from src.services.pricing.installments import InstallmentConfig, compute_installment_options
 from src.utils.context import require_user
 from src.utils.helpers import error_response, success_response
-from src.utils.lambda_io import fmt_validation_error as _fmt, parse_json_body as _parse_body
+from src.utils.lambda_io import (fmt_validation_error as _fmt, parse_json_body as _parse_body,
+                                 valid_uuid)
 from src.utils.safety import enforce_production_safety
 
 enforce_production_safety()
@@ -823,9 +903,9 @@ def _payload_hash(sel: PaymentSelectionSchema) -> str:
 def create_case_payment(event, context):
     user = event["user"]
     org = user["organization_id"]
-    case_id = (event.get("pathParameters") or {}).get("caseId")
+    case_id = valid_uuid((event.get("pathParameters") or {}).get("caseId"))
     if not case_id:
-        return error_response(400, "caseId ausente")
+        return error_response(400, "caseId inválido")
     body, err = _parse_body(event)
     if err:
         return err
@@ -835,11 +915,13 @@ def create_case_payment(event, context):
         return error_response(400, f"Validação falhou: {_fmt(e)}")
 
     try:
+        # ── TX 1 (curta): ler caso/plano/config e validar. Nenhum I/O externo aqui. ──
         with tenant_tx(user["user_id"], user["role"], org) as cur:
             cur.execute(
                 "SELECT r.id, r.total_price_cents, r.installment_plan, r.payment_status"
                 " FROM public.requests r JOIN public.cases c ON c.request_id = r.id"
-                " WHERE c.id = %s", (case_id,))
+                "  AND c.organization_id = r.organization_id"
+                " WHERE c.id = %s AND c.deleted_at IS NULL", (case_id,))
             row = cur.fetchone()
             if not row:
                 return error_response(404, "Caso não encontrado")
@@ -855,39 +937,52 @@ def create_case_payment(event, context):
                 return error_response(409, "Pagamento já registrado com outros dados")
 
             icfg, iver = _read_config(cur, org)
+            request_id = row["id"]
             total = row["total_price_cents"] or 0
-            ref = datetime.now(_BRT).date()
-            options = compute_installment_options(total, icfg, ref)
-            opt = next((o for o in options if o["parcelas"] == sel.parcelas), None)
-            if opt is None:
-                return error_response(400, "Número de parcelas não ofertado")
-            if sel.method not in opt["allowed_methods"]:
-                return error_response(400, "Método não permitido para esta opção")
 
-            provider = create_payment_provider()
-            result = provider.create_charge(PaymentRequest(
-                amount_cents=opt["valor_total_cents"], installments=sel.parcelas,
-                method=sel.method, case_reference=str(case_id), organization_id=str(org),
-                idempotency_key=sel.idempotency_key, schedule=opt["schedule"],
-                mode=os.getenv("PAYMENT_MODE", "mock")))  # type: ignore[arg-type]
+        ref = datetime.now(_BRT).date()
+        options = compute_installment_options(total, icfg, ref)
+        opt = next((o for o in options if o["parcelas"] == sel.parcelas), None)
+        if opt is None:
+            return error_response(400, "Número de parcelas não ofertado")
+        if sel.method not in opt["allowed_methods"]:
+            return error_response(400, "Método não permitido para esta opção")
+        if sel.pricing_config_version is not None and sel.pricing_config_version != iver:
+            # soft (spec §7): recalcula com a config vigente; só registra a divergência
+            logger.info(json.dumps({"event": "PAYMENT_CONFIG_VERSION_DIVERGED",
+                                    "sent": sel.pricing_config_version, "current": iver}))
 
-            payment = result.to_public()
-            payment["idempotency_key"] = sel.idempotency_key
-            payment["payload_hash"] = new_hash
-            snapshot = {
-                "version": 1, "pricing_config_version": iver,
-                "selected_at": datetime.now(timezone.utc).isoformat(),
-                "source_total_cents": total, "method": sel.method,
-                "parcelas": opt["parcelas"], "has_juros": opt["has_juros"],
-                "juros_mensal_bps": opt["juros_mensal_bps"],
-                "valor_total_cents": opt["valor_total_cents"],
-                "acrescimo_cents": opt["acrescimo_cents"], "currency": opt["currency"],
-                "schedule": opt["schedule"], "payment": payment,
-            }
+        # ── Provider FORA de transação (gateway real fará I/O de rede — NEW-1) ──
+        provider = create_payment_provider()
+        result = provider.create_charge(PaymentRequest(
+            amount_cents=opt["valor_total_cents"], installments=sel.parcelas,
+            method=sel.method, case_reference=str(case_id), organization_id=str(org),
+            idempotency_key=sel.idempotency_key, schedule=opt["schedule"],
+            mode=os.getenv("PAYMENT_MODE", "mock")))  # type: ignore[arg-type]
+
+        payment = result.to_public()
+        payment["idempotency_key"] = sel.idempotency_key
+        payment["payload_hash"] = new_hash
+        snapshot = {
+            "version": 1, "pricing_config_version": iver,
+            "selected_at": datetime.now(timezone.utc).isoformat(),
+            "source_total_cents": total, "method": sel.method,
+            "parcelas": opt["parcelas"], "has_juros": opt["has_juros"],
+            "juros_mensal_bps": opt["juros_mensal_bps"],
+            "valor_total_cents": opt["valor_total_cents"],
+            "acrescimo_cents": opt["acrescimo_cents"], "currency": opt["currency"],
+            "schedule": opt["schedule"], "payment": payment,
+        }
+
+        # ── TX 2: gravar com guarda anti-corrida (só grava se ainda não há plano) ──
+        with tenant_tx(user["user_id"], user["role"], org) as cur:
             cur.execute(
                 "UPDATE public.requests SET installment_plan = %s, payment_status = %s,"
-                " pricing_config_version = %s, updated_at = now() WHERE id = %s",
-                (Json(snapshot), result.status, iver, row["id"]))
+                " pricing_config_version = %s, updated_at = now()"
+                " WHERE id = %s AND installment_plan IS NULL",
+                (Json(snapshot), result.status, iver, request_id))
+            if cur.rowcount == 0:
+                return error_response(409, "Pagamento já registrado (concorrência)")
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_PAYMENT_ERROR", "error": type(e).__name__}))
         return error_response(500, "Erro ao registrar pagamento")
@@ -919,7 +1014,11 @@ def _read_config(cur, org):
       - http:
           path: cases/{caseId}/payment
           method: post
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
 ```
+
+(`cors: true` + `authorizer` são obrigatórios — mesmo padrão de `runCaseTriage`.)
 
 - [ ] **Step 5: Rodar e ver passar**
 
@@ -958,18 +1057,29 @@ Expected: FAIL (`KeyError`).
 
 - [ ] **Step 3: Implementar**
 
-No `SELECT` que lê a `request` no aggregate/detalhe (`src/handlers/cases.py`), adicionar
-`payment_status` e `installment_plan`, e incluí-los no dict de resposta:
+Âncoras exatas em `src/handlers/cases.py`:
+
+1. **`get_case_aggregate`** (~linha 182-197): o SELECT da request hoje é
+   `"SELECT id, code, created_by, product_type, product_label, title, description, status,
+   source_mode, idempotency_key, created_at FROM public.requests WHERE id = %s"`.
+   Adicionar `, payment_status, installment_plan` ao SELECT e ao dict `request_obj`:
 
 ```python
-        cur.execute(
-            "SELECT total_price_cents, price_snapshot, payment_status, installment_plan"
-            " FROM public.requests WHERE case_id = %s", (case_id,))
-        r = cur.fetchone()
-        # ... no payload:
-        payload["payment_status"] = r["payment_status"] if r else "pending"
-        payload["installment_plan"] = r["installment_plan"] if r else None
+                        "payment_status": r["payment_status"] or "pending",
+                        "installment_plan": r["installment_plan"],
 ```
+
+2. No dict de resposta do aggregate (onde aparece `"request": request_obj`), adicionar as chaves
+   top-level (para o frontend não precisar mergulhar no objeto request):
+
+```python
+        "payment_status": (request_obj or {}).get("payment_status", "pending"),
+        "installment_plan": (request_obj or {}).get("installment_plan"),
+```
+
+3. **`_case_detail`** (~linha 492): o SELECT que lê `total_price_cents, price_snapshot` da request
+   ganha `, payment_status, installment_plan`, e o dict do detalhe ganha as mesmas duas chaves
+   top-level do item 2.
 
 - [ ] **Step 4: Rodar e ver passar**
 
