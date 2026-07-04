@@ -63,7 +63,8 @@ def seed_case_and_config():
 
 def test_pagamento_grava_plano_e_status(seed_case_and_config):
     case_id, admin = seed_case_and_config  # caso pending + config habilitada
-    body = {"parcelas": 3, "method": "cartao", "idempotency_key": "p1"}
+    body = {"parcelas": 3, "method": "cartao", "idempotency_key": "p1",
+            "card_token": "tok_mock_x"}
     resp = pay_h.create_case_payment(_event(admin, body=body, path={"caseId": case_id}), None)
     data = _data(resp)
     assert data["payment_status"] == "simulated"
@@ -79,7 +80,8 @@ def test_pagamento_rejeita_parcela_nao_ofertada(seed_case_and_config):
 
 def test_pagamento_idempotente_replay(seed_case_and_config):
     case_id, admin = seed_case_and_config
-    b = {"parcelas": 3, "method": "cartao", "idempotency_key": "p3"}
+    b = {"parcelas": 3, "method": "cartao", "idempotency_key": "p3",
+         "card_token": "tok_mock_x"}
     r1 = _data(pay_h.create_case_payment(_event(admin, body=b, path={"caseId": case_id}), None))
     r2 = _data(pay_h.create_case_payment(_event(admin, body=b, path={"caseId": case_id}), None))
     assert r1["installment_plan"]["payment"]["external_reference"] == \
@@ -88,10 +90,41 @@ def test_pagamento_idempotente_replay(seed_case_and_config):
 def test_pagamento_ja_pago_rejeita_payload_diferente(seed_case_and_config):
     case_id, admin = seed_case_and_config
     _data(pay_h.create_case_payment(_event(admin, body={"parcelas": 3, "method": "cartao",
-          "idempotency_key": "p4"}, path={"caseId": case_id}), None))
+          "idempotency_key": "p4", "card_token": "tok_mock_x"}, path={"caseId": case_id}), None))
     resp = pay_h.create_case_payment(_event(admin, body={"parcelas": 6, "method": "cartao",
-          "idempotency_key": "p4"}, path={"caseId": case_id}), None)
+          "idempotency_key": "p4", "card_token": "tok_mock_x"}, path={"caseId": case_id}), None)
     assert resp["statusCode"] == 409
+
+
+# ── Cartão via token: sem token → 400, campo cru → 400, grava last4 sem sensível ──
+
+def test_cartao_sem_token_400(seed_case_and_config):
+    case_id, admin = seed_case_and_config
+    resp = pay_h.create_case_payment(_event(admin, body={
+        "parcelas": 3, "method": "cartao", "idempotency_key": "c1"}, path={"caseId": case_id}), None)
+    assert resp["statusCode"] == 400
+
+def test_campo_cru_de_cartao_e_rejeitado_400(seed_case_and_config):
+    case_id, admin = seed_case_and_config
+    resp = pay_h.create_case_payment(_event(admin, body={
+        "parcelas": 3, "method": "cartao", "idempotency_key": "c2",
+        "card_token": "tok_mock_1", "card_number": "4111111111111111"},
+        path={"caseId": case_id}), None)
+    assert resp["statusCode"] == 400  # extra=forbid
+
+def test_cartao_grava_last4_sem_dado_sensivel(seed_case_and_config):
+    case_id, admin = seed_case_and_config
+    resp = pay_h.create_case_payment(_event(admin, body={
+        "parcelas": 3, "method": "cartao", "idempotency_key": "c3",
+        "card_token": "tok_mock_1", "card_last4": "4242", "card_brand": "visa",
+        "card_holder": "Fulano de Tal"},
+        path={"caseId": case_id}), None)
+    data = _data(resp)
+    pay = data["installment_plan"]["payment"]
+    blob = json.dumps(data["installment_plan"])
+    assert pay["payment_form"]["last4"] == "4242"
+    assert "card_token" not in blob and "tok_mock_1" not in blob and "cvv" not in blob
+    assert "holder" not in blob and "Fulano" not in blob
 
 
 # ── Gate de pagamento na triagem (PAYMENT_GATE=hard) ──────────────────────────
@@ -99,7 +132,8 @@ def test_pagamento_ja_pago_rejeita_payload_diferente(seed_case_and_config):
 def _pay(case_id, admin, parcelas=1, key="gate-pay"):
     return pay_h.create_case_payment(
         _event(admin, body={"parcelas": parcelas, "method": "cartao",
-                            "idempotency_key": key}, path={"caseId": case_id}), None)
+                            "idempotency_key": key, "card_token": "tok_mock_x"},
+               path={"caseId": case_id}), None)
 
 
 def test_gate_hard_bloqueia_triagem_sem_pagamento(seed_case_and_config, monkeypatch):

@@ -25,7 +25,11 @@ _BRT = timezone(timedelta(hours=-3))
 
 
 def _payload_hash(sel: PaymentSelectionSchema) -> str:
-    raw = json.dumps({"parcelas": sel.parcelas, "method": sel.method}, sort_keys=True)
+    parts = {"parcelas": sel.parcelas, "method": sel.method}
+    if sel.card_token:
+        # fingerprint do token (nunca o token cru) — distingue cartões na idempotência.
+        parts["card_fp"] = hashlib.sha256(sel.card_token.encode()).hexdigest()[:16]
+    raw = json.dumps(parts, sort_keys=True)
     return "sha256:" + hashlib.sha256(raw.encode()).hexdigest()[:32]
 
 
@@ -82,15 +86,34 @@ def create_case_payment(event, context):
             logger.info(json.dumps({"event": "PAYMENT_CONFIG_VERSION_DIVERGED",
                                     "sent": sel.pricing_config_version, "current": iver}))
 
-        # ── Provider FORA de transação (gateway real fará I/O de rede — NEW-1) ──
-        provider = create_payment_provider()
-        result = provider.create_charge(PaymentRequest(
-            amount_cents=opt["valor_total_cents"], installments=sel.parcelas,
-            method=sel.method, case_reference=str(case_id), organization_id=str(org),
-            idempotency_key=sel.idempotency_key, schedule=opt["schedule"],
-            mode=os.getenv("PAYMENT_MODE", "mock")))  # type: ignore[arg-type]
+        # ── Reserva atômica (anti-dupla-cobrança): só um request passa de pending->processing.
+        #    Fecha a janela entre "checar" e "cobrar": quem perde a corrida recebe 409. ──
+        with tenant_tx(user["user_id"], user["role"], org) as cur:
+            cur.execute(
+                "UPDATE public.requests SET payment_status = 'processing', updated_at = now()"
+                " WHERE id = %s AND payment_status = 'pending' AND installment_plan IS NULL",
+                (request_id,))
+            if cur.rowcount == 0:
+                return error_response(409, "Pagamento já em processamento ou registrado")
 
-        payment = result.to_public()
+        # ── Provider FORA de transação (gateway real fará I/O de rede — NEW-1).
+        #    Envia só token + hints (nunca número/CVV). Falha => libera a reserva. ──
+        provider = create_payment_provider()
+        try:
+            result = provider.create_charge(PaymentRequest(
+                amount_cents=opt["valor_total_cents"], installments=sel.parcelas,
+                method=sel.method, case_reference=str(case_id), organization_id=str(org),
+                idempotency_key=sel.idempotency_key, schedule=opt["schedule"],
+                mode=os.getenv("PAYMENT_MODE", "mock"), card_token=sel.card_token,
+                card_last4_hint=sel.card_last4, card_brand_hint=sel.card_brand))  # type: ignore[arg-type]
+        except Exception:
+            with tenant_tx(user["user_id"], user["role"], org) as cur:  # rollback processing->pending
+                cur.execute(
+                    "UPDATE public.requests SET payment_status = 'pending', updated_at = now()"
+                    " WHERE id = %s AND payment_status = 'processing'", (request_id,))
+            raise
+
+        payment = result.to_public()  # allowlisted; NÃO inclui card_token/holder do cliente cru
         payment["idempotency_key"] = sel.idempotency_key
         payment["payload_hash"] = new_hash
         snapshot = {
@@ -101,15 +124,16 @@ def create_case_payment(event, context):
             "juros_mensal_bps": opt["juros_mensal_bps"],
             "valor_total_cents": opt["valor_total_cents"],
             "acrescimo_cents": opt["acrescimo_cents"], "currency": opt["currency"],
+            # last4/brand só via payment["payment_form"] (do provider). card_token/holder/CPF NÃO persistidos.
             "schedule": opt["schedule"], "payment": payment,
         }
 
-        # ── TX 2: gravar com guarda anti-corrida (só grava se ainda não há plano) ──
+        # ── TX 2: finaliza a reserva (só grava se ainda estiver 'processing'). ──
         with tenant_tx(user["user_id"], user["role"], org) as cur:
             cur.execute(
                 "UPDATE public.requests SET installment_plan = %s, payment_status = %s,"
                 " pricing_config_version = %s, updated_at = now()"
-                " WHERE id = %s AND installment_plan IS NULL",
+                " WHERE id = %s AND payment_status = 'processing'",
                 (Json(snapshot), result.status, iver, request_id))
             if cur.rowcount == 0:
                 return error_response(409, "Pagamento já registrado (concorrência)")
