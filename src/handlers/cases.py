@@ -181,7 +181,8 @@ def get_case_aggregate(event, context):
             if c["request_id"]:
                 cur.execute(
                     "SELECT id, code, created_by, product_type, product_label, title,"
-                    " description, status, source_mode, idempotency_key, created_at"
+                    " description, status, source_mode, idempotency_key, created_at,"
+                    " payment_status, installment_plan"
                     " FROM public.requests WHERE id = %s", (c["request_id"],))
                 r = cur.fetchone()
                 if r:
@@ -193,6 +194,8 @@ def get_case_aggregate(event, context):
                         "title": r["title"], "description": r["description"] or "",
                         "status": r["status"], "source_mode": r["source_mode"],
                         "idempotency_key": r["idempotency_key"],
+                        "payment_status": r["payment_status"] or "pending",
+                        "installment_plan": r["installment_plan"],
                         "created_at": rc, "updated_at": rc,
                     }
 
@@ -333,6 +336,8 @@ def get_case_aggregate(event, context):
         "case": case_obj, "request": request_obj, "parties": parties,
         "documents": documents, "timeline": timeline, "triage_modules": triage,
         "provider_results": provider_results, "report": report, "summary": summary,
+        "payment_status": (request_obj or {}).get("payment_status", "pending"),
+        "installment_plan": (request_obj or {}).get("installment_plan"),
     })
 
 
@@ -488,19 +493,25 @@ def _case_detail(cur, case_id, request_id) -> dict:
     cur.execute("SELECT count(*) AS n FROM public.triage_modules WHERE case_id = %s", (case_id,))
     triage = cur.fetchone()["n"]
     pricing = None
+    payment_status, installment_plan = "pending", None
     if request_id:
-        cur.execute("SELECT total_price_cents, price_snapshot FROM public.requests"
+        cur.execute("SELECT total_price_cents, price_snapshot, payment_status,"
+                    " installment_plan FROM public.requests"
                     " WHERE id = %s", (request_id,))
         prow = cur.fetchone()
         if prow:
             pricing = {"total_price_cents": prow["total_price_cents"],
                        "snapshot": prow["price_snapshot"]}
+            payment_status = prow["payment_status"] or "pending"
+            installment_plan = prow["installment_plan"]
     return {
         "parties_count": parties,
         "documents_count": documents,
         "timeline_count": timeline,
         "triage_count": triage,
         "pricing": pricing,
+        "payment_status": payment_status,
+        "installment_plan": installment_plan,
     }
 
 
