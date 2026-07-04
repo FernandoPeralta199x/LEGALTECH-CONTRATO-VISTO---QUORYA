@@ -25,6 +25,19 @@ class PaymentRequest:
     schedule: list[dict]
     currency: str = "BRL"
     mode: Mode = "mock"
+    card_token: str | None = None
+    card_last4_hint: str | None = None
+    card_brand_hint: str | None = None
+
+
+# Allowlist estrita por método: só estes campos do payment_form saem pela API e vão
+# ao installment_plan. Qualquer chave crua/sensível (card_number, cvv, token, cpf, raw
+# do gateway, mensagens cruas) é descartada em to_public() — invariante PCI.
+_PUBLIC_FORM_KEYS = {
+    "pix": ("type", "qr_code", "copia_cola"),
+    "boleto": ("type", "url", "linha_digitavel"),
+    "cartao": ("type", "brand", "last4", "authorization_code", "simulated"),
+}
 
 
 @dataclass(frozen=True)
@@ -39,9 +52,11 @@ class PaymentResult:
     raw: dict = field(default_factory=dict)
 
     def to_public(self) -> dict:
+        allowed = _PUBLIC_FORM_KEYS.get(self.method, ("type",))
+        safe_form = {k: v for k, v in self.payment_form.items() if k in allowed}
         return {"provider": self.provider, "mode": self.mode, "status": self.status,
                 "method": self.method, "external_reference": self.external_reference,
-                "payment_form": self.payment_form, "requested_at": self.requested_at}
+                "payment_form": safe_form, "requested_at": self.requested_at}
 
 
 @runtime_checkable
@@ -59,10 +74,16 @@ def _mock_form(method: Method) -> dict:
 
 class MockPaymentProvider:
     def create_charge(self, req: PaymentRequest) -> PaymentResult:
+        form = _mock_form(req.method)
+        if req.method == "cartao":
+            # last4/brand vêm dos HINTS (do provider mock), nunca de dado cru do cliente.
+            form = {"type": "cartao", "brand": req.card_brand_hint or "desconhecida",
+                    "last4": req.card_last4_hint or "0000",
+                    "authorization_code": "MOCK-AUTH-123", "simulated": True}
         return PaymentResult(
             provider="mock", mode="mock", status="simulated", method=req.method,
             external_reference=f"mock_{req.case_reference}_{uuid.uuid4().hex[:8]}",
-            payment_form=_mock_form(req.method))
+            payment_form=form)
 
 
 class RealPaymentProvider:

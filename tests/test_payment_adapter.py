@@ -32,3 +32,30 @@ def test_factory_real_exige_api_key(monkeypatch):
     monkeypatch.delenv("PAYMENT_API_KEY", raising=False)
     with pytest.raises(ValueError):
         create_payment_provider()
+
+
+# ── Task 2 (plano 2026-07-04-cartao-tokenizacao): to_public allowlist + hints de cartão ──
+
+def test_to_public_allowlist_cartao_remove_desconhecidos():
+    from src.adapters.payment import PaymentResult
+    r = PaymentResult(provider="mock", mode="mock", status="simulated", method="cartao",
+                      external_reference="mock_x",
+                      payment_form={"type": "cartao", "brand": "visa", "last4": "1234",
+                                    "authorization_code": "A", "simulated": True,
+                                    "card_number": "4111111111111111", "cvv": "123",
+                                    "token": "tok_secret", "cpf": "060..."})
+    pub = r.to_public()
+    keys = set(pub["payment_form"].keys())
+    assert keys <= {"type", "brand", "last4", "authorization_code", "simulated"}
+    assert "card_number" not in keys and "cvv" not in keys and "token" not in keys
+
+
+def test_mock_cartao_usa_hints_e_marca_simulated():
+    from src.adapters.payment import PaymentRequest, MockPaymentProvider
+    req = PaymentRequest(amount_cents=10000, installments=3, method="cartao",
+                         case_reference="c1", organization_id="o1", idempotency_key="k",
+                         schedule=[], card_token="tok_mock_1", card_last4_hint="4242",
+                         card_brand_hint="visa")
+    res = MockPaymentProvider().create_charge(req)
+    pub = res.to_public()["payment_form"]
+    assert pub["last4"] == "4242" and pub["brand"] == "visa" and pub["simulated"] is True
