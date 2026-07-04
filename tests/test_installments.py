@@ -64,3 +64,23 @@ def test_cronograma_vira_o_ano_e_dia_fixo():
     dias = {i["vencimento"][8:10] for i in seis["schedule"]}
     assert dias == {"10"}  # todos no dia 10
     assert any(i["vencimento"].startswith("2027") for i in seis["schedule"])
+
+
+def test_somente_cartao_parcela_pix_boleto_1x():
+    import pytest
+    # pix/boleto com max > 1 é rejeitado
+    with pytest.raises(Exception):
+        _cfg(allowed_methods={"pix": {"enabled": True, "max_parcelas": 3},
+                              "cartao": {"enabled": True, "max_parcelas": 12}})
+    with pytest.raises(Exception):
+        _cfg(allowed_methods={"boleto": {"enabled": True, "max_parcelas": 2}})
+    # cartão parcela normalmente; pix/boleto 1x são aceitos
+    cfg = _cfg(allowed_methods={"pix": {"enabled": True, "max_parcelas": 1},
+                                "boleto": {"enabled": True, "max_parcelas": 1},
+                                "cartao": {"enabled": True, "max_parcelas": 6}})
+    # em 3x (parcelado) só o cartão é ofertado
+    opts = compute_installment_options(23700, cfg, REF)
+    tres = next(o for o in opts if o["parcelas"] == 3)
+    assert tres["allowed_methods"] == ["cartao"]
+    umx = next(o for o in opts if o["parcelas"] == 1)
+    assert set(umx["allowed_methods"]) == {"pix", "boleto", "cartao"}

@@ -9,6 +9,8 @@ from decimal import Decimal, ROUND_HALF_UP
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 _METHODS = ("pix", "boleto", "cartao")
+# Apenas o cartão de crédito parcela; Pix/Boleto são sempre à vista (1x).
+_INSTALLMENT_METHODS = ("cartao",)
 _CURRENCY = "BRL"
 
 
@@ -38,6 +40,8 @@ class InstallmentConfig(BaseModel):
                 raise ValueError(f"método inválido: {m}")
             if rule.max_parcelas > self.max_parcelas:
                 raise ValueError(f"{m}.max_parcelas excede max_parcelas")
+            if m not in _INSTALLMENT_METHODS and rule.max_parcelas > 1:
+                raise ValueError(f"{m} não parcela: apenas cartão de crédito permite parcelamento")
         return self
 
 
