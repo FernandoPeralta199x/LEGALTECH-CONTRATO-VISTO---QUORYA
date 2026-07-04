@@ -7,12 +7,15 @@ vazam ao cliente.
 """
 import json
 import logging
+import os
+from datetime import datetime, timedelta, timezone
 
 from psycopg2.extras import Json
 from pydantic import ValidationError
 
 from src.schemas.case_schemas import CaseCreate, CaseUpdate
 from src.services.database import tenant_tx
+from src.services.pricing.installments import InstallmentConfig, compute_installment_options
 from src.handlers.requests import _next_request_code
 from src.utils.context import require_user, require_writer
 from src.services.report_generator import get_report as _get_report
@@ -23,6 +26,24 @@ from src.utils.safety import enforce_production_safety
 
 enforce_production_safety()
 logger = logging.getLogger()
+_BRT = timezone(timedelta(hours=-3))
+
+
+def _installment_options_for(cur, org, total_cents):
+    """Opções de parcelamento do caso, calculadas do total do caso + config da org
+    (fail-safe: config inválida/ausente => apenas 1x). Evita o front re-estimar por
+    módulos (os module_keys da triagem NÃO são os códigos do pricing)."""
+    cur.execute("SELECT installment_config, version FROM public.pricing_configs"
+                " WHERE organization_id = %s", (org,))
+    row = cur.fetchone()
+    raw = (row["installment_config"] if row else None) or {}
+    version = row["version"] if row else 0
+    try:
+        cfg = InstallmentConfig(**raw)
+    except Exception:
+        cfg = InstallmentConfig()
+    options = compute_installment_options(total_cents or 0, cfg, datetime.now(_BRT).date())
+    return options, version
 
 
 class _ClientNotFound(Exception):
@@ -178,14 +199,16 @@ def get_case_aggregate(event, context):
                 return error_response(404, "Caso não encontrado")
 
             request_obj = None
+            request_total = 0
             if c["request_id"]:
                 cur.execute(
                     "SELECT id, code, created_by, product_type, product_label, title,"
                     " description, status, source_mode, idempotency_key, created_at,"
-                    " payment_status, installment_plan"
+                    " payment_status, installment_plan, total_price_cents"
                     " FROM public.requests WHERE id = %s", (c["request_id"],))
                 r = cur.fetchone()
                 if r:
+                    request_total = r["total_price_cents"] or 0
                     rc = str(r["created_at"]) if r["created_at"] else None
                     request_obj = {
                         "id": str(r["id"]), "code": r["code"], "organization_id": str(org),
@@ -302,6 +325,7 @@ def get_case_aggregate(event, context):
                 })
 
             report = _get_report(cur, org, case_id)
+            installment_options, config_version = _installment_options_for(cur, org, request_total)
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_AGGREGATE_ERROR", "error": type(e).__name__,
                                  "pgcode": getattr(e, "pgcode", None)}))
@@ -338,6 +362,10 @@ def get_case_aggregate(event, context):
         "provider_results": provider_results, "report": report, "summary": summary,
         "payment_status": (request_obj or {}).get("payment_status", "pending"),
         "installment_plan": (request_obj or {}).get("installment_plan"),
+        "installment_options": installment_options,
+        "pricing_config_version": config_version,
+        "total_price_cents": request_total,
+        "payment_mode": os.getenv("PAYMENT_MODE", "mock"),
     })
 
 
