@@ -14,6 +14,8 @@ migration 013) — além de version + updated_by + updated_at.
 """
 import json
 import logging
+import os
+from datetime import datetime, timedelta, timezone
 
 from psycopg2.extras import Json
 from pydantic import ValidationError
@@ -26,6 +28,7 @@ from src.services.pricing.estimate import (
     estimate as compute_estimate,
     normalize_selected_modules,
 )
+from src.services.pricing.installments import InstallmentConfig, compute_installment_options
 from src.utils.context import require_role, require_user
 from src.utils.helpers import error_response, success_response
 from src.utils.lambda_io import fmt_validation_error as _fmt, parse_json_body as _parse_body
@@ -34,6 +37,8 @@ from src.utils.safety import enforce_production_safety
 enforce_production_safety()
 logger = logging.getLogger()
 
+_BRT = timezone(timedelta(hours=-3))
+
 
 def _org_module_overrides(cur, org):
     """Lê ``pricing_configs.module_overrides`` da org (dict ou None)."""
@@ -41,6 +46,20 @@ def _org_module_overrides(cur, org):
                 (org,))
     row = cur.fetchone()
     return row["module_overrides"] if row else None
+
+
+def _org_installment(cur, org) -> tuple[InstallmentConfig, int]:
+    """Lê ``installment_config`` + ``version`` da org (fail-safe: config default = só 1x)."""
+    cur.execute("SELECT installment_config, version FROM public.pricing_configs"
+                " WHERE organization_id = %s", (org,))
+    row = cur.fetchone()
+    raw = (row["installment_config"] if row else None) or {}
+    version = (row["version"] if row else 0)
+    try:
+        cfg = InstallmentConfig(**raw)
+    except Exception:
+        cfg = InstallmentConfig()  # fail-safe: só 1x
+    return cfg, version
 
 
 @require_user
@@ -81,7 +100,13 @@ def estimate_pricing(event, context):
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
             overrides = _org_module_overrides(cur, user["organization_id"])
-        est = compute_estimate(data.product, selected, overrides)
+            est = compute_estimate(data.product, selected, overrides)
+            icfg, iver = _org_installment(cur, user["organization_id"])
+        ref = datetime.now(_BRT).date()
+        est["installment_options"] = compute_installment_options(
+            est["total_price_cents"], icfg, ref)
+        est["pricing_config_version"] = iver
+        est["payment_mode"] = os.getenv("PAYMENT_MODE", "mock")
     except Exception as e:
         logger.error(json.dumps({"event": "PRICING_ESTIMATE_ERROR", "error": type(e).__name__}))
         return error_response(500, "Erro ao estimar pricing")
@@ -96,6 +121,7 @@ def _config_payload(row, org):
             "cases_limit": None,
             "product_overrides": {},
             "module_overrides": {},
+            "installment_config": InstallmentConfig().model_dump(),
             "version": 0,
             "notes": None,
             "updated_by": None,
@@ -106,6 +132,9 @@ def _config_payload(row, org):
         "cases_limit": row["cases_limit"],
         "product_overrides": row["product_overrides"] or {},
         "module_overrides": row["module_overrides"] or {},
+        # default COMPLETO (não {}) quando ausente — front sempre vê a forma cheia
+        "installment_config": (row["installment_config"] if row["installment_config"]
+                               else InstallmentConfig().model_dump()),
         "version": row["version"],
         "notes": row["notes"],
         "updated_by": str(row["updated_by"]) if row["updated_by"] else None,
@@ -122,7 +151,7 @@ def get_pricing_config(event, context):
         with tenant_tx(user["user_id"], user["role"], org) as cur:
             cur.execute(
                 "SELECT organization_id, cases_limit, product_overrides, module_overrides,"
-                " version, notes, updated_by, updated_at"
+                " installment_config, version, notes, updated_by, updated_at"
                 " FROM public.pricing_configs WHERE organization_id = %s", (org,))
             row = cur.fetchone()
     except Exception as e:
@@ -162,12 +191,14 @@ def update_pricing_config(event, context):
     try:
         with tenant_tx(uid, user["role"], org) as cur:
             cur.execute(
-                "SELECT cases_limit, product_overrides, module_overrides, notes, version"
+                "SELECT cases_limit, product_overrides, module_overrides, installment_config,"
+                " notes, version"
                 " FROM public.pricing_configs WHERE organization_id = %s", (org,))
             cur_row = cur.fetchone()
             cur_cases = cur_row["cases_limit"] if cur_row else None
             cur_prod = cur_row["product_overrides"] if cur_row else {}
             cur_mod = cur_row["module_overrides"] if cur_row else {}
+            cur_inst = cur_row["installment_config"] if cur_row else {}
             cur_notes = cur_row["notes"] if cur_row else None
             cur_ver = cur_row["version"] if cur_row else 0
 
@@ -177,22 +208,33 @@ def update_pricing_config(event, context):
                         if "product_overrides" in changed else cur_prod)
             new_mod = ({c: v.model_dump() for c, v in (data.module_overrides or {}).items()}
                        if "module_overrides" in changed else cur_mod)
+            if "installment_config" in changed:
+                # Semântica ATÔMICA por campo (mesma convenção de product/module_overrides no
+                # handler atual): quando presente, o front envia o objeto completo; o Pydantic
+                # InstallmentConfig preenche defaults e valida a config FINAL (cross-fields).
+                # null explícito => volta ao default (desabilitado).
+                new_inst = (data.installment_config.model_dump()
+                            if data.installment_config is not None else {})
+            else:
+                new_inst = cur_inst
             new_ver = (cur_ver or 0) + 1
 
             cur.execute(
                 "INSERT INTO public.pricing_configs"
                 " (organization_id, cases_limit, product_overrides, module_overrides,"
-                "  notes, updated_by, version)"
-                " VALUES (%s,%s,%s,%s,%s,%s,%s)"
+                "  installment_config, notes, updated_by, version)"
+                " VALUES (%s,%s,%s,%s,%s,%s,%s,%s)"
                 " ON CONFLICT (organization_id) DO UPDATE SET"
                 "  cases_limit = EXCLUDED.cases_limit,"
                 "  product_overrides = EXCLUDED.product_overrides,"
                 "  module_overrides = EXCLUDED.module_overrides,"
+                "  installment_config = EXCLUDED.installment_config,"
                 "  notes = EXCLUDED.notes, updated_by = EXCLUDED.updated_by,"
                 "  version = EXCLUDED.version, updated_at = now()"
                 " RETURNING organization_id, cases_limit, product_overrides, module_overrides,"
-                "  version, notes, updated_by, updated_at",
-                (org, new_cases, Json(new_prod), Json(new_mod), new_notes, uid, new_ver))
+                "  installment_config, version, notes, updated_by, updated_at",
+                (org, new_cases, Json(new_prod), Json(new_mod), Json(new_inst), new_notes,
+                 uid, new_ver))
             row = cur.fetchone()
     except Exception as e:
         logger.error(json.dumps({"event": "PRICING_CONFIG_PUT_ERROR", "error": type(e).__name__}))
