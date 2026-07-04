@@ -213,7 +213,9 @@ def test_aggregate_expoe_payment_status_e_plano(client_id):
 
     # aplica o pagamento simulado (1x cartão é sempre ofertado) e reconsulta
     pay = pay_h.create_case_payment(
-        _event(admin, body={"parcelas": 1, "method": "cartao", "idempotency_key": "agg-1"},
+        _event(admin, body={"parcelas": 1, "method": "cartao", "idempotency_key": "agg-1",
+                            "card_token": "tok_mock_agg", "card_last4": "4242",
+                            "card_brand": "visa"},
                path={"caseId": case_id}), None)
     assert pay["statusCode"] == 201, pay
     data2 = _data(cases_h.get_case_aggregate(_event(admin, path={"caseId": case_id}), None))
