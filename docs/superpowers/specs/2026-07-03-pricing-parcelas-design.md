@@ -228,12 +228,14 @@ no pagamento) · `500` interno. Sem `422`; sem 409-de-versão nesta fase.
 ## 8. Gate de pagamento na triagem/relatório (decisão)
 
 Com o pagamento deferível, `run_triage` e a geração de relatório podem rodar sem pagamento.
-**Decisão: soft no MVP local, HARD antes de subir para AWS (Fase 7).** Agora **não** bloquear (pagamento
-é simulado; travar forçaria "pagar" a cada teste), mas expor `payment_status` na UI. O gate nasce como um
-**único ponto de checagem** com flag (`PAYMENT_GATE=soft|hard`, default `soft`): ao virar `hard`,
-`run_triage` e a geração de relatório exigem `payment_status in ('simulated','paid')` (ou exceção admin
-explícita). **Antes do deploy AWS, ligar `hard`.** Mesma filosofia do 409-de-versão. Incluir no checklist
-de pré-deploy (Fase 7).
+**Regra de negócio (decidida): a triagem/relatório só rodam com o pedido pago.** Implementado como um
+**único ponto de checagem** (`assert_case_paid` em `case_lifecycle.py`) com flag
+`PAYMENT_GATE=soft|hard` (default `soft`): em `hard`, `run_triage` e `generate_case_report` exigem
+`payment_status in ('simulated','paid')`, senão **402**. **Ativado localmente** via `PAYMENT_GATE=hard`
+no `.env` (carregado pelo `local_server.py`). A **suíte de testes força `soft`** no `conftest.py`
+(determinístico); os testes do gate ativam `hard` via `monkeypatch`. No frontend, o detalhe do caso
+esconde "Rodar triagem"/"Gerar relatório" enquanto `payment_status='pending'` e mostra "Concluir
+pagamento". Manter `hard` também no deploy AWS (Fase 7).
 
 ## 9. Webhook (desenho — NÃO implementar agora)
 

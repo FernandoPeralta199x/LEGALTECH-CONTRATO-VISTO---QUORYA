@@ -9,6 +9,8 @@ import logging
 from src.services.case_lifecycle import (
     CaseFinalized,
     CaseNotVisible,
+    CasePaymentRequired,
+    assert_case_paid,
     assert_case_writable,
 )
 from src.services.database import tenant_tx
@@ -67,11 +69,15 @@ def generate_case_report(event, context):
         with tenant_tx(user["user_id"], user["role"], org) as cur:
             # CVS-007: caso inexistente/deletado (404) ou finalizado (409) não regera relatório.
             assert_case_writable(cur, case_id)
+            # Gate de pagamento (PAYMENT_GATE=hard): relatório é trabalho pago.
+            assert_case_paid(cur, case_id)
             report = _generate(cur, org, case_id, user["user_id"])
     except CaseNotVisible:
         return error_response(404, "Caso não encontrado")
     except CaseFinalized:
         return error_response(409, "caso finalizado não aceita regeneração de relatório")
+    except CasePaymentRequired:
+        return error_response(402, "Pagamento pendente: conclua o pagamento antes de gerar o relatório")
     except Exception as e:
         logger.error(json.dumps({"event": "REPORT_GENERATE_ERROR", "error": type(e).__name__,
                                  "pgcode": getattr(e, "pgcode", None)}))

@@ -6,8 +6,11 @@ Centraliza a regra que antes existia só no create de case_results.
 
 Usar sempre com o cursor da ``tenant_tx`` corrente (respeita a RLS por org).
 """
+import os
 
 _FINALIZED_STATUSES = ("completed", "closed")
+# Pagamento aceito para liberar trabalho pago (triagem/relatório).
+_PAID_STATUSES = ("simulated", "paid")
 
 
 class CaseNotVisible(Exception):
@@ -16,6 +19,10 @@ class CaseNotVisible(Exception):
 
 class CaseFinalized(Exception):
     """Caso finalizado (completed/closed) ou soft-deletado → 409."""
+
+
+class CasePaymentRequired(Exception):
+    """Gate de pagamento (PAYMENT_GATE=hard): trabalho pago exige pagamento → 402."""
 
 
 def assert_case_writable(cur, case_id) -> None:
@@ -38,3 +45,20 @@ def assert_case_writable(cur, case_id) -> None:
         raise CaseNotVisible()
     if row["status"] in _FINALIZED_STATUSES:
         raise CaseFinalized()
+
+
+def assert_case_paid(cur, case_id) -> None:
+    """Gate de pagamento: quando ``PAYMENT_GATE=hard``, o caso só libera trabalho pago
+    (triagem/relatório) se o pedido estiver pago (``payment_status`` em
+    ``simulated``/``paid``). Fora do modo ``hard`` é no-op — mantém o MVP local e a
+    suíte de testes fluindo sem exigir pagamento. Chamar dentro da ``tenant_tx``.
+
+    Antes de ligar ``hard`` na AWS, ver spec §8."""
+    if os.getenv("PAYMENT_GATE", "soft").strip().lower() != "hard":
+        return
+    cur.execute("SELECT payment_status FROM public.requests WHERE case_id = %s",
+                (str(case_id),))
+    row = cur.fetchone()
+    status = (row["payment_status"] if row else None) or "pending"
+    if status not in _PAID_STATUSES:
+        raise CasePaymentRequired()

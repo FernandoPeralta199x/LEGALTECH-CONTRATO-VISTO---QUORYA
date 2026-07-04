@@ -8,6 +8,7 @@ import pytest
 from src.handlers import payments as pay_h
 from src.handlers import pricing as pr_h
 from src.handlers import requests as req_h
+from src.handlers import triage as tri_h
 
 SYSTEM_ORG = "00000000-0000-0000-0000-000000000001"
 
@@ -91,3 +92,29 @@ def test_pagamento_ja_pago_rejeita_payload_diferente(seed_case_and_config):
     resp = pay_h.create_case_payment(_event(admin, body={"parcelas": 6, "method": "cartao",
           "idempotency_key": "p4"}, path={"caseId": case_id}), None)
     assert resp["statusCode"] == 409
+
+
+# ── Gate de pagamento na triagem (PAYMENT_GATE=hard) ──────────────────────────
+
+def _pay(case_id, admin, parcelas=1, key="gate-pay"):
+    return pay_h.create_case_payment(
+        _event(admin, body={"parcelas": parcelas, "method": "cartao",
+                            "idempotency_key": key}, path={"caseId": case_id}), None)
+
+
+def test_gate_hard_bloqueia_triagem_sem_pagamento(seed_case_and_config, monkeypatch):
+    case_id, admin = seed_case_and_config
+    monkeypatch.setenv("PAYMENT_GATE", "hard")
+    resp = tri_h.run_triage(_event(admin, path={"caseId": case_id}), None)
+    assert resp["statusCode"] == 402, resp
+    # após pagar, libera
+    assert _pay(case_id, admin)["statusCode"] == 201
+    liberado = tri_h.run_triage(_event(admin, path={"caseId": case_id}), None)
+    assert liberado["statusCode"] == 200, liberado
+
+
+def test_gate_soft_permite_triagem_sem_pagamento(seed_case_and_config, monkeypatch):
+    case_id, admin = seed_case_and_config
+    monkeypatch.delenv("PAYMENT_GATE", raising=False)  # default = soft
+    resp = tri_h.run_triage(_event(admin, path={"caseId": case_id}), None)
+    assert resp["statusCode"] == 200, resp
