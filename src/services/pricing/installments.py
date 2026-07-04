@@ -82,11 +82,26 @@ def _amounts(total_cents: int, n: int, config: InstallmentConfig) -> tuple[list[
         amounts = [base] * n
         amounts[-1] += total_cents - base * n
         return amounts, total_cents, 0, False
-    return _amounts_price(total_cents, n, config)  # Task 2
+    return _amounts_price(total_cents, n, config)
 
 
-def _amounts_price(total_cents: int, n: int, config: InstallmentConfig):
-    raise NotImplementedError  # implementado na Task 2
+def _amounts_price(total_cents: int, n: int, config: InstallmentConfig) -> tuple[list[int], int, int, bool]:
+    i = Decimal(config.juros_mensal_bps) / Decimal(10000)
+    pv = Decimal(total_cents)
+    pmt = pv * i / (Decimal(1) - (Decimal(1) + i) ** -n)
+    pmt_cents = int(pmt.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    amounts: list[int] = []
+    saldo = total_cents
+    for k in range(1, n + 1):
+        juros_k = int((Decimal(saldo) * i).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        if k < n:
+            amounts.append(pmt_cents)
+            saldo -= (pmt_cents - juros_k)
+        else:
+            amounts.append(saldo + juros_k)
+            saldo = 0
+    valor_total = sum(amounts)
+    return amounts, valor_total, valor_total - total_cents, True
 
 
 def compute_installment_options(total_cents: int, config: InstallmentConfig,
@@ -97,10 +112,7 @@ def compute_installment_options(total_cents: int, config: InstallmentConfig,
     max_n = config.max_parcelas if (config.enabled and total_cents > 0) else 1
     options: list[dict] = []
     for n in range(1, max_n + 1):
-        try:
-            amounts, valor_total, acrescimo, has_juros = _amounts(total_cents, n, config)
-        except NotImplementedError:  # opções com juros chegam na Task 2
-            continue
+        amounts, valor_total, acrescimo, has_juros = _amounts(total_cents, n, config)
         parcela = amounts[0] if amounts else 0
         if n > 1 and parcela < config.valor_minimo_parcela_cents:
             continue

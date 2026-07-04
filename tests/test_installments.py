@@ -40,3 +40,27 @@ def test_sem_juros_ate_maior_que_max_falha():
     import pytest
     with pytest.raises(Exception):
         _cfg(sem_juros_ate=20, max_parcelas=12)
+
+def test_com_juros_soma_exata_e_ultima_fecha():
+    opts = compute_installment_options(23700, _cfg(), REF)
+    seis = next(o for o in opts if o["parcelas"] == 6)
+    assert seis["has_juros"] is True and seis["juros_mensal_bps"] == 299
+    assert sum(i["valor_cents"] for i in seis["schedule"]) == seis["valor_total_cents"]
+    assert seis["valor_total_cents"] > 23700 and seis["acrescimo_cents"] > 0
+    assert all(i["valor_cents"] == seis["valor_parcela_cents"] for i in seis["schedule"][:-1])
+
+def test_juros_zero_nunca_cobra_juros():
+    opts = compute_installment_options(10000, _cfg(juros_mensal_bps=0), REF)
+    assert all(o["has_juros"] is False for o in opts)
+
+def test_valor_minimo_descarta_opcoes():
+    opts = compute_installment_options(10000, _cfg(valor_minimo_parcela_cents=3000), REF)
+    ns = [o["parcelas"] for o in opts]
+    assert 1 in ns and max(ns) <= 3  # 4x=2500 < 3000 é descartado
+
+def test_cronograma_vira_o_ano_e_dia_fixo():
+    opts = compute_installment_options(23700, _cfg(primeiro_vencimento_dias=180), REF)
+    seis = next(o for o in opts if o["parcelas"] == 6)
+    dias = {i["vencimento"][8:10] for i in seis["schedule"]}
+    assert dias == {"10"}  # todos no dia 10
+    assert any(i["vencimento"].startswith("2027") for i in seis["schedule"])
