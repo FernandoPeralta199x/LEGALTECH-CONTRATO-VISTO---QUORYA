@@ -124,6 +124,19 @@ def test_create_request_orquestra_case_partes_doc_triagem_timeline():
     })
 
 
+def test_request_nasce_pending_sem_plano():
+    # contrato de pagamento: request nasce pending, sem plano e sem versão de config
+    a = str(uuid.uuid4())
+    data = _data(req_h.create_request(_event(a, body=_payload()), None))
+    conn = _admin_conn()  # dbadmin bypassa RLS: SELECT direto
+    with conn.cursor() as cur:
+        cur.execute("SELECT payment_status, installment_plan, pricing_config_version"
+                    " FROM public.requests WHERE id = %s", (data["request_id"],))
+        row = cur.fetchone()
+    conn.close()
+    assert row[0] == "pending" and row[1] is None and row[2] is None
+
+
 def test_codigo_sequencial_por_org():
     a = str(uuid.uuid4())
     year = datetime.now(timezone.utc).year

@@ -118,8 +118,9 @@ def create_request(event, context):
                 "INSERT INTO public.requests"
                 " (id, organization_id, created_by, code, product_type, product_label, title,"
                 "  description, status, source_mode, idempotency_key, case_id,"
-                "  total_price_cents, price_snapshot)"
-                " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'created',%s,%s,NULL,%s,%s)",
+                "  total_price_cents, price_snapshot, payment_status, installment_plan,"
+                "  pricing_config_version)"
+                " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'created',%s,%s,NULL,%s,%s,'pending',NULL,NULL)",
                 (request_id, org, uid, code, data.product_type, product_label, title,
                  data.description, data.source_mode, data.idempotency_key,
                  est["total_price_cents"], Json(est)),
