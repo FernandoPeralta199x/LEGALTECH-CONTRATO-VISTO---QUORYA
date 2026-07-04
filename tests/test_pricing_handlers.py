@@ -168,6 +168,17 @@ def test_isolamento_config_por_org():
     assert cfg_other["cases_limit"] is None and cfg_other["version"] == 0
 
 
+def test_schema_payment_selection_valida():
+    from src.schemas.pricing_schemas import PaymentSelectionSchema
+    s = PaymentSelectionSchema(parcelas=3, method="cartao", idempotency_key="k")
+    assert s.parcelas == 3 and s.method == "cartao"
+    import pytest
+    with pytest.raises(Exception):
+        PaymentSelectionSchema(parcelas=0, method="pix", idempotency_key="k")
+    with pytest.raises(Exception):
+        PaymentSelectionSchema(parcelas=1, method="doge", idempotency_key="k")
+
+
 def test_update_config_grava_auditoria():
     # #26 + migration 013: mudança de config grava change_after em audit.audit_log
     a = str(uuid.uuid4())
