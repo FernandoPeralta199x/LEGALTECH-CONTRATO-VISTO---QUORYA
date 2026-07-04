@@ -12,7 +12,6 @@ from typing import Literal, Protocol, runtime_checkable
 Method = Literal["pix", "boleto", "cartao"]
 Mode = Literal["mock", "sandbox", "live"]
 Status = Literal["simulated", "pending", "paid", "failed", "canceled", "expired", "refunded"]
-_SENSITIVE = {"raw"}
 
 
 @dataclass(frozen=True)
