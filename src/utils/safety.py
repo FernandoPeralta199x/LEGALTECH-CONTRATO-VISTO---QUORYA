@@ -41,6 +41,12 @@ def enforce_production_safety():
     # Fail-closed: exigir exatamente "real" em produção.
     if os.getenv("OCR_BACKEND", "mock") != "real":
         violations.append("OCR_BACKEND != 'real' em ambiente produtivo (OCR falso/mock)")
+    payment_provider = os.getenv("PAYMENT_PROVIDER", "mock")
+    payment_mode = os.getenv("PAYMENT_MODE", "mock")
+    if payment_provider == "mock" or payment_mode == "mock":
+        violations.append("PAYMENT_PROVIDER/PAYMENT_MODE=mock em ambiente produtivo")
+    elif not os.getenv("PAYMENT_API_KEY"):
+        violations.append("PAYMENT_API_KEY ausente para gateway real (sandbox/live)")
 
     if violations:
         message = f"BOOT BLOQUEADO ({environment}): " + "; ".join(violations)

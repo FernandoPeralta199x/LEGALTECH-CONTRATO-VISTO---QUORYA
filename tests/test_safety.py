@@ -94,4 +94,43 @@ def test_production_passes_with_strong_secret(monkeypatch):
     monkeypatch.setenv("STORAGE_BACKEND", "s3")  # S3 real configurado
     monkeypatch.setenv("EMBEDDINGS_BACKEND", "openai")  # embeddings reais
     monkeypatch.setenv("OCR_BACKEND", "real")  # OCR real configurado
+    # Cartão/tokenização: gateway real configurado (mock de pagamento é bloqueado fora de dev)
+    monkeypatch.setenv("PAYMENT_PROVIDER", "pagarme")
+    monkeypatch.setenv("PAYMENT_MODE", "live")
+    monkeypatch.setenv("PAYMENT_API_KEY", "chave-de-gateway-real")
     enforce_production_safety()  # não levanta com tudo configurado para produção
+
+
+# ── Task 1 (plano 2026-07-04-cartao-tokenizacao): mock de pagamento fora de dev ──
+
+def _prod_env(monkeypatch, **over):
+    base = {"ENVIRONMENT": "prod", "JWT_SECRET_KEY": "x" * 40,
+            "AI_ANALYSIS_BACKEND": "real", "EMAIL_BACKEND": "ses",
+            "STORAGE_BACKEND": "s3", "EMBEDDINGS_BACKEND": "real", "OCR_BACKEND": "real",
+            "PAYMENT_PROVIDER": "pagarme", "PAYMENT_MODE": "live", "PAYMENT_API_KEY": "k"}
+    base.update(over)
+    for k, v in base.items():
+        monkeypatch.setenv(k, v)
+
+
+def test_bloqueia_payment_mock_em_producao(monkeypatch):
+    _prod_env(monkeypatch, PAYMENT_MODE="mock")
+    with pytest.raises(RuntimeError, match="PAYMENT"):
+        enforce_production_safety()
+
+
+def test_bloqueia_provider_mock_em_producao(monkeypatch):
+    _prod_env(monkeypatch, PAYMENT_PROVIDER="mock")
+    with pytest.raises(RuntimeError, match="PAYMENT"):
+        enforce_production_safety()
+
+
+def test_exige_api_key_para_gateway_real(monkeypatch):
+    _prod_env(monkeypatch, PAYMENT_API_KEY="")
+    with pytest.raises(RuntimeError, match="PAYMENT_API_KEY"):
+        enforce_production_safety()
+
+
+def test_prod_valido_nao_bloqueia(monkeypatch):
+    _prod_env(monkeypatch)
+    enforce_production_safety()  # não levanta
