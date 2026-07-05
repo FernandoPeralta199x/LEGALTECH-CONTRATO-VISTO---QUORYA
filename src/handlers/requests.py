@@ -17,8 +17,8 @@ import uuid
 
 from src.schemas.request_schemas import RequestCreateSchema
 from src.services.database import tenant_tx
-from src.services.pricing.config import MATRIX, PRODUCTS
-from src.services.pricing.estimate import estimate
+from src.services.pricing.config import PRODUCTS
+from src.services.pricing.estimate import estimate, normalize_selected_modules
 from src.services.storage import storage_service
 from src.services.triage_plan import plan_for_product
 from src.utils.context import require_user, require_writer
@@ -76,11 +76,13 @@ def create_request(event, context):
     product = PRODUCTS[data.product_type]
     product_label = data.product_label or product.title
     title = data.title or product.title
-    # módulos: usa os selecionados; se vazio, os required/default do produto
-    selected = data.selected_modules or [
-        code for code, cfg in MATRIX.get(data.product_type, {}).items()
-        if cfg.required or cfg.default
-    ]
+    # módulos: normaliza server-side (CVS-008) — força os obrigatórios, valida os
+    # enviados e trata igual ao preview /pricing/estimate (consistência de billing).
+    # Lista vazia/omitida => só obrigatórios (mesmo resultado do preview).
+    try:
+        selected = normalize_selected_modules(data.product_type, data.selected_modules)
+    except ValueError as e:
+        return error_response(400, str(e))
     request_id = generate_uuid()
     case_id = generate_uuid()
     modules = plan_for_product(data.product_type)
@@ -95,6 +97,19 @@ def create_request(event, context):
             row = cur.fetchone()
             overrides = row["module_overrides"] if row else None
             est = estimate(data.product_type, selected, overrides)
+
+            # cliente vinculado (opcional): valida UUID + existência/visibilidade (RLS)
+            client_id = _valid_uuid(data.client_id) if data.client_id else None
+            if data.client_id and not client_id:
+                return error_response(400, "client_id inválido")
+            if client_id:
+                cur.execute(
+                    "SELECT 1 FROM public.clients WHERE id = %s",
+                    (client_id,),
+                )
+                if cur.fetchone() is None:
+                    return error_response(400, "client_id não encontrado")
+
             code = _next_request_code(cur, org)
 
             # FK circular requests.case_id <-> cases.request_id (NOT DEFERRABLE):
@@ -103,8 +118,9 @@ def create_request(event, context):
                 "INSERT INTO public.requests"
                 " (id, organization_id, created_by, code, product_type, product_label, title,"
                 "  description, status, source_mode, idempotency_key, case_id,"
-                "  total_price_cents, price_snapshot)"
-                " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'created',%s,%s,NULL,%s,%s)",
+                "  total_price_cents, price_snapshot, payment_status, installment_plan,"
+                "  pricing_config_version)"
+                " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'created',%s,%s,NULL,%s,%s,'pending',NULL,NULL)",
                 (request_id, org, uid, code, data.product_type, product_label, title,
                  data.description, data.source_mode, data.idempotency_key,
                  est["total_price_cents"], Json(est)),
@@ -113,8 +129,8 @@ def create_request(event, context):
                 "INSERT INTO public.cases"
                 " (id, organization_id, request_id, client_id, case_type, product_type,"
                 "  product_label, title, description, status, source_mode, created_by, code)"
-                " VALUES (%s,%s,%s,NULL,%s,%s,%s,%s,%s,'awaiting_triage',%s,%s,%s)",
-                (case_id, org, request_id, data.product_type, data.product_type,
+                " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'awaiting_triage',%s,%s,%s)",
+                (case_id, org, request_id, client_id, data.product_type, data.product_type,
                  product_label, title, data.description, data.source_mode, uid, code),
             )
             cur.execute(

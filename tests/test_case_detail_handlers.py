@@ -251,6 +251,10 @@ def test_gerar_revisar_relatorio_e_aggregate(case_id):
     assert rev["status"] == "approved" and rev["reviewed_by"]
     case = _data(cases_h.get_case(_event(a, path={"caseId": case_id}), None))
     assert case["status"] == "completed"
+    # CVS-007: caso concluído não aceita nova triagem nem regeneração de relatório (409)
+    assert tr_h.run_triage(_event(a, path={"caseId": case_id}), None)["statusCode"] == 409
+    assert rep_h.generate_case_report(
+        _event(a, path={"caseId": case_id}), None)["statusCode"] == 409
 
 
 def test_get_report_antes_de_gerar_404(case_id):
@@ -294,3 +298,18 @@ def test_soft_delete_bloqueia_filhos_do_caso(case_id):
         _event(a, path=p, body={"party_type": "testemunha", "name": "X"}), None)["statusCode"] == 404
     assert tr_h.run_triage(_event(a, path=p), None)["statusCode"] == 404
     assert rep_h.generate_case_report(_event(a, path=p), None)["statusCode"] == 404
+
+
+def test_cvs007_caso_finalizado_bloqueia_escrita(case_id):
+    # CVS-007: caso completed/closed nao aceita escrita de partes/resultados
+    a = str(uuid.uuid4())
+    p = {"caseId": case_id}
+    # finaliza o caso
+    assert cases_h.update_case(
+        _event(a, path=p, body={"status": "completed"}), None)["statusCode"] == 200
+    # criar parte em caso finalizado -> 409
+    assert cp_h.create_case_party(
+        _event(a, path=p, body={"party_type": "testemunha", "name": "X"}), None)["statusCode"] == 409
+    # revisar relatorio de caso finalizado -> 409
+    assert rep_h.review_case_report(
+        _event(a, path=p, body={"status": "approved"}), None)["statusCode"] == 409

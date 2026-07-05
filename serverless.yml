@@ -240,6 +240,17 @@ functions:
           cors: true
           authorizer: ${self:custom.jwtAuthorizer}
 
+  createCasePayment:
+    handler: src/handlers/payments.create_case_payment
+    timeout: 15
+    memorySize: 256
+    events:
+      - http:
+          path: cases/{caseId}/payment
+          method: post
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
   # SP3 - relatório/parecer do caso (gerar, revisar, obter)
   getCaseReport:
     handler: src/handlers/reports.get_case_report

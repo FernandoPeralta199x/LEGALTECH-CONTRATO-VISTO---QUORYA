@@ -7,12 +7,15 @@ vazam ao cliente.
 """
 import json
 import logging
+import os
+from datetime import datetime, timedelta, timezone
 
 from psycopg2.extras import Json
 from pydantic import ValidationError
 
 from src.schemas.case_schemas import CaseCreate, CaseUpdate
 from src.services.database import tenant_tx
+from src.services.pricing.installments import InstallmentConfig, compute_installment_options
 from src.handlers.requests import _next_request_code
 from src.utils.context import require_user, require_writer
 from src.services.report_generator import get_report as _get_report
@@ -23,6 +26,24 @@ from src.utils.safety import enforce_production_safety
 
 enforce_production_safety()
 logger = logging.getLogger()
+_BRT = timezone(timedelta(hours=-3))
+
+
+def _installment_options_for(cur, org, total_cents):
+    """Opções de parcelamento do caso, calculadas do total do caso + config da org
+    (fail-safe: config inválida/ausente => apenas 1x). Evita o front re-estimar por
+    módulos (os module_keys da triagem NÃO são os códigos do pricing)."""
+    cur.execute("SELECT installment_config, version FROM public.pricing_configs"
+                " WHERE organization_id = %s", (org,))
+    row = cur.fetchone()
+    raw = (row["installment_config"] if row else None) or {}
+    version = row["version"] if row else 0
+    try:
+        cfg = InstallmentConfig(**raw)
+    except Exception:
+        cfg = InstallmentConfig()
+    options = compute_installment_options(total_cents or 0, cfg, datetime.now(_BRT).date())
+    return options, version
 
 
 class _ClientNotFound(Exception):
@@ -166,22 +187,28 @@ def get_case_aggregate(event, context):
     try:
         with tenant_tx(user["user_id"], user["role"], org) as cur:
             cur.execute(
-                "SELECT id, request_id, code, created_by, product_type, product_label,"
+                "SELECT id, request_id, code, created_by, client_id, product_type, product_label,"
                 " title, description, status, progress, risk_level, recommendation,"
-                " source_mode, is_local_simulation, created_at"
+                " source_mode, is_local_simulation, created_at,"
+                " (SELECT cl.legal_name FROM public.clients cl"
+                "  WHERE cl.id = public.cases.client_id)"
+                " AS client_name"
                 " FROM public.cases WHERE id = %s AND deleted_at IS NULL", (case_id,))
             c = cur.fetchone()
             if not c:
                 return error_response(404, "Caso não encontrado")
 
             request_obj = None
+            request_total = 0
             if c["request_id"]:
                 cur.execute(
                     "SELECT id, code, created_by, product_type, product_label, title,"
-                    " description, status, source_mode, idempotency_key, created_at"
+                    " description, status, source_mode, idempotency_key, created_at,"
+                    " payment_status, installment_plan, total_price_cents"
                     " FROM public.requests WHERE id = %s", (c["request_id"],))
                 r = cur.fetchone()
                 if r:
+                    request_total = r["total_price_cents"] or 0
                     rc = str(r["created_at"]) if r["created_at"] else None
                     request_obj = {
                         "id": str(r["id"]), "code": r["code"], "organization_id": str(org),
@@ -190,6 +217,8 @@ def get_case_aggregate(event, context):
                         "title": r["title"], "description": r["description"] or "",
                         "status": r["status"], "source_mode": r["source_mode"],
                         "idempotency_key": r["idempotency_key"],
+                        "payment_status": r["payment_status"] or "pending",
+                        "installment_plan": r["installment_plan"],
                         "created_at": rc, "updated_at": rc,
                     }
 
@@ -275,7 +304,28 @@ def get_case_aggregate(event, context):
                     "created_at": str(t["created_at"]), "updated_at": str(t["updated_at"]),
                 })
 
+            cur.execute(
+                "SELECT id, case_id, triage_module_id, provider, source_mode, status,"
+                " input_hash, normalized_result, summary, risk_signals, confidence,"
+                " created_at, updated_at FROM public.provider_results"
+                " WHERE case_id = %s ORDER BY created_at, id", (case_id,))
+            provider_results = []
+            for r in cur.fetchall():
+                provider_results.append({
+                    "id": str(r["id"]), "case_id": str(r["case_id"]),
+                    "triage_module_id": str(r["triage_module_id"]),
+                    "organization_id": str(org), "provider": r["provider"],
+                    "provider_request_id": None, "source_mode": r["source_mode"],
+                    "status": r["status"], "input_hash": r["input_hash"],
+                    "raw_result_ref": None, "normalized_result": r["normalized_result"] or {},
+                    "summary": r["summary"], "risk_signals": r["risk_signals"] or [],
+                    "confidence": float(r["confidence"]) if r["confidence"] is not None else None,
+                    "error_code": None, "error_message": None,
+                    "created_at": str(r["created_at"]), "updated_at": str(r["updated_at"]),
+                })
+
             report = _get_report(cur, org, case_id)
+            installment_options, config_version = _installment_options_for(cur, org, request_total)
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_AGGREGATE_ERROR", "error": type(e).__name__,
                                  "pgcode": getattr(e, "pgcode", None)}))
@@ -285,6 +335,8 @@ def get_case_aggregate(event, context):
     case_obj = {
         "id": str(c["id"]), "request_id": str(c["request_id"]) if c["request_id"] else None,
         "code": c["code"] or "", "organization_id": str(org),
+        "client_id": str(c["client_id"]) if c["client_id"] else None,
+        "client_name": c.get("client_name"),
         "created_by": str(c["created_by"]) if c["created_by"] else "",
         "product_type": c["product_type"] or "", "product_label": c["product_label"] or "",
         "title": c["title"] or "", "description": c["description"] or "",
@@ -307,7 +359,13 @@ def get_case_aggregate(event, context):
     return success_response(200, "Detalhe do caso", {
         "case": case_obj, "request": request_obj, "parties": parties,
         "documents": documents, "timeline": timeline, "triage_modules": triage,
-        "provider_results": [], "report": report, "summary": summary,
+        "provider_results": provider_results, "report": report, "summary": summary,
+        "payment_status": (request_obj or {}).get("payment_status", "pending"),
+        "installment_plan": (request_obj or {}).get("installment_plan"),
+        "installment_options": installment_options,
+        "pricing_config_version": config_version,
+        "total_price_cents": request_total,
+        "payment_mode": os.getenv("PAYMENT_MODE", "mock"),
     })
 
 
@@ -339,7 +397,13 @@ def list_cases(event, context):
                 "SELECT id, client_id, case_type, status, priority, product_type,"
                 " product_label, title, code, risk_level, progress, source_mode,"
                 " request_id, created_by, assigned_to, created_at, completed_at,"
-                " metadata, submitted_at"
+                " metadata, submitted_at,"
+                " (SELECT count(*) FROM public.case_parties cp"
+                "  WHERE cp.case_id = public.cases.id AND cp.deleted_at IS NULL)"
+                " AS parties_count,"
+                " (SELECT cl.legal_name FROM public.clients cl"
+                "  WHERE cl.id = public.cases.client_id)"
+                " AS client_name"
                 f" FROM public.cases {where}"
                 " ORDER BY created_at DESC LIMIT %s OFFSET %s",
                 tuple(fargs + [page_size, offset]),
@@ -457,19 +521,25 @@ def _case_detail(cur, case_id, request_id) -> dict:
     cur.execute("SELECT count(*) AS n FROM public.triage_modules WHERE case_id = %s", (case_id,))
     triage = cur.fetchone()["n"]
     pricing = None
+    payment_status, installment_plan = "pending", None
     if request_id:
-        cur.execute("SELECT total_price_cents, price_snapshot FROM public.requests"
+        cur.execute("SELECT total_price_cents, price_snapshot, payment_status,"
+                    " installment_plan FROM public.requests"
                     " WHERE id = %s", (request_id,))
         prow = cur.fetchone()
         if prow:
             pricing = {"total_price_cents": prow["total_price_cents"],
                        "snapshot": prow["price_snapshot"]}
+            payment_status = prow["payment_status"] or "pending"
+            installment_plan = prow["installment_plan"]
     return {
         "parties_count": parties,
         "documents_count": documents,
         "timeline_count": timeline,
         "triage_count": triage,
         "pricing": pricing,
+        "payment_status": payment_status,
+        "installment_plan": installment_plan,
     }
 
 
@@ -477,6 +547,7 @@ def _serialize(row) -> dict:
     return {
         "id": str(row["id"]),
         "client_id": str(row["client_id"]) if row["client_id"] else None,
+        "client_name": row.get("client_name"),
         "case_type": row["case_type"],
         "status": row["status"],
         "priority": row["priority"],
@@ -491,6 +562,7 @@ def _serialize(row) -> dict:
         "created_by": str(row["created_by"]) if row["created_by"] else None,
         "assigned_to": str(row["assigned_to"]) if row["assigned_to"] else None,
         "metadata": row.get("metadata") or {},
+        "parties_count": row.get("parties_count") or 0,
         "submitted_at": str(row["submitted_at"]) if row.get("submitted_at") else None,
         "created_at": str(row["created_at"]) if row["created_at"] else None,
         # cases não rastreia updated_at próprio; usa created_at como aproximação.

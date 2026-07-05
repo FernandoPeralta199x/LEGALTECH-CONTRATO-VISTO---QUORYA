@@ -6,6 +6,13 @@ wizard), com status/provider/required. A EXECUÇÃO dos módulos é fase futura 
 import json
 import logging
 
+from src.services.case_lifecycle import (
+    CaseFinalized,
+    CaseNotVisible,
+    CasePaymentRequired,
+    assert_case_paid,
+    assert_case_writable,
+)
 from src.services.database import tenant_tx
 from src.services.triage_runner import run_case_triage
 from src.utils.context import require_user, require_writer
@@ -74,10 +81,18 @@ def run_triage(event, context):
         return error_response(400, "caseId inválido")
     try:
         with tenant_tx(user["user_id"], user["role"], org) as cur:
-            cur.execute("SELECT 1 FROM public.cases WHERE id = %s AND deleted_at IS NULL", (case_id,))
-            if cur.fetchone() is None:
-                return error_response(404, "Caso não encontrado")
+            # CVS-007: caso inexistente/deletado (404) ou finalizado (409) não roda triagem
+            # (evita "desfazer" a conclusão de um caso já completed/closed).
+            assert_case_writable(cur, case_id)
+            # Gate de pagamento (PAYMENT_GATE=hard): triagem só roda com o pedido pago.
+            assert_case_paid(cur, case_id)
             result = run_case_triage(cur, org, case_id, user["user_id"])
+    except CaseNotVisible:
+        return error_response(404, "Caso não encontrado")
+    except CaseFinalized:
+        return error_response(409, "caso finalizado não aceita nova triagem")
+    except CasePaymentRequired:
+        return error_response(402, "Pagamento pendente: conclua o pagamento antes de rodar a triagem")
     except Exception as e:
         logger.error(json.dumps({"event": "TRIAGE_RUN_ERROR", "error": type(e).__name__,
                                  "pgcode": getattr(e, "pgcode", None)}))

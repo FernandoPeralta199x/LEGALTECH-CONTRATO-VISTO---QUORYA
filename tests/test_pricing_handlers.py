@@ -168,6 +168,39 @@ def test_isolamento_config_por_org():
     assert cfg_other["cases_limit"] is None and cfg_other["version"] == 0
 
 
+def test_estimate_inclui_installment_options_e_version():
+    a = str(uuid.uuid4())
+    # admin habilita parcelamento
+    cfg = {"installment_config": {"enabled": True, "max_parcelas": 6, "sem_juros_ate": 3,
+           "juros_mensal_bps": 299, "valor_minimo_parcela_cents": 0,
+           "primeiro_vencimento_dias": 30, "dia_vencimento": 10,
+           "allowed_methods": {"cartao": {"enabled": True, "max_parcelas": 6}}}}
+    pr_h.update_pricing_config(_event(a, body=cfg), None)
+    resp = pr_h.estimate_pricing(_event(a, body={"product": "analise_contratual", "modules": []}), None)
+    data = _data(resp)
+    assert "installment_options" in data and len(data["installment_options"]) >= 1
+    assert "pricing_config_version" in data and "payment_mode" in data
+
+
+def test_schema_payment_selection_valida():
+    from src.schemas.pricing_schemas import PaymentSelectionSchema
+    s = PaymentSelectionSchema(parcelas=3, method="cartao", idempotency_key="k",
+                               card_token="tok_mock_x")
+    assert s.parcelas == 3 and s.method == "cartao"
+    import pytest
+    # cartão exige card_token (tokenização client-side)
+    with pytest.raises(Exception):
+        PaymentSelectionSchema(parcelas=3, method="cartao", idempotency_key="k")
+    # campo cru de cartão é rejeitado (extra="forbid")
+    with pytest.raises(Exception):
+        PaymentSelectionSchema(parcelas=1, method="cartao", idempotency_key="k",
+                               card_token="t", card_number="4111111111111111")
+    with pytest.raises(Exception):
+        PaymentSelectionSchema(parcelas=0, method="pix", idempotency_key="k")
+    with pytest.raises(Exception):
+        PaymentSelectionSchema(parcelas=1, method="doge", idempotency_key="k")
+
+
 def test_update_config_grava_auditoria():
     # #26 + migration 013: mudança de config grava change_after em audit.audit_log
     a = str(uuid.uuid4())

@@ -11,6 +11,11 @@ from psycopg2.extras import Json
 from pydantic import ValidationError
 
 from src.schemas.case_schemas import CaseResultCreate, CaseResultUpdate
+from src.services.case_lifecycle import (
+    CaseFinalized,
+    CaseNotVisible,
+    assert_case_writable,
+)
 from src.services.database import tenant_tx
 from src.utils.context import require_user, require_writer
 from src.utils.helpers import error_response, success_response
@@ -19,14 +24,6 @@ from src.utils.safety import enforce_production_safety
 
 enforce_production_safety()
 logger = logging.getLogger()
-
-
-class _CaseNotVisible(Exception):
-    """O case referenciado não existe ou não é visível ao usuário (RLS)."""
-
-
-class _CaseFinalized(Exception):
-    """O case existe mas está finalizado (completed/closed) — não aceita escrita."""
 
 
 @require_user
@@ -70,11 +67,11 @@ def create_case_result(event, context):
                 cur.execute("SELECT 1 FROM public.cases WHERE id = %s AND deleted_at IS NULL",
                             (case_id,))
                 if cur.fetchone() is None:
-                    raise _CaseNotVisible()
-                raise _CaseFinalized()
-    except _CaseNotVisible:
+                    raise CaseNotVisible()
+                raise CaseFinalized()
+    except CaseNotVisible:
         return error_response(404, "Caso não encontrado ou sem acesso")
-    except _CaseFinalized:
+    except CaseFinalized:
         return error_response(409, "caso finalizado não aceita novos resultados")
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_RESULT_CREATE_ERROR",
@@ -178,11 +175,21 @@ def update_case_result(event, context):
 
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
+            # CVS-007: bloqueia alteração de resultado de caso finalizado/deletado
+            cur.execute("SELECT case_id FROM public.case_results WHERE id = %s", (result_id,))
+            r = cur.fetchone()
+            if r is None:
+                raise CaseNotVisible()
+            assert_case_writable(cur, r["case_id"])
             cur.execute(
                 f"UPDATE public.case_results SET {', '.join(fields)} WHERE id = %s",
                 tuple(values),
             )
             updated = cur.rowcount
+    except CaseNotVisible:
+        return error_response(404, "Resultado não encontrado")
+    except CaseFinalized:
+        return error_response(409, "caso finalizado não aceita alteração de resultados")
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_RESULT_UPDATE_ERROR",
                                  "error": type(e).__name__,
@@ -202,10 +209,20 @@ def delete_case_result(event, context):
         return error_response(400, "resultId inválido")
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
+            # CVS-007: bloqueia exclusão de resultado de caso finalizado/deletado
+            cur.execute("SELECT case_id FROM public.case_results WHERE id = %s", (result_id,))
+            r = cur.fetchone()
+            if r is None:
+                raise CaseNotVisible()
+            assert_case_writable(cur, r["case_id"])
             cur.execute(
                 "DELETE FROM public.case_results WHERE id = %s", (result_id,)
             )
             deleted = cur.rowcount
+    except CaseNotVisible:
+        return error_response(404, "Resultado não encontrado")
+    except CaseFinalized:
+        return error_response(409, "caso finalizado não aceita exclusão de resultados")
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_RESULT_DELETE_ERROR",
                                  "error": type(e).__name__,

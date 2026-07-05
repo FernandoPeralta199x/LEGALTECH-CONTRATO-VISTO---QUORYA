@@ -11,6 +11,8 @@ import pytest
 
 from src.handlers import case_results as cr_h
 from src.handlers import cases as cases_h
+from src.handlers import payments as pay_h
+from src.handlers import requests as req_h
 
 SYSTEM_ORG = "00000000-0000-0000-0000-000000000001"
 OTHER_ORG = "00000000-0000-0000-0000-0000000000ff"
@@ -190,6 +192,40 @@ def test_create_case_invalid_client_returns_400(client_id):
         None,
     )
     assert resp["statusCode"] == 400  # client_id inexistente
+
+
+def test_aggregate_expoe_payment_status_e_plano(client_id):
+    # caso criado pelo wizard (com request vinculada) nasce pending e sem plano
+    admin = str(uuid.uuid4())
+    case_id = _data(req_h.create_request(_event(admin, role="admin", body={
+        "product_type": "analise_contratual",
+        "title": "Contrato p/ teste de pagamento",
+        "parties": [{"name": "Empresa X LTDA", "role": "contratante", "person_type": "company"}],
+        "selected_modules": ["ia_deepseek", "analise_contratual_ia"],
+        "idempotency_key": str(uuid.uuid4()),
+    }), None))["case_id"]
+
+    data = _data(cases_h.get_case_aggregate(_event(admin, path={"caseId": case_id}), None))
+    assert data["payment_status"] in ("pending", "simulated")
+    assert "installment_plan" in data
+    assert data["payment_status"] == "pending" and data["installment_plan"] is None
+    assert data["request"]["payment_status"] == "pending"
+
+    # aplica o pagamento simulado (1x cartão é sempre ofertado) e reconsulta
+    pay = pay_h.create_case_payment(
+        _event(admin, body={"parcelas": 1, "method": "cartao", "idempotency_key": "agg-1",
+                            "card_token": "tok_mock_agg", "card_last4": "4242",
+                            "card_brand": "visa"},
+               path={"caseId": case_id}), None)
+    assert pay["statusCode"] == 201, pay
+    data2 = _data(cases_h.get_case_aggregate(_event(admin, path={"caseId": case_id}), None))
+    assert data2["payment_status"] == "simulated"
+    assert data2["installment_plan"]["parcelas"] == 1
+
+    # detalhe (get_case/_case_detail) expõe as mesmas chaves top-level
+    got = _data(cases_h.get_case(_event(admin, path={"caseId": case_id}), None))
+    assert got["payment_status"] == "simulated"
+    assert got["installment_plan"]["parcelas"] == 1
 
 
 # ── case_results: get / list / update / delete + RLS ─────────────────────────

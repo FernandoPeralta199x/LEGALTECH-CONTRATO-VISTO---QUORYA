@@ -36,6 +36,17 @@ def enforce_production_safety():
         violations.append("STORAGE_BACKEND=local/mock em ambiente produtivo (sem S3 real)")
     if os.getenv("EMBEDDINGS_BACKEND", "mock") == "mock":
         violations.append("EMBEDDINGS_BACKEND=mock em ambiente produtivo (embeddings falsos)")
+    # create_ocr_adapter só trata "real" como adapter real; qualquer outro valor
+    # (ausente, mock, typo, ou "textract" ainda não implementado) cai no mock.
+    # Fail-closed: exigir exatamente "real" em produção.
+    if os.getenv("OCR_BACKEND", "mock") != "real":
+        violations.append("OCR_BACKEND != 'real' em ambiente produtivo (OCR falso/mock)")
+    payment_provider = os.getenv("PAYMENT_PROVIDER", "mock")
+    payment_mode = os.getenv("PAYMENT_MODE", "mock")
+    if payment_provider == "mock" or payment_mode == "mock":
+        violations.append("PAYMENT_PROVIDER/PAYMENT_MODE=mock em ambiente produtivo")
+    elif not os.getenv("PAYMENT_API_KEY"):
+        violations.append("PAYMENT_API_KEY ausente para gateway real (sandbox/live)")
 
     if violations:
         message = f"BOOT BLOQUEADO ({environment}): " + "; ".join(violations)

@@ -124,6 +124,19 @@ def test_create_request_orquestra_case_partes_doc_triagem_timeline():
     })
 
 
+def test_request_nasce_pending_sem_plano():
+    # contrato de pagamento: request nasce pending, sem plano e sem versão de config
+    a = str(uuid.uuid4())
+    data = _data(req_h.create_request(_event(a, body=_payload()), None))
+    conn = _admin_conn()  # dbadmin bypassa RLS: SELECT direto
+    with conn.cursor() as cur:
+        cur.execute("SELECT payment_status, installment_plan, pricing_config_version"
+                    " FROM public.requests WHERE id = %s", (data["request_id"],))
+        row = cur.fetchone()
+    conn.close()
+    assert row[0] == "pending" and row[1] is None and row[2] is None
+
+
 def test_codigo_sequencial_por_org():
     a = str(uuid.uuid4())
     year = datetime.now(timezone.utc).year
@@ -213,3 +226,41 @@ def test_produto_dados_partes_gera_plano_proprio():
     data = _data(req_h.create_request(_event(a, body=p), None))
     assert data["triage_modules_count"] == len(plan_for_product("dados_partes"))  # 6
     assert data["total_price_cents"] == 6000 + 3900 + 2900  # 12800
+
+
+def _seed_client(org, legal_name="Cliente Vinculado LTDA"):
+    conn = _admin_conn()
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute("SELECT set_config('app.organization_id', %s, false)", (org,))
+        cur.execute("SELECT set_config('app.user_id', %s, false)", (str(uuid.uuid4()),))
+        cur.execute(
+            "INSERT INTO public.clients"
+            " (organization_id, legal_name, document_type, document_number)"
+            " VALUES (%s,%s,'cnpj','12345678000100') RETURNING id", (org, legal_name))
+        cid = str(cur.fetchone()[0])
+    conn.close()
+    return cid
+
+
+def test_request_vincula_cliente_existente():
+    a = str(uuid.uuid4())
+    client_id = _seed_client(SYSTEM_ORG)
+    data = _data(req_h.create_request(_event(a, body=_payload(client_id=client_id)), None))
+    conn = _admin_conn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT client_id FROM public.cases WHERE id=%s", (data["case_id"],))
+        assert str(cur.fetchone()[0]) == client_id
+    conn.close()
+
+
+def test_request_client_id_inexistente_retorna_400():
+    a = str(uuid.uuid4())
+    resp = req_h.create_request(_event(a, body=_payload(client_id=str(uuid.uuid4()))), None)
+    assert resp["statusCode"] == 400
+
+
+def test_request_client_id_malformado_retorna_400():
+    a = str(uuid.uuid4())
+    resp = req_h.create_request(_event(a, body=_payload(client_id="nao-e-uuid")), None)
+    assert resp["statusCode"] == 400
