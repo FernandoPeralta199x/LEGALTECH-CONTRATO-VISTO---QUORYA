@@ -19,6 +19,7 @@ from src.services.pricing.installments import InstallmentConfig, compute_install
 from src.handlers.requests import _next_request_code
 from src.utils.context import require_user, require_writer
 from src.utils.doc_status import to_v2_status
+from src.services.case_lifecycle import CasesLimitReached, assert_cases_within_limit
 from src.services.report_generator import get_report as _get_report
 from src.utils.pii import mask_document, mask_email, mask_phone
 from src.utils.helpers import error_response, success_response
@@ -91,6 +92,8 @@ def create_case(event, context):
                 raise _ClientNotFound()
             if crow["status"] != "active":
                 raise _ClientInactive()
+            # quota de casos da organização (pricing_configs.cases_limit); NULL => ilimitado
+            assert_cases_within_limit(cur, user["organization_id"])
             code = _next_request_code(cur, user["organization_id"])
             cur.execute(
                 "INSERT INTO public.cases"
@@ -110,6 +113,8 @@ def create_case(event, context):
         return error_response(400, "client_id inexistente")
     except _ClientInactive:
         return error_response(409, "cliente inativo não aceita novos casos")
+    except CasesLimitReached:
+        return error_response(402, "limite de casos da organização atingido")
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_CREATE_ERROR",
                                  "error": type(e).__name__,
@@ -271,7 +276,7 @@ def get_case_aggregate(event, context):
             cur.execute(
                 "SELECT id, case_id, event_type, title, description, actor, payload, created_at"
                 " FROM public.timeline_events WHERE case_id = %s"
-                " ORDER BY created_at DESC, id DESC", (case_id,))
+                " ORDER BY created_at DESC, id DESC LIMIT 500", (case_id,))
             timeline = []
             latest_event_at = None
             for ev in cur.fetchall():

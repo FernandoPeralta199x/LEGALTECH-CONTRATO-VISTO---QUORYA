@@ -25,6 +25,10 @@ class CasePaymentRequired(Exception):
     """Gate de pagamento (PAYMENT_GATE=hard): trabalho pago exige pagamento → 402."""
 
 
+class CasesLimitReached(Exception):
+    """A organização atingiu o limite de casos (pricing_configs.cases_limit) → 402."""
+
+
 def assert_case_writable(cur, case_id) -> None:
     """Levanta ``CaseNotVisible`` (404) ou ``CaseFinalized`` (409) se o caso não
     puder receber escrita. Chamar ANTES de update/delete de recursos do caso,
@@ -62,3 +66,27 @@ def assert_case_paid(cur, case_id) -> None:
     status = (row["payment_status"] if row else None) or "pending"
     if status not in _PAID_STATUSES:
         raise CasePaymentRequired()
+
+
+def cases_limit_status(cur, org):
+    """(cases_limit, active_count) da organização, dentro da ``tenant_tx`` (RLS por org).
+    ``cases_limit`` NULL significa "sem limite"."""
+    cur.execute("SELECT cases_limit FROM public.pricing_configs WHERE organization_id = %s",
+                (org,))
+    row = cur.fetchone()
+    cases_limit = row["cases_limit"] if row else None
+    cur.execute("SELECT count(*) AS n FROM public.cases WHERE deleted_at IS NULL")
+    return cases_limit, cur.fetchone()["n"]
+
+
+def assert_cases_within_limit(cur, org) -> None:
+    """Bloqueia a criação de um novo caso quando a organização atingiu o limite
+    (``pricing_configs.cases_limit``). Fail-safe: limite NULL => ilimitado. Chamar
+    dentro da ``tenant_tx`` ANTES do INSERT do caso.
+
+    É uma quota de negócio (não invariante de segurança): há uma janela TOCTOU estreita
+    sob alta concorrência que pode admitir 1 caso além do limite — aceitável para o MVP
+    (a RLS por org e a corretude dos dados não dependem disso)."""
+    cases_limit, active = cases_limit_status(cur, org)
+    if cases_limit is not None and active >= cases_limit:
+        raise CasesLimitReached()

@@ -29,7 +29,8 @@ def _reset_and_seed_client() -> str:
     conn = _admin_conn()
     conn.autocommit = True
     with conn.cursor() as cur:
-        cur.execute("TRUNCATE public.cases, public.clients RESTART IDENTITY CASCADE")
+        cur.execute("TRUNCATE public.cases, public.clients, public.pricing_configs"
+                    " RESTART IDENTITY CASCADE")
         cur.execute("TRUNCATE audit.audit_log RESTART IDENTITY")
         cur.execute("SELECT set_config('app.organization_id', %s, false)", (SYSTEM_ORG,))
         cur.execute(
@@ -109,6 +110,25 @@ def test_completed_at_limpo_ao_reabrir(client_id):
     assert _completed_at(case_id) is not None
     cases_h.update_case(_event(a, path={"caseId": case_id}, body={"status": "in_progress"}), None)
     assert _completed_at(case_id) is None
+
+
+def test_cases_limit_bloqueia_criacao_server_side(client_id):
+    # Varredura-qualidade #5 (MEDIO): com cases_limit definido, a criação de caso é bloqueada
+    # server-side (402) — não só no endpoint informativo /pricing/config/limit-check.
+    from src.handlers import pricing as pr_h
+    a = str(uuid.uuid4())
+    # define limite=1 (config PUT exige admin)
+    assert pr_h.update_pricing_config(
+        _event(a, role="admin", body={"cases_limit": 1}), None)["statusCode"] == 200
+    assert _make_case(a, client_id)["statusCode"] == 201   # 1o caso ok
+    assert _make_case(a, client_id)["statusCode"] == 402   # 2o bloqueado (quota)
+
+
+def test_cases_limit_nulo_nao_bloqueia(client_id):
+    # fail-safe: sem cases_limit (NULL) => ilimitado
+    a = str(uuid.uuid4())
+    assert _make_case(a, client_id)["statusCode"] == 201
+    assert _make_case(a, client_id)["statusCode"] == 201
 
 
 def test_case_isolation_and_admin(client_id):

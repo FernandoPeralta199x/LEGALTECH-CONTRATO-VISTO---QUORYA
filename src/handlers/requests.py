@@ -16,6 +16,7 @@ from pydantic import ValidationError
 import uuid
 
 from src.schemas.request_schemas import RequestCreateSchema
+from src.services.case_lifecycle import CasesLimitReached, assert_cases_within_limit
 from src.services.database import tenant_tx
 from src.services.pricing.config import PRODUCTS
 from src.services.pricing.estimate import estimate, normalize_selected_modules
@@ -89,6 +90,8 @@ def create_request(event, context):
 
     try:
         with tenant_tx(uid, user["role"], org) as cur:
+            # quota de casos da organização (pricing_configs.cases_limit); NULL => ilimitado
+            assert_cases_within_limit(cur, org)
             # overrides de preço da organização (pricing_configs)
             cur.execute(
                 "SELECT module_overrides FROM public.pricing_configs WHERE organization_id = %s",
@@ -202,6 +205,8 @@ def create_request(event, context):
                     " VALUES (%s,%s,%s,%s,%s,%s)",
                     (org, case_id, etype, etitle, edesc, eactor),
                 )
+    except CasesLimitReached:
+        return error_response(402, "limite de casos da organização atingido")
     except psycopg2.errors.UniqueViolation:
         return error_response(409, "Pedido já registrado (idempotency_key)")
     except Exception as e:
