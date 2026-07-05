@@ -152,3 +152,21 @@ def test_gate_soft_permite_triagem_sem_pagamento(seed_case_and_config, monkeypat
     monkeypatch.delenv("PAYMENT_GATE", raising=False)  # default = soft
     resp = tri_h.run_triage(_event(admin, path={"caseId": case_id}), None)
     assert resp["statusCode"] == 200, resp
+
+
+def test_viewer_nao_paga_403(seed_case_and_config):
+    case_id, _admin = seed_case_and_config
+    viewer = str(uuid.uuid4())
+    resp = pay_h.create_case_payment(_event(viewer, role="viewer", body={
+        "parcelas": 1, "method": "pix", "idempotency_key": "vw-1"},
+        path={"caseId": case_id}), None)
+    assert resp["statusCode"] == 403, resp
+
+
+def test_analyst_pode_pagar(seed_case_and_config):
+    case_id, _admin = seed_case_and_config
+    analyst = str(uuid.uuid4())
+    resp = pay_h.create_case_payment(_event(analyst, role="analyst", body={
+        "parcelas": 1, "method": "cartao", "idempotency_key": "an-1",
+        "card_token": "tok_mock_an"}, path={"caseId": case_id}), None)
+    assert resp["statusCode"] == 201, resp

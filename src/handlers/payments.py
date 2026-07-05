@@ -13,7 +13,7 @@ from src.adapters.payment import PaymentRequest, create_payment_provider
 from src.schemas.pricing_schemas import PaymentSelectionSchema
 from src.services.database import tenant_tx
 from src.services.pricing.installments import InstallmentConfig, compute_installment_options
-from src.utils.context import require_user
+from src.utils.context import require_user, require_writer
 from src.utils.helpers import error_response, success_response
 from src.utils.lambda_io import (fmt_validation_error as _fmt, parse_json_body as _parse_body,
                                  valid_uuid)
@@ -34,6 +34,7 @@ def _payload_hash(sel: PaymentSelectionSchema) -> str:
 
 
 @require_user
+@require_writer
 def create_case_payment(event, context):
     user = event["user"]
     org = user["organization_id"]
