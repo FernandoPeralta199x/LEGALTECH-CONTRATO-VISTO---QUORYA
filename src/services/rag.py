@@ -7,8 +7,10 @@ Alinhado ao schema real:
 - `document_chunks(document_id, chunk_index, chunk_text, start_page, end_page)`
 
 Índices são `vector_cosine_ops` (HNSW/ivfflat) → usa-se o operador de cosseno `<=>`.
-`document_embeddings`/`document_chunks` NÃO têm RLS; a segurança vem do JOIN com
-`documents` (que tem RLS por `uploaded_by`) DENTRO de `tenant_tx`.
+Isolamento: desde a migração 010, `document_chunks`/`document_embeddings` têm RLS
+por `organization_id` (ENABLE + FORCE), e `documents` é isolada por `organization_id`
+(migração 007, não mais por `uploaded_by`). As funções abaixo rodam dentro de
+`tenant_tx`, que injeta `app.organization_id`; o JOIN com `documents` é defesa adicional.
 """
 from src.services.embeddings import to_vector_literal
 
