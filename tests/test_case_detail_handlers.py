@@ -315,6 +315,17 @@ def test_cvs007_caso_finalizado_bloqueia_escrita(case_id):
         _event(a, path=p, body={"status": "approved"}), None)["statusCode"] == 409
 
 
+def test_classify_risk_vocabulario_explicito():
+    # Varredura-qualidade (BAIXO): a classificação de risco usa vocabulário explícito,
+    # não substring de rótulo — o ramo 'high' passa a ser alcançável de forma determinística.
+    from src.services.triage_runner import classify_risk
+    assert classify_risk([]) == "low"
+    assert classify_risk(["clausula_revisar"]) == "medium"
+    assert classify_risk(["score_saudavel", "litigio_baixo"]) == "medium"
+    assert classify_risk(["litigio_alto"]) == "high"
+    assert classify_risk(["clausula_revisar", "score_baixo"]) == "high"
+
+
 def test_review_valida_recommendation_e_sincroniza_cases(case_id):
     # Varredura-qualidade #4 (MEDIO): recommendation na revisão deve ser validada contra o
     # enum (texto livre -> 400) e sincronizada em cases.recommendation (senão o agregado

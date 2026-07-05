@@ -15,6 +15,29 @@ from psycopg2.extras import Json
 
 from src.adapters.registry import query_provider
 
+# Vocabulário explícito de sinais de ALTO risco. A classificação NÃO deve depender de
+# substring de rótulo livre em PT (o antigo `any("alto" in s)` nunca casava com os sinais
+# emitidos, tornando o nível 'high' inalcançável). Os mocks atuais não emitem estes; os
+# Real*Adapter da Fase 7 devem usá-los para que 'high' seja alcançável de forma determinística.
+HIGH_RISK_SIGNALS = frozenset({
+    "litigio_alto", "score_baixo", "restricao_grave", "reclamacao_grave",
+    "clausula_critica", "processo_relevante",
+})
+
+
+def classify_risk(signals) -> str:
+    """Nível de risco agregado a partir do vocabulário de sinais.
+
+    - ``high``: qualquer sinal de alto risco explícito (``HIGH_RISK_SIGNALS``);
+    - ``medium``: há sinais, mas nenhum de alto risco;
+    - ``low``: nenhum sinal.
+
+    Preserva o comportamento dos mocks atuais (que não emitem sinais de alto risco) e
+    deixa o ramo 'high' alcançável de forma determinística quando os adapters reais entrarem."""
+    if any(s in HIGH_RISK_SIGNALS for s in signals):
+        return "high"
+    return "medium" if signals else "low"
+
 
 def _interpret(provider: str, module_key: str):
     """Sinais de risco, confiança e resumo de triagem por provider (camada de negócio).
@@ -113,8 +136,7 @@ def run_case_triage(cur, org, case_id, user_id) -> dict:
     for m in modules:
         all_signals.extend(_run_module(cur, org, case_id, user_id, m))
 
-    risk = "high" if any("alto" in s for s in all_signals) else (
-        "medium" if all_signals else "low")
+    risk = classify_risk(all_signals)
     cur.execute(
         "UPDATE public.cases SET status='triage_completed', progress=60,"
         " risk_level=%s WHERE id = %s", (risk, case_id))

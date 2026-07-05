@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from psycopg2.extras import Json
 
+from src.services.triage_runner import classify_risk
+
 _COLS = (
     "id, case_id, status, version, summary, findings, legal_risks, commercial_risks,"
     " reputational_risks, contractual_risks, missing_information, recommendation,"
@@ -81,7 +83,7 @@ def generate_report(cur, org, case_id, user_id) -> dict:
                    and r["summary"]]
     confs = [r["confidence"] for r in results if r["confidence"] is not None]
     confidence = round(sum(confs) / len(confs), 2) if confs else None
-    risk = "high" if any("alto" in s for s in signals) else ("medium" if signals else "low")
+    risk = classify_risk(signals)
     # sem evidências -> revisão humana obrigatória; senão deriva do nível de risco
     recommendation = "human_review_required" if not results else _REC_CODE[risk]
     missing = [] if results else ["Triagem ainda não executada — execute a triagem antes de gerar o relatório."]
