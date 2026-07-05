@@ -18,6 +18,7 @@ from src.services.database import tenant_tx
 from src.services.pricing.installments import InstallmentConfig, compute_installment_options
 from src.handlers.requests import _next_request_code
 from src.utils.context import require_user, require_writer
+from src.utils.doc_status import to_v2_status
 from src.services.report_generator import get_report as _get_report
 from src.utils.pii import mask_document, mask_email, mask_phone
 from src.utils.helpers import error_response, success_response
@@ -239,7 +240,8 @@ def get_case_aggregate(event, context):
                     "role": p["party_type"],
                     "email": None, "email_masked": mask_email(raw_email) if raw_email else None,
                     "phone": None, "phone_masked": mask_phone(raw_phone) if raw_phone else None,
-                    "status": "pending", "risk_level": "unknown",
+                    # ModuleStatus válido (o tipo do front não conhece 'pending')
+                    "status": "not_started", "risk_level": "unknown",
                     "provider_status_summary": None,
                     "metadata": {k: v for k, v in md.items() if k not in _PII_KEYS},
                     "created_at": str(p["created_at"]), "updated_at": str(p["updated_at"]),
@@ -258,7 +260,8 @@ def get_case_aggregate(event, context):
                     "mime_type": _mime(d.get("file_type")),
                     "size_bytes": d.get("file_size_bytes") or 0,
                     "storage_provider": "s3", "storage_key": d.get("s3_path") or "",
-                    "status": d.get("ocr_status") or "pending_upload",
+                    # mesma normalização da lista (ocr_status 'done' -> 'processed'): fonte única
+                    "status": to_v2_status(d.get("ocr_status")),
                     "ocr_status": d.get("ocr_status") or "not_started",
                     "ai_read_status": d.get("extraction_status") or "not_started",
                     "preview_available": False, "download_available": bool(d.get("s3_path")),
@@ -445,8 +448,11 @@ def update_case(event, context):
     if data.status is not None:
         fields.append("status = %s")
         values.append(data.status)
-        # completed_at coerente com o status (literal SQL; status é validado por pattern)
-        fields.append("completed_at = " + ("NOW()" if data.status == "completed" else "NULL"))
+        # completed_at: setar/preservar em estados finalizados (completed/closed); limpar só
+        # ao reabrir. COALESCE evita que completed->closed perca a data de conclusão.
+        # (literal SQL; status é validado por pattern)
+        fields.append("completed_at = " + (
+            "COALESCE(completed_at, NOW())" if data.status in ("completed", "closed") else "NULL"))
     if data.priority is not None:
         fields.append("priority = %s")
         values.append(data.priority)

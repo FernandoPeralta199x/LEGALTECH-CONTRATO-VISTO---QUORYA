@@ -15,6 +15,7 @@ from src.services.case_lifecycle import (
 )
 from src.services.database import tenant_tx
 from src.services.report_generator import (
+    VALID_RECOMMENDATION,
     generate_report as _generate,
     get_report as _get,
     review_report as _review,
@@ -101,6 +102,10 @@ def review_case_report(event, context):
     status = (body.get("status") or "reviewed").strip()
     if status not in _VALID_REVIEW:
         return error_response(400, "status inválido (use 'reviewed' ou 'approved')")
+    recommendation = body.get("recommendation")
+    if recommendation is not None and recommendation not in VALID_RECOMMENDATION:
+        # recommendation é enum fechado (não texto livre): evita rótulo cru no front.
+        return error_response(400, "recommendation inválida")
     try:
         with tenant_tx(user["user_id"], user["role"], org) as cur:
             # CVS-007: não revisar relatório de caso inexistente/deletado (404)
@@ -108,7 +113,7 @@ def review_case_report(event, context):
             assert_case_writable(cur, case_id)
             report = _review(cur, org, case_id, user["user_id"], status,
                              notes=body.get("review_notes"), summary=body.get("summary"),
-                             recommendation=body.get("recommendation"))
+                             recommendation=recommendation)
             if report is None:
                 return error_response(404, "Relatório ainda não gerado")
     except CaseNotVisible:

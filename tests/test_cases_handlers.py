@@ -81,6 +81,36 @@ def test_create_get_list_case(client_id):
     assert len(listed) == 1 and listed[0]["id"] == case_id
 
 
+def _completed_at(case_id):
+    conn = _admin_conn(); conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute("SELECT completed_at FROM public.cases WHERE id=%s", (case_id,))
+        val = cur.fetchone()[0]
+    conn.close()
+    return val
+
+
+def test_completed_at_preservado_ao_fechar(client_id):
+    # Varredura-qualidade #3 (MEDIO): transição completed -> closed NÃO deve zerar completed_at.
+    a = str(uuid.uuid4())
+    case_id = _data(_make_case(a, client_id))["id"]
+    cases_h.update_case(_event(a, path={"caseId": case_id}, body={"status": "completed"}), None)
+    apos_completed = _completed_at(case_id)
+    assert apos_completed is not None
+    cases_h.update_case(_event(a, path={"caseId": case_id}, body={"status": "closed"}), None)
+    assert _completed_at(case_id) == apos_completed  # preservado
+
+
+def test_completed_at_limpo_ao_reabrir(client_id):
+    # reabrir (status não-finalizado) deve limpar completed_at
+    a = str(uuid.uuid4())
+    case_id = _data(_make_case(a, client_id))["id"]
+    cases_h.update_case(_event(a, path={"caseId": case_id}, body={"status": "completed"}), None)
+    assert _completed_at(case_id) is not None
+    cases_h.update_case(_event(a, path={"caseId": case_id}, body={"status": "in_progress"}), None)
+    assert _completed_at(case_id) is None
+
+
 def test_case_isolation_and_admin(client_id):
     a, b = str(uuid.uuid4()), str(uuid.uuid4())
     case_id = _data(_make_case(a, client_id))["id"]

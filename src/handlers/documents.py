@@ -21,6 +21,7 @@ from src.services.document_worker import process_job
 from src.services.queue import create_queue_client
 from src.services.storage import storage_service
 from src.utils.context import require_user, require_writer
+from src.utils.doc_status import DOC_STATUS_MAP as _DOC_STATUS_MAP, DOC_STATUS_REV as _DOC_STATUS_REV
 from src.utils.helpers import error_response, success_response
 from src.utils.lambda_io import fmt_validation_error as _fmt, parse_json_body as _parse_body, valid_uuid as _valid_uuid
 from src.utils.safety import enforce_production_safety
@@ -72,6 +73,7 @@ def upload_document(event, context):
                 "  ocr_status, extraction_status, uploaded_by)"
                 " SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', 'pending', %s"
                 " WHERE EXISTS (SELECT 1 FROM public.cases WHERE id = %s"
+                "               AND deleted_at IS NULL"
                 "               AND status NOT IN ('completed','closed'))"
                 " RETURNING id, created_at",
                 (doc_id, user["organization_id"], case_id, s3_url, s3_key, data.file_name,
@@ -80,7 +82,10 @@ def upload_document(event, context):
             )
             row = cur.fetchone()
             if row is None:
-                cur.execute("SELECT 1 FROM public.cases WHERE id = %s", (case_id,))
+                # Caso arquivado (soft-delete) é tratado como não visível (404), não 409:
+                # o filtro deleted_at IS NULL alinha o guard de escrita com todos os reads.
+                cur.execute("SELECT 1 FROM public.cases WHERE id = %s"
+                            " AND deleted_at IS NULL", (case_id,))
                 if cur.fetchone() is None:
                     raise _CaseNotVisible()
                 raise _CaseFinalized()
@@ -322,14 +327,6 @@ def list_documents(event, context):
         logger.error(json.dumps({"event": "DOCUMENT_LIST_ERROR", "error": type(e).__name__}))
         return error_response(500, "Erro ao listar documentos")
     return success_response(200, f"{len(rows)} documentos", [_serialize_v2(r) for r in rows])
-
-
-# ocr_status (legado) -> status do documento V2 esperado pelo frontend
-_DOC_STATUS_MAP = {"pending": "pending_upload", "done": "processed"}
-# inverso: status V2 (filtro/PATCH do frontend) -> ocr_status legado. Conjunto fechado:
-# só estes status mapeiam para a coluna ocr_status; outros são rejeitados (evita filtro
-# vazio silencioso e poluição de ocr_status) — FE4-26-B3.
-_DOC_STATUS_REV = {"pending_upload": "pending", "processed": "done", "failed": "failed"}
 
 
 def _serialize_v2(row) -> dict:

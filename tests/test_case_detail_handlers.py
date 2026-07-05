@@ -313,3 +313,24 @@ def test_cvs007_caso_finalizado_bloqueia_escrita(case_id):
     # revisar relatorio de caso finalizado -> 409
     assert rep_h.review_case_report(
         _event(a, path=p, body={"status": "approved"}), None)["statusCode"] == 409
+
+
+def test_review_valida_recommendation_e_sincroniza_cases(case_id):
+    # Varredura-qualidade #4 (MEDIO): recommendation na revisão deve ser validada contra o
+    # enum (texto livre -> 400) e sincronizada em cases.recommendation (senão o agregado
+    # divergiria: case_reports atualizado, cases defasado).
+    a = str(uuid.uuid4())
+    tr_h.run_triage(_event(a, path={"caseId": case_id}), None)
+    rep_h.generate_case_report(_event(a, path={"caseId": case_id}), None)
+    # texto livre é rejeitado
+    assert rep_h.review_case_report(_event(a, path={"caseId": case_id},
+        body={"status": "reviewed", "recommendation": "qualquer coisa"}), None)["statusCode"] == 400
+    # código válido é aceito e sincroniza cases.recommendation
+    rev = _data(rep_h.review_case_report(_event(a, path={"caseId": case_id},
+        body={"status": "reviewed", "recommendation": "do_not_proceed"}), None))
+    assert rev["recommendation"] == "do_not_proceed"
+    conn = _admin_conn(); conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute("SELECT recommendation FROM public.cases WHERE id=%s", (case_id,))
+        assert cur.fetchone()[0] == "do_not_proceed"
+    conn.close()

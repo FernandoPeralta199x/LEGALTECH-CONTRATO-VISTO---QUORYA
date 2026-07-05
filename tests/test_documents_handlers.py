@@ -256,3 +256,25 @@ def test_documento_de_caso_arquivado_inacessivel(client_id):
             body={"filename": "x.pdf"}), None)["statusCode"] == 404
     assert d.process_document(_event(a, path={"docId": doc_id}), None)["statusCode"] == 404
     assert doc_id not in {x["id"] for x in _data(d.list_documents(_event(a), None))}
+
+
+def test_upload_bloqueado_em_caso_arquivado(client_id):
+    # Varredura-qualidade #1 (ALTO): o guard de escrita deve incluir deleted_at IS NULL,
+    # senão um caso arquivado (soft-delete, status não-terminal) aceita upload e cria
+    # documento órfão (invisível em todos os reads). Deve retornar 404 (caso não visível).
+    a = str(uuid.uuid4())
+    case_id = _make_case(a, client_id)
+    assert cases_h.delete_case(_event(a, path={"caseId": case_id}), None)["statusCode"] == 200
+    assert _upload(a, case_id)["statusCode"] == 404
+
+
+def test_aggregate_normaliza_status_done_para_processed(client_id):
+    # Varredura-qualidade #2 (MEDIO): o agregado do caso deve mapear ocr_status 'done' ->
+    # 'processed' (igual à lista), não expor 'done' cru (que renderiza badge sem rótulo).
+    a = str(uuid.uuid4())
+    case_id = _make_case(a, client_id)
+    doc_id = _data(_upload(a, case_id, file_size_bytes=1024))["document_id"]
+    d.process_document(_event(a, path={"docId": doc_id}), None)  # ocr_status -> 'done'
+    agg = _data(cases_h.get_case_aggregate(_event(a, path={"caseId": case_id}), None))
+    doc = next(x for x in agg["documents"] if x["id"] == doc_id)
+    assert doc["status"] == "processed"
