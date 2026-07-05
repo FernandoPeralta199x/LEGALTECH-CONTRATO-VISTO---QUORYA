@@ -170,3 +170,33 @@ def test_analyst_pode_pagar(seed_case_and_config):
         "parcelas": 1, "method": "cartao", "idempotency_key": "an-1",
         "card_token": "tok_mock_an"}, path={"caseId": case_id}), None)
     assert resp["statusCode"] == 201, resp
+
+
+# ── Recuperação de reserva 'processing' travada (processo morreu no meio) ──────
+
+def _set_processing(case_id, minutes_ago):
+    conn = _admin_conn(); conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE public.requests SET payment_status='processing',"
+            " updated_at = now() - (%s || ' minutes')::interval WHERE case_id = %s",
+            (str(minutes_ago), case_id))
+    conn.close()
+
+
+def test_processing_travado_e_recuperavel_apos_timeout(seed_case_and_config):
+    case_id, admin = seed_case_and_config
+    _set_processing(case_id, 10)  # reserva órfã de 10 min atrás (processo morreu)
+    resp = pay_h.create_case_payment(_event(admin, body={
+        "parcelas": 1, "method": "cartao", "idempotency_key": "rec-1",
+        "card_token": "tok_mock_rec"}, path={"caseId": case_id}), None)
+    assert resp["statusCode"] == 201, resp
+
+
+def test_processing_recente_bloqueia_concorrencia(seed_case_and_config):
+    case_id, admin = seed_case_and_config
+    _set_processing(case_id, 0)  # concorrente acabou de reservar
+    resp = pay_h.create_case_payment(_event(admin, body={
+        "parcelas": 1, "method": "cartao", "idempotency_key": "rec-2",
+        "card_token": "tok_mock_rec2"}, path={"caseId": case_id}), None)
+    assert resp["statusCode"] == 409, resp

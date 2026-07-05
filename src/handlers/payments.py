@@ -22,6 +22,9 @@ from src.utils.safety import enforce_production_safety
 enforce_production_safety()
 logger = logging.getLogger()
 _BRT = timezone(timedelta(hours=-3))
+# Reserva 'processing' mais velha que isto é considerada órfã (processo morreu) e pode
+# ser reclamada por uma nova tentativa. Antes de gateway real, casar com timeout do gateway.
+_RESERVE_STALE_MIN = 5
 
 
 def _payload_hash(sel: PaymentSelectionSchema) -> str:
@@ -88,12 +91,18 @@ def create_case_payment(event, context):
                                     "sent": sel.pricing_config_version, "current": iver}))
 
         # ── Reserva atômica (anti-dupla-cobrança): só um request passa de pending->processing.
-        #    Fecha a janela entre "checar" e "cobrar": quem perde a corrida recebe 409. ──
+        #    Fecha a janela entre "checar" e "cobrar": quem perde a corrida recebe 409.
+        #    Recuperação: uma reserva órfã ('processing' há > RESERVE_STALE_MIN, sem plano —
+        #    ex.: o processo morreu antes do TX2) é reclamável, senão o caso ficaria preso
+        #    para sempre. Uma reserva RECENTE (concorrente) NÃO é reclamada => 409. ──
         with tenant_tx(user["user_id"], user["role"], org) as cur:
             cur.execute(
                 "UPDATE public.requests SET payment_status = 'processing', updated_at = now()"
-                " WHERE id = %s AND payment_status = 'pending' AND installment_plan IS NULL",
-                (request_id,))
+                " WHERE id = %s AND installment_plan IS NULL"
+                "   AND (payment_status = 'pending'"
+                "        OR (payment_status = 'processing'"
+                "            AND updated_at < now() - make_interval(mins => %s)))",
+                (request_id, _RESERVE_STALE_MIN))
             if cur.rowcount == 0:
                 return error_response(409, "Pagamento já em processamento ou registrado")
 
