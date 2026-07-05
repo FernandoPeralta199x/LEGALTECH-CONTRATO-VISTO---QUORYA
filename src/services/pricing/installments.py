@@ -3,6 +3,7 @@
 Sem juros: total // N com resíduo na última. Com juros: tabela Price em Decimal (Task 2)."""
 from __future__ import annotations
 
+import calendar
 from datetime import date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
@@ -46,10 +47,14 @@ class InstallmentConfig(BaseModel):
 
 
 def add_months(base: date, months: int) -> date:
+    """Soma meses preservando o dia; se o mês-alvo não tiver esse dia, usa o último dia
+    dele (ex.: 31/03 + 1 mês = 30/04). Preserva o dia da data-base (não força 28), para
+    não encurtar o 1º vencimento quando ``dia_vencimento`` é nulo."""
     m = base.month - 1 + months
     year = base.year + m // 12
     month = m % 12 + 1
-    return date(year, month, min(base.day, 28))
+    last_day = calendar.monthrange(year, month)[1]
+    return date(year, month, min(base.day, last_day))
 
 
 def _effective_methods(config: InstallmentConfig) -> dict[str, MethodRule]:

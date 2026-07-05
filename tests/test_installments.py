@@ -84,3 +84,15 @@ def test_somente_cartao_parcela_pix_boleto_1x():
     assert tres["allowed_methods"] == ["cartao"]
     umx = next(o for o in opts if o["parcelas"] == 1)
     assert set(umx["allowed_methods"]) == {"pix", "boleto", "cartao"}
+
+
+def test_sem_dia_fixo_respeita_primeiro_vencimento_em_dia_31():
+    # dia_vencimento=None (padrão) e base caindo no dia 31: o 1º vencimento NÃO pode
+    # ser puxado para o dia 28 (encurtaria o prazo prometido por primeiro_vencimento_dias).
+    cfg = _cfg(dia_vencimento=None, primeiro_vencimento_dias=30)
+    opts = compute_installment_options(23700, cfg, date(2026, 3, 1))
+    seis = next(o for o in opts if o["parcelas"] == 6)
+    assert seis["schedule"][0]["vencimento"] == "2026-03-31"  # base = 01/03 + 30 dias
+    # meses subsequentes preservam o dia quando existe (abril tem 30 -> 30/04)
+    assert seis["schedule"][1]["vencimento"] == "2026-04-30"
+    assert seis["schedule"][2]["vencimento"] == "2026-05-31"
