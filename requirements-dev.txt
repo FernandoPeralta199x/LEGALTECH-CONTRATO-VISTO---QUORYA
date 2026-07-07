@@ -3,3 +3,5 @@
 
 pytest==9.0.3
 python-dotenv==1.2.2   # carrega .env nos testes (conftest.py)
+pip-audit==2.10.1      # auditoria de vulnerabilidades das deps (tools/pip_audit.py)
+truststore==0.10.4     # TLS via cert store do SO p/ o pip-audit (proxy/AV re-assina)
