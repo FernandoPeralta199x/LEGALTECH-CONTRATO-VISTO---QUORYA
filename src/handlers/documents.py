@@ -313,8 +313,13 @@ def list_documents(event, context):
             return error_response(400, "status inválido (use: pending_upload, processed, failed)")
         args.append(_DOC_STATUS_REV[params["status"]])
         conditions.append("ocr_status = %s")
+    if params.get("classification"):
+        # Filtro por classificação (ex.: 'final_report') — separa os relatórios finais
+        # dos demais uploads do caso (wizard/OCR). Mesmo padrão do filtro de status.
+        args.append(params["classification"])
+        conditions.append("document_classification = %s")
     sql = ("SELECT id, case_id, file_name, file_type, file_size_bytes, file_hash,"
-           " ocr_status, uploaded_by, created_at FROM public.documents")
+           " ocr_status, document_classification, uploaded_by, created_at FROM public.documents")
     if conditions:
         sql += " WHERE " + " AND ".join(conditions)
     sql += " ORDER BY created_at DESC LIMIT 500"
@@ -343,7 +348,10 @@ def _serialize_v2(row) -> dict:
         "status": _DOC_STATUS_MAP.get(raw_status, raw_status),
         "uploaded_by": str(row["uploaded_by"]) if row.get("uploaded_by") else None,
         "uploaded_at": created,
-        "metadata": {},
+        "metadata": (
+            {"kind": row["document_classification"]}
+            if row.get("document_classification") else {}
+        ),
         "created_at": created,
         "updated_at": created,
     }

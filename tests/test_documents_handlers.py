@@ -228,6 +228,26 @@ def test_list_documents_filtra_status(client_id):
     assert doc2 in ids2 and doc1 not in ids2
 
 
+# ── Varredura-qualidade #2: filtro ?classification= (separa relatórios finais) ──
+def test_list_documents_filtra_por_classification(client_id):
+    a = str(uuid.uuid4())
+    case_id = _make_case(a, client_id)
+    rel = _data(_upload(a, case_id, file_name="relatorio.pdf",
+                        document_classification="final_report"))["document_id"]
+    _data(_upload(a, case_id, file_name="contrato.pdf"))  # upload comum, sem classificação
+    # com o filtro: só o relatório final, e o shape V2 expõe metadata.kind
+    ev = _event(a)
+    ev["queryStringParameters"] = {"case_id": case_id, "classification": "final_report"}
+    docs = _data(d.list_documents(ev, None))
+    assert len(docs) == 1
+    assert docs[0]["id"] == rel
+    assert docs[0]["metadata"] == {"kind": "final_report"}
+    # sem o filtro: ambos aparecem (era o que inflava o contador no frontend)
+    ev_all = _event(a)
+    ev_all["queryStringParameters"] = {"case_id": case_id}
+    assert len(_data(d.list_documents(ev_all, None))) == 2
+
+
 # ── #26/Codex B3: status fora do conjunto mapeável é erro de contrato (400) ──
 def test_update_document_status_invalido_400(client_id):
     a = str(uuid.uuid4())
