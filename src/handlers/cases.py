@@ -179,11 +179,202 @@ def _triage_status(modules) -> str:
     return "pending"
 
 
+# ── get_case_aggregate: serializers por entidade (refactor do god-handler) ──
+# Mesmo SQL e mesmo mapeamento de antes; apenas fatiados em helpers puros para
+# leitura/teste. Cada _agg_* recebe o cursor da MESMA tenant_tx (RLS preservada).
+
+def _agg_request(cur, org, request_id):
+    """Request pai do caso -> (request_obj, total_price_cents)."""
+    if not request_id:
+        return None, 0
+    cur.execute(
+        "SELECT id, code, created_by, product_type, product_label, title,"
+        " description, status, source_mode, idempotency_key, created_at,"
+        " payment_status, installment_plan, total_price_cents"
+        " FROM public.requests WHERE id = %s", (request_id,))
+    r = cur.fetchone()
+    if not r:
+        return None, 0
+    rc = str(r["created_at"]) if r["created_at"] else None
+    request_obj = {
+        "id": str(r["id"]), "code": r["code"], "organization_id": str(org),
+        "created_by": str(r["created_by"]) if r["created_by"] else "",
+        "product_type": r["product_type"], "product_label": r["product_label"],
+        "title": r["title"], "description": r["description"] or "",
+        "status": r["status"], "source_mode": r["source_mode"],
+        "idempotency_key": r["idempotency_key"],
+        "payment_status": r["payment_status"] or "pending",
+        "installment_plan": r["installment_plan"],
+        "created_at": rc, "updated_at": rc,
+    }
+    return request_obj, (r["total_price_cents"] or 0)
+
+
+def _agg_parties(cur, org, case_id):
+    """Partes do caso com PII mascarada (document/email/phone)."""
+    cur.execute(
+        "SELECT id, case_id, party_type, name, document, metadata, created_at, updated_at"
+        " FROM public.case_parties WHERE case_id = %s AND deleted_at IS NULL"
+        " ORDER BY created_at", (case_id,))
+    parties = []
+    for p in cur.fetchall():
+        md = dict(p["metadata"] or {})
+        raw_email = md.get("email") if isinstance(md.get("email"), str) else None
+        raw_phone = md.get("phone") if isinstance(md.get("phone"), str) else None
+        parties.append({
+            "id": str(p["id"]), "case_id": str(p["case_id"]), "organization_id": str(org),
+            "name": p["name"], "document_masked": mask_document(p["document"]),
+            "document_type": md.get("document_type") or "",
+            "person_type": md.get("person_type") or "individual",
+            "role": p["party_type"],
+            "email": None, "email_masked": mask_email(raw_email) if raw_email else None,
+            "phone": None, "phone_masked": mask_phone(raw_phone) if raw_phone else None,
+            # ModuleStatus válido (o tipo do front não conhece 'pending')
+            "status": "not_started", "risk_level": "unknown",
+            "provider_status_summary": None,
+            "metadata": {k: v for k, v in md.items() if k not in _PII_KEYS},
+            "created_at": str(p["created_at"]), "updated_at": str(p["updated_at"]),
+        })
+    return parties
+
+
+def _agg_documents(cur, org, case_id):
+    """Documentos do caso no shape V2 (ocr_status normalizado)."""
+    cur.execute(
+        "SELECT id, case_id, file_name, file_type, file_size_bytes, s3_path,"
+        " ocr_status, extraction_status, created_at FROM public.documents"
+        " WHERE case_id = %s ORDER BY created_at", (case_id,))
+    documents = []
+    for d in cur.fetchall():
+        created = str(d["created_at"]) if d["created_at"] else None
+        documents.append({
+            "id": str(d["id"]), "case_id": str(d["case_id"]), "organization_id": str(org),
+            "filename": d["file_name"], "original_filename": d["file_name"],
+            "mime_type": _mime(d.get("file_type")),
+            "size_bytes": d.get("file_size_bytes") or 0,
+            "storage_provider": "s3", "storage_key": d.get("s3_path") or "",
+            # mesma normalização da lista (ocr_status 'done' -> 'processed'): fonte única
+            "status": to_v2_status(d.get("ocr_status")),
+            "ocr_status": d.get("ocr_status") or "not_started",
+            "ai_read_status": d.get("extraction_status") or "not_started",
+            "preview_available": False, "download_available": bool(d.get("s3_path")),
+            "uploaded_at": created, "updated_at": created,
+        })
+    return documents
+
+
+def _agg_timeline(cur, org, case_id):
+    """Timeline do caso (mais recentes primeiro) -> (eventos, latest_event_at)."""
+    cur.execute(
+        "SELECT id, case_id, event_type, title, description, actor, payload, created_at"
+        " FROM public.timeline_events WHERE case_id = %s"
+        " ORDER BY created_at DESC, id DESC LIMIT 500", (case_id,))
+    timeline = []
+    latest_event_at = None
+    for ev in cur.fetchall():
+        created = str(ev["created_at"]) if ev["created_at"] else None
+        if latest_event_at is None:
+            latest_event_at = created
+        timeline.append({
+            "id": str(ev["id"]), "case_id": str(ev["case_id"]), "organization_id": str(org),
+            "type": ev["event_type"], "title": ev["title"],
+            "description": ev["description"] or "", "severity": "info",
+            "source": ev["actor"], "source_mode": "local",
+            "metadata": ev["payload"] or {}, "created_at": created,
+        })
+    return timeline, latest_event_at
+
+
+def _agg_triage(cur, org, case_id):
+    """Módulos de triagem do caso (ordem de criação)."""
+    cur.execute(
+        "SELECT id, case_id, module_key, module_label, provider, status, source_mode,"
+        " required, reason, started_at, finished_at, attempts, error_code,"
+        " error_message, summary, result_ref, raw_result_ref, created_at, updated_at"
+        " FROM public.triage_modules WHERE case_id = %s ORDER BY created_at, id", (case_id,))
+    triage = []
+    for t in cur.fetchall():
+        triage.append({
+            "id": str(t["id"]), "case_id": str(t["case_id"]), "organization_id": str(org),
+            "module_key": t["module_key"], "module_label": t["module_label"],
+            "provider": t["provider"], "status": t["status"],
+            "source_mode": t["source_mode"], "required": t["required"],
+            "reason": t["reason"],
+            "started_at": str(t["started_at"]) if t["started_at"] else None,
+            "finished_at": str(t["finished_at"]) if t["finished_at"] else None,
+            "attempts": t["attempts"], "error_code": t["error_code"],
+            "error_message": t["error_message"], "summary": t["summary"],
+            "result_ref": t["result_ref"], "raw_result_ref": t["raw_result_ref"],
+            "created_at": str(t["created_at"]), "updated_at": str(t["updated_at"]),
+        })
+    return triage
+
+
+def _agg_provider_results(cur, org, case_id):
+    """Resultados de provedores externos ligados à triagem do caso."""
+    cur.execute(
+        "SELECT id, case_id, triage_module_id, provider, source_mode, status,"
+        " input_hash, normalized_result, summary, risk_signals, confidence,"
+        " created_at, updated_at FROM public.provider_results"
+        " WHERE case_id = %s ORDER BY created_at, id", (case_id,))
+    provider_results = []
+    for r in cur.fetchall():
+        provider_results.append({
+            "id": str(r["id"]), "case_id": str(r["case_id"]),
+            "triage_module_id": str(r["triage_module_id"]),
+            "organization_id": str(org), "provider": r["provider"],
+            "provider_request_id": None, "source_mode": r["source_mode"],
+            "status": r["status"], "input_hash": r["input_hash"],
+            "raw_result_ref": None, "normalized_result": r["normalized_result"] or {},
+            "summary": r["summary"], "risk_signals": r["risk_signals"] or [],
+            "confidence": float(r["confidence"]) if r["confidence"] is not None else None,
+            "error_code": None, "error_message": None,
+            "created_at": str(r["created_at"]), "updated_at": str(r["updated_at"]),
+        })
+    return provider_results
+
+
+def _agg_case_obj(c, org):
+    """Linha de public.cases -> shape BackendAggregateCase."""
+    created = str(c["created_at"]) if c["created_at"] else None
+    return {
+        "id": str(c["id"]), "request_id": str(c["request_id"]) if c["request_id"] else None,
+        "code": c["code"] or "", "organization_id": str(org),
+        "client_id": str(c["client_id"]) if c["client_id"] else None,
+        "client_name": c.get("client_name"),
+        "created_by": str(c["created_by"]) if c["created_by"] else "",
+        "product_type": c["product_type"] or "", "product_label": c["product_label"] or "",
+        "title": c["title"] or "", "description": c["description"] or "",
+        "status": c["status"], "progress": c["progress"] or 0,
+        "risk_level": c["risk_level"] or "unknown", "recommendation": c["recommendation"],
+        "source_mode": c["source_mode"] or "local",
+        "is_local_simulation": bool(c["is_local_simulation"]),
+        "created_at": created, "updated_at": created,
+    }
+
+
+def _agg_summary(c, org, parties, documents, timeline, triage, report, latest_event_at):
+    """Resumo operacional do caso (contagens + status derivados)."""
+    created = str(c["created_at"]) if c["created_at"] else None
+    return {
+        "case_id": str(c["id"]), "organization_id": str(org),
+        "parties_count": len(parties), "documents_count": len(documents),
+        "timeline_count": len(timeline), "triage_status": _triage_status(triage),
+        "report_status": report["status"] if report else "not_started",
+        "risk_level": c["risk_level"] or "unknown",
+        "recommendation": c["recommendation"], "progress": c["progress"] or 0,
+        "latest_event_at": latest_event_at, "source_mode": c["source_mode"] or "local",
+        "updated_at": created,
+    }
+
+
 @require_user
 def get_case_aggregate(event, context):
     """Detalhe agregado do caso (shape BackendCaseAggregate) — uma única chamada
     para a tela de detalhe: case + request + partes (PII mascarada) + documentos +
     timeline + módulos de triagem + provider_results + summary.
+
+    Orquestra os serializers _agg_* acima dentro de UMA tenant_tx (RLS por org).
     """
     user = event["user"]
     org = user["organization_id"]
@@ -204,134 +395,12 @@ def get_case_aggregate(event, context):
             if not c:
                 return error_response(404, "Caso não encontrado")
 
-            request_obj = None
-            request_total = 0
-            if c["request_id"]:
-                cur.execute(
-                    "SELECT id, code, created_by, product_type, product_label, title,"
-                    " description, status, source_mode, idempotency_key, created_at,"
-                    " payment_status, installment_plan, total_price_cents"
-                    " FROM public.requests WHERE id = %s", (c["request_id"],))
-                r = cur.fetchone()
-                if r:
-                    request_total = r["total_price_cents"] or 0
-                    rc = str(r["created_at"]) if r["created_at"] else None
-                    request_obj = {
-                        "id": str(r["id"]), "code": r["code"], "organization_id": str(org),
-                        "created_by": str(r["created_by"]) if r["created_by"] else "",
-                        "product_type": r["product_type"], "product_label": r["product_label"],
-                        "title": r["title"], "description": r["description"] or "",
-                        "status": r["status"], "source_mode": r["source_mode"],
-                        "idempotency_key": r["idempotency_key"],
-                        "payment_status": r["payment_status"] or "pending",
-                        "installment_plan": r["installment_plan"],
-                        "created_at": rc, "updated_at": rc,
-                    }
-
-            cur.execute(
-                "SELECT id, case_id, party_type, name, document, metadata, created_at, updated_at"
-                " FROM public.case_parties WHERE case_id = %s AND deleted_at IS NULL"
-                " ORDER BY created_at", (case_id,))
-            parties = []
-            for p in cur.fetchall():
-                md = dict(p["metadata"] or {})
-                raw_email = md.get("email") if isinstance(md.get("email"), str) else None
-                raw_phone = md.get("phone") if isinstance(md.get("phone"), str) else None
-                parties.append({
-                    "id": str(p["id"]), "case_id": str(p["case_id"]), "organization_id": str(org),
-                    "name": p["name"], "document_masked": mask_document(p["document"]),
-                    "document_type": md.get("document_type") or "",
-                    "person_type": md.get("person_type") or "individual",
-                    "role": p["party_type"],
-                    "email": None, "email_masked": mask_email(raw_email) if raw_email else None,
-                    "phone": None, "phone_masked": mask_phone(raw_phone) if raw_phone else None,
-                    # ModuleStatus válido (o tipo do front não conhece 'pending')
-                    "status": "not_started", "risk_level": "unknown",
-                    "provider_status_summary": None,
-                    "metadata": {k: v for k, v in md.items() if k not in _PII_KEYS},
-                    "created_at": str(p["created_at"]), "updated_at": str(p["updated_at"]),
-                })
-
-            cur.execute(
-                "SELECT id, case_id, file_name, file_type, file_size_bytes, s3_path,"
-                " ocr_status, extraction_status, created_at FROM public.documents"
-                " WHERE case_id = %s ORDER BY created_at", (case_id,))
-            documents = []
-            for d in cur.fetchall():
-                created = str(d["created_at"]) if d["created_at"] else None
-                documents.append({
-                    "id": str(d["id"]), "case_id": str(d["case_id"]), "organization_id": str(org),
-                    "filename": d["file_name"], "original_filename": d["file_name"],
-                    "mime_type": _mime(d.get("file_type")),
-                    "size_bytes": d.get("file_size_bytes") or 0,
-                    "storage_provider": "s3", "storage_key": d.get("s3_path") or "",
-                    # mesma normalização da lista (ocr_status 'done' -> 'processed'): fonte única
-                    "status": to_v2_status(d.get("ocr_status")),
-                    "ocr_status": d.get("ocr_status") or "not_started",
-                    "ai_read_status": d.get("extraction_status") or "not_started",
-                    "preview_available": False, "download_available": bool(d.get("s3_path")),
-                    "uploaded_at": created, "updated_at": created,
-                })
-
-            cur.execute(
-                "SELECT id, case_id, event_type, title, description, actor, payload, created_at"
-                " FROM public.timeline_events WHERE case_id = %s"
-                " ORDER BY created_at DESC, id DESC LIMIT 500", (case_id,))
-            timeline = []
-            latest_event_at = None
-            for ev in cur.fetchall():
-                created = str(ev["created_at"]) if ev["created_at"] else None
-                if latest_event_at is None:
-                    latest_event_at = created
-                timeline.append({
-                    "id": str(ev["id"]), "case_id": str(ev["case_id"]), "organization_id": str(org),
-                    "type": ev["event_type"], "title": ev["title"],
-                    "description": ev["description"] or "", "severity": "info",
-                    "source": ev["actor"], "source_mode": "local",
-                    "metadata": ev["payload"] or {}, "created_at": created,
-                })
-
-            cur.execute(
-                "SELECT id, case_id, module_key, module_label, provider, status, source_mode,"
-                " required, reason, started_at, finished_at, attempts, error_code,"
-                " error_message, summary, result_ref, raw_result_ref, created_at, updated_at"
-                " FROM public.triage_modules WHERE case_id = %s ORDER BY created_at, id", (case_id,))
-            triage = []
-            for t in cur.fetchall():
-                triage.append({
-                    "id": str(t["id"]), "case_id": str(t["case_id"]), "organization_id": str(org),
-                    "module_key": t["module_key"], "module_label": t["module_label"],
-                    "provider": t["provider"], "status": t["status"],
-                    "source_mode": t["source_mode"], "required": t["required"],
-                    "reason": t["reason"],
-                    "started_at": str(t["started_at"]) if t["started_at"] else None,
-                    "finished_at": str(t["finished_at"]) if t["finished_at"] else None,
-                    "attempts": t["attempts"], "error_code": t["error_code"],
-                    "error_message": t["error_message"], "summary": t["summary"],
-                    "result_ref": t["result_ref"], "raw_result_ref": t["raw_result_ref"],
-                    "created_at": str(t["created_at"]), "updated_at": str(t["updated_at"]),
-                })
-
-            cur.execute(
-                "SELECT id, case_id, triage_module_id, provider, source_mode, status,"
-                " input_hash, normalized_result, summary, risk_signals, confidence,"
-                " created_at, updated_at FROM public.provider_results"
-                " WHERE case_id = %s ORDER BY created_at, id", (case_id,))
-            provider_results = []
-            for r in cur.fetchall():
-                provider_results.append({
-                    "id": str(r["id"]), "case_id": str(r["case_id"]),
-                    "triage_module_id": str(r["triage_module_id"]),
-                    "organization_id": str(org), "provider": r["provider"],
-                    "provider_request_id": None, "source_mode": r["source_mode"],
-                    "status": r["status"], "input_hash": r["input_hash"],
-                    "raw_result_ref": None, "normalized_result": r["normalized_result"] or {},
-                    "summary": r["summary"], "risk_signals": r["risk_signals"] or [],
-                    "confidence": float(r["confidence"]) if r["confidence"] is not None else None,
-                    "error_code": None, "error_message": None,
-                    "created_at": str(r["created_at"]), "updated_at": str(r["updated_at"]),
-                })
-
+            request_obj, request_total = _agg_request(cur, org, c["request_id"])
+            parties = _agg_parties(cur, org, case_id)
+            documents = _agg_documents(cur, org, case_id)
+            timeline, latest_event_at = _agg_timeline(cur, org, case_id)
+            triage = _agg_triage(cur, org, case_id)
+            provider_results = _agg_provider_results(cur, org, case_id)
             report = _get_report(cur, org, case_id)
             installment_options, config_version = _installment_options_for(cur, org, request_total)
     except Exception as e:
@@ -339,35 +408,12 @@ def get_case_aggregate(event, context):
                                  "pgcode": getattr(e, "pgcode", None)}))
         return error_response(500, "Erro ao obter o detalhe do caso")
 
-    created = str(c["created_at"]) if c["created_at"] else None
-    case_obj = {
-        "id": str(c["id"]), "request_id": str(c["request_id"]) if c["request_id"] else None,
-        "code": c["code"] or "", "organization_id": str(org),
-        "client_id": str(c["client_id"]) if c["client_id"] else None,
-        "client_name": c.get("client_name"),
-        "created_by": str(c["created_by"]) if c["created_by"] else "",
-        "product_type": c["product_type"] or "", "product_label": c["product_label"] or "",
-        "title": c["title"] or "", "description": c["description"] or "",
-        "status": c["status"], "progress": c["progress"] or 0,
-        "risk_level": c["risk_level"] or "unknown", "recommendation": c["recommendation"],
-        "source_mode": c["source_mode"] or "local",
-        "is_local_simulation": bool(c["is_local_simulation"]),
-        "created_at": created, "updated_at": created,
-    }
-    summary = {
-        "case_id": str(c["id"]), "organization_id": str(org),
-        "parties_count": len(parties), "documents_count": len(documents),
-        "timeline_count": len(timeline), "triage_status": _triage_status(triage),
-        "report_status": report["status"] if report else "not_started",
-        "risk_level": c["risk_level"] or "unknown",
-        "recommendation": c["recommendation"], "progress": c["progress"] or 0,
-        "latest_event_at": latest_event_at, "source_mode": c["source_mode"] or "local",
-        "updated_at": created,
-    }
     return success_response(200, "Detalhe do caso", {
-        "case": case_obj, "request": request_obj, "parties": parties,
+        "case": _agg_case_obj(c, org), "request": request_obj, "parties": parties,
         "documents": documents, "timeline": timeline, "triage_modules": triage,
-        "provider_results": provider_results, "report": report, "summary": summary,
+        "provider_results": provider_results, "report": report,
+        "summary": _agg_summary(c, org, parties, documents, timeline, triage,
+                                report, latest_event_at),
         "payment_status": (request_obj or {}).get("payment_status", "pending"),
         "installment_plan": (request_obj or {}).get("installment_plan"),
         "installment_options": installment_options,
