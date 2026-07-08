@@ -84,6 +84,34 @@ def test_alias_de_produto_e_respeitado():
         _keys(plan_for_selection("analise_contratual", selected))
 
 
+def test_targetdata_roda_so_quando_comprado():
+    """targetdata é vendido em vários produtos; o módulo técnico só entra na
+    triagem quando o módulo comercial targetdata está na seleção (ADR-001)."""
+    # analise_contratual sem targetdata: não roda
+    sem = normalize_selected_modules(
+        "analise_contratual", ["ia_deepseek", "analise_contratual_ia"])
+    assert "targetdata" not in _keys(plan_for_selection("analise_contratual", sem))
+    # com targetdata comprado: roda
+    com = normalize_selected_modules(
+        "analise_contratual", ["ia_deepseek", "analise_contratual_ia", "targetdata"])
+    assert "targetdata" in _keys(plan_for_selection("analise_contratual", com))
+    # em dados_partes targetdata é obrigatório (required) => sempre no baseline
+    base = normalize_selected_modules("dados_partes", [])
+    assert "targetdata" in _keys(plan_for_selection("dados_partes", base))
+
+
+def test_todo_modulo_tecnico_com_provider_mock_tem_binding():
+    """Todo provider mock_* usado nos planos precisa resolver num binding do
+    registry (senão o módulo é criado mas a execução falha)."""
+    from src.adapters.registry import resolve_binding
+    for product, plan in TRIAGE_PLANS.items():
+        for d in plan:
+            if d.provider == "mock_local":
+                continue  # provider local: sem adapter externo (payload local)
+            assert resolve_binding(d.provider) is not None, (
+                f"{product}.{d.module_key}: provider {d.provider} sem binding")
+
+
 def test_billing_modules_do_plano_existem_no_catalogo_comercial():
     """Todo billing_module apontado por um módulo técnico precisa existir no
     catálogo comercial (MODULES) — protege contra typo no mapeamento."""

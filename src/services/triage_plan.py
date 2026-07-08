@@ -21,9 +21,10 @@ O ``required`` do módulo técnico é semântica de exibição/roteiro (ordem, s
 não de billing: um técnico ``required=True`` cujo ``billing_module`` não foi
 comprado NÃO roda (ex.: ``serasa`` em ``dados_partes`` sem ``serasa_procon``).
 
-Módulos comerciais sem módulo técnico hoje: ``targetdata`` (comprado mas nunca
-executado — pendência de produto) e ``revisao_humana``/``reuniao_equipe`` fora do
-produto de reunião (etapas humanas pós-triagem, sem conector).
+Módulos comerciais sem módulo técnico de execução: ``revisao_humana`` e
+``reuniao_equipe`` (etapas HUMANAS pós-triagem, sem conector — por design). Todos
+os demais comerciais têm ao menos um módulo técnico que roda quando comprados
+(``targetdata`` foi ligado em 2026-07-08 — ver ADR-001).
 """
 from __future__ import annotations
 
@@ -47,12 +48,14 @@ TRIAGE_PLANS: dict[str, list[TriageModuleDefinition]] = {
         TriageModuleDefinition("serasa", "Consulta Serasa", "mock_serasa", True, "Avaliar sinais cadastrais e comerciais das partes em modo mock.", "serasa_procon"),
         TriageModuleDefinition("procon", "Consulta Procon", "mock_procon", False, "Avaliar ocorrências de consumo em modo mock.", "serasa_procon"),
         TriageModuleDefinition("escavador", "Consulta Escavador", "mock_escavador", False, "Avaliar litígios públicos em modo mock.", "escavador"),
+        TriageModuleDefinition("targetdata", "Enriquecimento cadastral (TargetData)", "mock_targetdata", True, "Dados cadastrais/comerciais das partes (enriquecimento).", "targetdata"),
         TriageModuleDefinition("reputation_summary", "Resumo reputacional", "mock_ai_summary", False, "Consolidar sinais simulados das partes.", "ia_deepseek"),
         TriageModuleDefinition("ai_summary", "Resumo IA", "mock_ai_summary", False, "Gerar resumo local/simulado sem valor jurídico real.", "ia_deepseek"),
     ],
     "consulta_objeto": [
         TriageModuleDefinition("object_analysis", "Análise do objeto", "mock_document_parser", True, "Produto depende de análise inicial do objeto.", None),
         TriageModuleDefinition("public_search", "Busca pública simulada", "mock_escavador", False, "Simular busca pública sem chamada externa.", "escavador"),
+        TriageModuleDefinition("targetdata", "Enriquecimento cadastral (TargetData)", "mock_targetdata", False, "Enriquecimento cadastral do objeto/partes quando contratado.", "targetdata"),
         TriageModuleDefinition("document_summary", "Resumo documental", "mock_document_parser", False, "Simular extração de pontos relevantes.", "ia_deepseek"),
         TriageModuleDefinition("ai_summary", "Resumo IA", "mock_ai_summary", False, "Gerar resumo local/simulado sem valor jurídico real.", "ia_deepseek"),
     ],
@@ -64,11 +67,13 @@ TRIAGE_PLANS: dict[str, list[TriageModuleDefinition]] = {
         TriageModuleDefinition("serasa", "Consulta Serasa", "mock_serasa", False, "Simular análise cadastral das partes relacionadas.", "serasa_procon"),
         TriageModuleDefinition("procon", "Consulta Procon", "mock_procon", False, "Simular análise de ocorrências de consumo.", "serasa_procon"),
         TriageModuleDefinition("escavador", "Consulta Escavador", "mock_escavador", False, "Simular consulta de litígios públicos.", "escavador"),
+        TriageModuleDefinition("targetdata", "Enriquecimento cadastral (TargetData)", "mock_targetdata", False, "Enriquecimento cadastral das partes do contrato quando contratado.", "targetdata"),
         TriageModuleDefinition("ai_report", "Pré-relatório IA", "mock_ai_report", False, "Preparar pré-relatório simulado para etapa futura.", "ia_deepseek"),
     ],
     "reuniao_advogado": [
         TriageModuleDefinition("preliminary_questions", "Perguntas preliminares", "mock_ai_summary", True, "Preparar questões para reunião jurídica.", "reuniao_equipe"),
         TriageModuleDefinition("documents_checklist", "Checklist documental", "mock_document_parser", True, "Simular checklist de documentos necessários.", "reuniao_equipe"),
+        TriageModuleDefinition("targetdata", "Enriquecimento cadastral (TargetData)", "mock_targetdata", False, "Enriquecimento cadastral para o briefing quando contratado.", "targetdata"),
         TriageModuleDefinition("case_summary", "Resumo do caso", "mock_ai_summary", False, "Gerar resumo local/simulado para briefing.", "ia_deepseek"),
         TriageModuleDefinition("lawyer_briefing", "Briefing para advogado", "mock_ai_summary", False, "Preparar briefing simulado para revisão humana.", "revisao_humana"),
         TriageModuleDefinition("ai_briefing", "Briefing IA", "mock_ai_summary", False, "Gerar apoio simulado sem decisão jurídica real.", "ia_deepseek"),

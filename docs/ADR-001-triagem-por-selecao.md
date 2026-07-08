@@ -82,6 +82,7 @@ agregado, testes) desproporcional ao bug; perde a distinção legítima
 | reuniao_advogado | preliminary_questions, documents_checklist | reuniao_equipe |
 | reuniao_advogado | case_summary, ai_briefing | ia_deepseek |
 | reuniao_advogado | lawyer_briefing | revisao_humana |
+| (todos os produtos) | targetdata | targetdata (ligado 2026-07-08) |
 
 Semântica: o `required` do módulo TÉCNICO vira exibição/roteiro; quem decide
 execução é o `billing_module` (ex.: `serasa` era `required=True` no plano de
@@ -97,12 +98,13 @@ execução é o `billing_module` (ex.: `serasa` era `required=True` no plano de
   usar `plan_for_selection` (hoje só o `create_request` cria).
 - **Casos antigos** (criados antes desta correção) mantêm o plano cheio no
   banco de dev — recriar pedidos pelo wizard para testar o comportamento novo.
-- **Pendências de produto expostas pelo mapeamento:**
-  1. `targetdata` é vendido (required em `dados_partes`, R$ 39) mas **não tem
-     módulo técnico em nenhum plano** — pago e nunca executado (nem mock).
-     Decidir: criar módulo técnico + adapter, ou rever o catálogo.
-  2. `revisao_humana` fora do produto de reunião não gera módulo técnico —
-     correto (etapa humana pós-triagem), registrado por clareza.
+- **`targetdata` (RESOLVIDO 2026-07-08):** o mapeamento expôs que era vendido
+  (required em `dados_partes`, R$ 39) mas não tinha módulo técnico — pago e nunca
+  executado. Decisão do usuário: LIGAR. Adicionado o módulo técnico `targetdata`
+  (provider `mock_targetdata`, já com binding no registry + interpretação no
+  `triage_runner`) aos 4 planos onde é comprável; roda só quando comprado.
+- **Sem módulo técnico por design:** `revisao_humana` e `reuniao_equipe` são
+  etapas HUMANAS pós-triagem (sem conector) — registrado por clareza.
 
 ## Verificação
 
