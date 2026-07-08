@@ -187,6 +187,14 @@ def update_pricing_config(event, context):
         bad = [c for c in data.module_overrides if c not in MODULES]
         if bad:
             return error_response(400, f"módulos inválidos: {', '.join(bad)}")
+    # P-1 (server-side): se a org define métodos de pagamento explícitos, ao menos um
+    # precisa estar habilitado — senão a org fica sem forma de cobrar. Espelha a trava
+    # P-1 da tela /admin/pricing, que só bloqueava no cliente (um PUT direto burlava).
+    # allowed_methods vazio é OK: o serviço aplica os defaults (todos habilitados).
+    if "installment_config" in changed and data.installment_config is not None:
+        methods = data.installment_config.allowed_methods
+        if methods and not any(rule.enabled for rule in methods.values()):
+            return error_response(400, "Habilite ao menos um método de pagamento")
 
     try:
         with tenant_tx(uid, user["role"], org) as cur:

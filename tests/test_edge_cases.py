@@ -2,6 +2,7 @@
 
 Casos que podem quebrar os handlers: body JSON não-objeto, valores limites, etc.
 """
+from _dbadmin import admin_conn
 import json
 import uuid
 
@@ -88,8 +89,7 @@ def test_search_top_k_out_of_range_400():
 # ── segurança: injection e unicode em campos de texto ────────────────────────
 @pytest.fixture()
 def _clean_clients():
-    conn = psycopg2.connect(host="localhost", port=5433, user="dbadmin",
-                            password="localdev_cv", dbname="contrato_visto")
+    conn = admin_conn()
     conn.autocommit = True
     with conn.cursor() as cur:
         cur.execute("TRUNCATE public.cases, public.clients RESTART IDENTITY CASCADE")

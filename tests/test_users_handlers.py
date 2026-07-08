@@ -4,6 +4,7 @@
 (viewer/admin), update/delete e o fluxo forgot→reset. Handlers protegidos são
 invocados com o `event` que o API Gateway entrega (claims achatados).
 """
+from _dbadmin import admin_conn
 import json
 import os
 import uuid
@@ -19,10 +20,7 @@ SYSTEM_ORG_ID = "00000000-0000-0000-0000-000000000001"
 
 
 def _admin_conn():
-    return psycopg2.connect(
-        host="localhost", port=5433, user="dbadmin",
-        password="localdev_cv", dbname="contrato_visto", connect_timeout=5,
-    )
+    return admin_conn()
 
 
 @pytest.fixture()

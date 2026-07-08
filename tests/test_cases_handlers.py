@@ -3,6 +3,7 @@
 Invoca os handlers com o `event` que o API Gateway entregaria (com o contexto do
 JWT Authorizer), validando RLS, isolamento, gate de case visível e auth.
 """
+from _dbadmin import admin_conn
 import json
 import uuid
 
@@ -19,17 +20,15 @@ OTHER_ORG = "00000000-0000-0000-0000-0000000000ff"
 
 
 def _admin_conn():
-    return psycopg2.connect(
-        host="localhost", port=5433, user="dbadmin",
-        password="localdev_cv", dbname="contrato_visto", connect_timeout=5,
-    )
+    return admin_conn()
 
 
 def _reset_and_seed_client() -> str:
     conn = _admin_conn()
     conn.autocommit = True
     with conn.cursor() as cur:
-        cur.execute("TRUNCATE public.cases, public.clients RESTART IDENTITY CASCADE")
+        cur.execute("TRUNCATE public.cases, public.clients, public.pricing_configs"
+                    " RESTART IDENTITY CASCADE")
         cur.execute("TRUNCATE audit.audit_log RESTART IDENTITY")
         cur.execute("SELECT set_config('app.organization_id', %s, false)", (SYSTEM_ORG,))
         cur.execute(
@@ -79,6 +78,55 @@ def test_create_get_list_case(client_id):
     assert cases_h.get_case(_event(a, path={"caseId": case_id}), None)["statusCode"] == 200
     listed = _data(cases_h.list_cases(_event(a), None))["items"]
     assert len(listed) == 1 and listed[0]["id"] == case_id
+
+
+def _completed_at(case_id):
+    conn = _admin_conn(); conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute("SELECT completed_at FROM public.cases WHERE id=%s", (case_id,))
+        val = cur.fetchone()[0]
+    conn.close()
+    return val
+
+
+def test_completed_at_preservado_ao_fechar(client_id):
+    # Varredura-qualidade #3 (MEDIO): transição completed -> closed NÃO deve zerar completed_at.
+    a = str(uuid.uuid4())
+    case_id = _data(_make_case(a, client_id))["id"]
+    cases_h.update_case(_event(a, path={"caseId": case_id}, body={"status": "completed"}), None)
+    apos_completed = _completed_at(case_id)
+    assert apos_completed is not None
+    cases_h.update_case(_event(a, path={"caseId": case_id}, body={"status": "closed"}), None)
+    assert _completed_at(case_id) == apos_completed  # preservado
+
+
+def test_completed_at_limpo_ao_reabrir(client_id):
+    # reabrir (status não-finalizado) deve limpar completed_at
+    a = str(uuid.uuid4())
+    case_id = _data(_make_case(a, client_id))["id"]
+    cases_h.update_case(_event(a, path={"caseId": case_id}, body={"status": "completed"}), None)
+    assert _completed_at(case_id) is not None
+    cases_h.update_case(_event(a, path={"caseId": case_id}, body={"status": "in_progress"}), None)
+    assert _completed_at(case_id) is None
+
+
+def test_cases_limit_bloqueia_criacao_server_side(client_id):
+    # Varredura-qualidade #5 (MEDIO): com cases_limit definido, a criação de caso é bloqueada
+    # server-side (402) — não só no endpoint informativo /pricing/config/limit-check.
+    from src.handlers import pricing as pr_h
+    a = str(uuid.uuid4())
+    # define limite=1 (config PUT exige admin)
+    assert pr_h.update_pricing_config(
+        _event(a, role="admin", body={"cases_limit": 1}), None)["statusCode"] == 200
+    assert _make_case(a, client_id)["statusCode"] == 201   # 1o caso ok
+    assert _make_case(a, client_id)["statusCode"] == 402   # 2o bloqueado (quota)
+
+
+def test_cases_limit_nulo_nao_bloqueia(client_id):
+    # fail-safe: sem cases_limit (NULL) => ilimitado
+    a = str(uuid.uuid4())
+    assert _make_case(a, client_id)["statusCode"] == 201
+    assert _make_case(a, client_id)["statusCode"] == 201
 
 
 def test_case_isolation_and_admin(client_id):

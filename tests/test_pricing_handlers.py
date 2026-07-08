@@ -3,6 +3,7 @@
 Cobre catálogo (com override da org), estimativa servidor, get/put config
 (parcial + bump de version + RBAC admin), limit-check e isolamento por org.
 """
+from _dbadmin import admin_conn
 import json
 import uuid
 
@@ -16,8 +17,7 @@ OTHER_ORG = "00000000-0000-0000-0000-0000000000ff"
 
 
 def _admin_conn():
-    return psycopg2.connect(host="localhost", port=5433, user="dbadmin",
-                            password="localdev_cv", dbname="contrato_visto", connect_timeout=5)
+    return admin_conn()
 
 
 def _reset():
@@ -180,6 +180,35 @@ def test_estimate_inclui_installment_options_e_version():
     data = _data(resp)
     assert "installment_options" in data and len(data["installment_options"]) >= 1
     assert "pricing_config_version" in data and "payment_mode" in data
+
+
+def test_put_config_todos_metodos_desabilitados_400():
+    # P-1 server-side: allowed_methods com TODOS enabled=False deixaria a org sem
+    # forma de cobrar -> 400 (espelha a trava P-1 da tela, antes só no cliente).
+    a = str(uuid.uuid4())
+    cfg = {"installment_config": {"enabled": True, "max_parcelas": 1, "allowed_methods": {
+        "pix": {"enabled": False, "max_parcelas": 1},
+        "boleto": {"enabled": False, "max_parcelas": 1},
+        "cartao": {"enabled": False, "max_parcelas": 1}}}}
+    resp = pr_h.update_pricing_config(_event(a, body=cfg), None)
+    assert resp["statusCode"] == 400
+    assert "método de pagamento" in json.loads(resp["body"])["error"]
+
+
+def test_put_config_um_metodo_habilitado_ok():
+    a = str(uuid.uuid4())
+    cfg = {"installment_config": {"enabled": True, "max_parcelas": 1, "allowed_methods": {
+        "pix": {"enabled": True, "max_parcelas": 1},
+        "boleto": {"enabled": False, "max_parcelas": 1},
+        "cartao": {"enabled": False, "max_parcelas": 1}}}}
+    assert pr_h.update_pricing_config(_event(a, body=cfg), None)["statusCode"] in (200, 201)
+
+
+def test_put_config_allowed_methods_vazio_ok():
+    # allowed_methods vazio => o serviço aplica os defaults (todos habilitados); não bloqueia
+    a = str(uuid.uuid4())
+    cfg = {"installment_config": {"enabled": True, "max_parcelas": 1}}
+    assert pr_h.update_pricing_config(_event(a, body=cfg), None)["statusCode"] in (200, 201)
 
 
 def test_schema_payment_selection_valida():

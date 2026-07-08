@@ -4,6 +4,7 @@ Cria um pedido via wizard (que popula partes/timeline/triagem) e valida as abas:
 partes (com PII MASCARADA), timeline, triagem, e o GET /cases/{id} enriquecido
 (campos de produto + contagens + pricing). Cobre isolamento por org e 404.
 """
+from _dbadmin import admin_conn
 import json
 import uuid
 
@@ -22,8 +23,7 @@ OTHER_ORG = "00000000-0000-0000-0000-0000000000ff"
 
 
 def _admin_conn():
-    return psycopg2.connect(host="localhost", port=5433, user="dbadmin",
-                            password="localdev_cv", dbname="contrato_visto", connect_timeout=5)
+    return admin_conn()
 
 
 def _reset():
@@ -107,7 +107,9 @@ def test_timeline_do_caso(case_id):
 def test_triagem_do_caso(case_id):
     a = str(uuid.uuid4())
     mods = _data(tr_h.list_triage(_event(a, path={"caseId": case_id}), None))
-    assert len(mods) == 8  # plano de analise_contratual
+    # plano executável de analise_contratual com ia_deepseek + analise_contratual_ia:
+    # document_parser, ocr, contract_risk_analysis, obligations_mapping, ai_report
+    assert len(mods) == 5
     assert all(m["status"] == "not_started" for m in mods)
     assert all(m["provider"].startswith(("mock_", "mock")) for m in mods)
 
@@ -121,7 +123,7 @@ def test_get_case_enriquecido(case_id):
     assert case["parties_count"] == 2
     assert case["documents_count"] == 1
     assert case["timeline_count"] == 7
-    assert case["triage_count"] == 8
+    assert case["triage_count"] == 5  # só módulos habilitados pela seleção
     assert case["pricing"]["total_price_cents"] == 10800
 
 
@@ -162,7 +164,7 @@ def test_get_case_aggregate(case_id):
     assert empresa["email"] is None and empresa["email_masked"] == "c******@empresax.com"
     assert len(agg["documents"]) == 1
     assert len(agg["timeline"]) == 7
-    assert len(agg["triage_modules"]) == 8
+    assert len(agg["triage_modules"]) == 5  # só módulos habilitados pela seleção
     assert agg["summary"]["parties_count"] == 2 and agg["summary"]["documents_count"] == 1
     assert agg["summary"]["timeline_count"] == 7
     assert agg["summary"]["triage_status"] in ("pending", "not_started")
@@ -201,7 +203,8 @@ def test_criar_parte_viewer_403(case_id):
 def test_run_triage_executa_modulos_e_evidencias(case_id):
     a = str(uuid.uuid4())
     result = _data(tr_h.run_triage(_event(a, path={"caseId": case_id}), None))
-    assert result["modules_executed"] == 8  # plano de analise_contratual
+    # 5 = só módulos habilitados pela seleção (ia_deepseek + analise_contratual_ia)
+    assert result["modules_executed"] == 5
     assert result["risk_level"] in ("low", "medium", "high")
     # todos os módulos viraram 'done'
     mods = _data(tr_h.list_triage(_event(a, path={"caseId": case_id}), None))
@@ -210,16 +213,16 @@ def test_run_triage_executa_modulos_e_evidencias(case_id):
     conn = _admin_conn()
     with conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM public.provider_results WHERE case_id=%s", (case_id,))
-        assert cur.fetchone()[0] == 8
+        assert cur.fetchone()[0] == 5
         cur.execute("SELECT count(*) FROM public.external_queries_cache WHERE case_id=%s", (case_id,))
-        assert cur.fetchone()[0] == 8
+        assert cur.fetchone()[0] == 5
     conn.close()
     # idempotente: re-executar não duplica provider_results
     _data(tr_h.run_triage(_event(a, path={"caseId": case_id}), None))
     conn = _admin_conn()
     with conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM public.provider_results WHERE case_id=%s", (case_id,))
-        assert cur.fetchone()[0] == 8
+        assert cur.fetchone()[0] == 5
     conn.close()
 
 
@@ -238,7 +241,7 @@ def test_gerar_revisar_relatorio_e_aggregate(case_id):
     # recommendation é enum (não texto livre): casa com recommendationLabel do front
     assert rep["recommendation"] in (
         "proceed", "proceed_with_caution", "do_not_proceed", "human_review_required")
-    assert len(rep["source_refs"]) == 8  # 8 módulos de analise_contratual
+    assert len(rep["source_refs"]) == 5  # só módulos habilitados pela seleção
     # aparece no aggregate + summary.report_status
     agg = _data(cases_h.get_case_aggregate(_event(a, path={"caseId": case_id}), None))
     assert agg["report"] and agg["report"]["status"] == "ready"
@@ -313,3 +316,35 @@ def test_cvs007_caso_finalizado_bloqueia_escrita(case_id):
     # revisar relatorio de caso finalizado -> 409
     assert rep_h.review_case_report(
         _event(a, path=p, body={"status": "approved"}), None)["statusCode"] == 409
+
+
+def test_classify_risk_vocabulario_explicito():
+    # Varredura-qualidade (BAIXO): a classificação de risco usa vocabulário explícito,
+    # não substring de rótulo — o ramo 'high' passa a ser alcançável de forma determinística.
+    from src.services.triage_runner import classify_risk
+    assert classify_risk([]) == "low"
+    assert classify_risk(["clausula_revisar"]) == "medium"
+    assert classify_risk(["score_saudavel", "litigio_baixo"]) == "medium"
+    assert classify_risk(["litigio_alto"]) == "high"
+    assert classify_risk(["clausula_revisar", "score_baixo"]) == "high"
+
+
+def test_review_valida_recommendation_e_sincroniza_cases(case_id):
+    # Varredura-qualidade #4 (MEDIO): recommendation na revisão deve ser validada contra o
+    # enum (texto livre -> 400) e sincronizada em cases.recommendation (senão o agregado
+    # divergiria: case_reports atualizado, cases defasado).
+    a = str(uuid.uuid4())
+    tr_h.run_triage(_event(a, path={"caseId": case_id}), None)
+    rep_h.generate_case_report(_event(a, path={"caseId": case_id}), None)
+    # texto livre é rejeitado
+    assert rep_h.review_case_report(_event(a, path={"caseId": case_id},
+        body={"status": "reviewed", "recommendation": "qualquer coisa"}), None)["statusCode"] == 400
+    # código válido é aceito e sincroniza cases.recommendation
+    rev = _data(rep_h.review_case_report(_event(a, path={"caseId": case_id},
+        body={"status": "reviewed", "recommendation": "do_not_proceed"}), None))
+    assert rev["recommendation"] == "do_not_proceed"
+    conn = _admin_conn(); conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute("SELECT recommendation FROM public.cases WHERE id=%s", (case_id,))
+        assert cur.fetchone()[0] == "do_not_proceed"
+    conn.close()

@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from psycopg2.extras import Json
 
+from src.services.triage_runner import classify_risk
+
 _COLS = (
     "id, case_id, status, version, summary, findings, legal_risks, commercial_risks,"
     " reputational_risks, contractual_risks, missing_information, recommendation,"
@@ -18,6 +20,9 @@ _COLS = (
 # em case_reports.recommendation quanto em cases.recommendation (varchar(32)). O front
 # (recommendationLabel) só rotula esses códigos; texto livre apareceria cru.
 _REC_CODE = {"low": "proceed", "medium": "proceed_with_caution", "high": "do_not_proceed"}
+# conjunto fechado de códigos válidos de recommendation (o front só rotula estes; texto
+# livre apareceria cru). Usado para validar a edição na revisão humana.
+VALID_RECOMMENDATION = set(_REC_CODE.values()) | {"human_review_required"}
 # explicação humana (não é o status/enum): vai para o summary, não para recommendation.
 _REC_TEXT = {
     "proceed": "Apto a prosseguir; sem riscos relevantes identificados (simulado).",
@@ -78,7 +83,7 @@ def generate_report(cur, org, case_id, user_id) -> dict:
                    and r["summary"]]
     confs = [r["confidence"] for r in results if r["confidence"] is not None]
     confidence = round(sum(confs) / len(confs), 2) if confs else None
-    risk = "high" if any("alto" in s for s in signals) else ("medium" if signals else "low")
+    risk = classify_risk(signals)
     # sem evidências -> revisão humana obrigatória; senão deriva do nível de risco
     recommendation = "human_review_required" if not results else _REC_CODE[risk]
     missing = [] if results else ["Triagem ainda não executada — execute a triagem antes de gerar o relatório."]
@@ -150,6 +155,11 @@ def review_report(cur, org, case_id, user_id, status, notes=None,
     row = cur.fetchone()
     if not row:
         return None
+    # sincroniza cases.recommendation com a edição da revisão (senão o agregado divergiria:
+    # case_reports.recommendation atualizado, mas cases.recommendation defasado).
+    if recommendation is not None:
+        cur.execute("UPDATE public.cases SET recommendation=%s WHERE id = %s",
+                    (recommendation, case_id))
     if status == "approved":
         cur.execute("UPDATE public.cases SET status='completed', progress=100,"
                     " completed_at=now() WHERE id = %s", (case_id,))

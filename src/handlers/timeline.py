@@ -44,7 +44,7 @@ def list_timeline(event, context):
             cur.execute(
                 "SELECT id, case_id, event_type, title, description, actor, actor_id,"
                 " payload, created_at FROM public.timeline_events"
-                " WHERE case_id = %s ORDER BY created_at DESC, id DESC",
+                " WHERE case_id = %s ORDER BY created_at DESC, id DESC LIMIT 500",
                 (case_id,),
             )
             rows = cur.fetchall()

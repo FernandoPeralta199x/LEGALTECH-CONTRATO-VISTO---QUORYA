@@ -16,11 +16,12 @@ from pydantic import ValidationError
 import uuid
 
 from src.schemas.request_schemas import RequestCreateSchema
+from src.services.case_lifecycle import CasesLimitReached, assert_cases_within_limit
 from src.services.database import tenant_tx
 from src.services.pricing.config import PRODUCTS
 from src.services.pricing.estimate import estimate, normalize_selected_modules
 from src.services.storage import storage_service
-from src.services.triage_plan import plan_for_product
+from src.services.triage_plan import plan_for_selection
 from src.utils.context import require_user, require_writer
 from src.utils.helpers import error_response, generate_uuid, success_response
 from src.utils.lambda_io import fmt_validation_error as _fmt, parse_json_body as _parse_body, valid_uuid as _valid_uuid
@@ -85,10 +86,15 @@ def create_request(event, context):
         return error_response(400, str(e))
     request_id = generate_uuid()
     case_id = generate_uuid()
-    modules = plan_for_product(data.product_type)
+    # Triagem executa APENAS o que foi comprado: infra básica do produto + módulos
+    # técnicos habilitados pelos módulos comerciais selecionados (mesma lista usada
+    # na cobrança acima — execução e billing nunca divergem).
+    modules = plan_for_selection(data.product_type, selected)
 
     try:
         with tenant_tx(uid, user["role"], org) as cur:
+            # quota de casos da organização (pricing_configs.cases_limit); NULL => ilimitado
+            assert_cases_within_limit(cur, org)
             # overrides de preço da organização (pricing_configs)
             cur.execute(
                 "SELECT module_overrides FROM public.pricing_configs WHERE organization_id = %s",
@@ -202,6 +208,8 @@ def create_request(event, context):
                     " VALUES (%s,%s,%s,%s,%s,%s)",
                     (org, case_id, etype, etitle, edesc, eactor),
                 )
+    except CasesLimitReached:
+        return error_response(402, "limite de casos da organização atingido")
     except psycopg2.errors.UniqueViolation:
         return error_response(409, "Pedido já registrado (idempotency_key)")
     except Exception as e:

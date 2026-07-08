@@ -3,6 +3,7 @@
 `public.documents` tem RLS por `uploaded_by`. Upload exige case visível + papel
 writer; download/get filtrado pela RLS (dono ou admin). S3 via backend `local`.
 """
+from _dbadmin import admin_conn
 import json
 import uuid
 
@@ -17,10 +18,7 @@ OTHER_ORG = "00000000-0000-0000-0000-0000000000ff"
 
 
 def _admin_conn():
-    return psycopg2.connect(
-        host="localhost", port=5433, user="dbadmin",
-        password="localdev_cv", dbname="contrato_visto", connect_timeout=5,
-    )
+    return admin_conn()
 
 
 @pytest.fixture()
@@ -228,6 +226,26 @@ def test_list_documents_filtra_status(client_id):
     assert doc2 in ids2 and doc1 not in ids2
 
 
+# ── Varredura-qualidade #2: filtro ?classification= (separa relatórios finais) ──
+def test_list_documents_filtra_por_classification(client_id):
+    a = str(uuid.uuid4())
+    case_id = _make_case(a, client_id)
+    rel = _data(_upload(a, case_id, file_name="relatorio.pdf",
+                        document_classification="final_report"))["document_id"]
+    _data(_upload(a, case_id, file_name="contrato.pdf"))  # upload comum, sem classificação
+    # com o filtro: só o relatório final, e o shape V2 expõe metadata.kind
+    ev = _event(a)
+    ev["queryStringParameters"] = {"case_id": case_id, "classification": "final_report"}
+    docs = _data(d.list_documents(ev, None))
+    assert len(docs) == 1
+    assert docs[0]["id"] == rel
+    assert docs[0]["metadata"] == {"kind": "final_report"}
+    # sem o filtro: ambos aparecem (era o que inflava o contador no frontend)
+    ev_all = _event(a)
+    ev_all["queryStringParameters"] = {"case_id": case_id}
+    assert len(_data(d.list_documents(ev_all, None))) == 2
+
+
 # ── #26/Codex B3: status fora do conjunto mapeável é erro de contrato (400) ──
 def test_update_document_status_invalido_400(client_id):
     a = str(uuid.uuid4())
@@ -256,3 +274,25 @@ def test_documento_de_caso_arquivado_inacessivel(client_id):
             body={"filename": "x.pdf"}), None)["statusCode"] == 404
     assert d.process_document(_event(a, path={"docId": doc_id}), None)["statusCode"] == 404
     assert doc_id not in {x["id"] for x in _data(d.list_documents(_event(a), None))}
+
+
+def test_upload_bloqueado_em_caso_arquivado(client_id):
+    # Varredura-qualidade #1 (ALTO): o guard de escrita deve incluir deleted_at IS NULL,
+    # senão um caso arquivado (soft-delete, status não-terminal) aceita upload e cria
+    # documento órfão (invisível em todos os reads). Deve retornar 404 (caso não visível).
+    a = str(uuid.uuid4())
+    case_id = _make_case(a, client_id)
+    assert cases_h.delete_case(_event(a, path={"caseId": case_id}), None)["statusCode"] == 200
+    assert _upload(a, case_id)["statusCode"] == 404
+
+
+def test_aggregate_normaliza_status_done_para_processed(client_id):
+    # Varredura-qualidade #2 (MEDIO): o agregado do caso deve mapear ocr_status 'done' ->
+    # 'processed' (igual à lista), não expor 'done' cru (que renderiza badge sem rótulo).
+    a = str(uuid.uuid4())
+    case_id = _make_case(a, client_id)
+    doc_id = _data(_upload(a, case_id, file_size_bytes=1024))["document_id"]
+    d.process_document(_event(a, path={"docId": doc_id}), None)  # ocr_status -> 'done'
+    agg = _data(cases_h.get_case_aggregate(_event(a, path={"caseId": case_id}), None))
+    doc = next(x for x in agg["documents"] if x["id"] == doc_id)
+    assert doc["status"] == "processed"
