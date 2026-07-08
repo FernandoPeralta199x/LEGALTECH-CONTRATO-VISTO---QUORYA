@@ -364,18 +364,3 @@ def _content_type(file_type: str) -> str:
         "doc": "application/msword",
         "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     }.get(file_type, "application/octet-stream")
-
-
-def _serialize(row) -> dict:
-    return {
-        "id": str(row["id"]),
-        "case_id": str(row["case_id"]),
-        "file_name": row["file_name"],
-        "file_type": row.get("file_type"),
-        "file_size_bytes": row.get("file_size_bytes"),
-        "file_hash": row.get("file_hash"),
-        "ocr_status": row.get("ocr_status"),
-        "extraction_status": row.get("extraction_status"),
-        "document_classification": row.get("document_classification"),
-        "created_at": str(row["created_at"]) if row.get("created_at") else None,
-    }
