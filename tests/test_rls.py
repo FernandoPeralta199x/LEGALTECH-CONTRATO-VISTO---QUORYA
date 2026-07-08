@@ -3,6 +3,7 @@
 Cobre: isolamento por usuário, trigger de auditoria com app.user_id, reset de
 contexto entre usuários na mesma conexão reutilizada, e fail-closed sem contexto.
 """
+from _dbadmin import admin_conn
 import uuid
 
 import psycopg2
@@ -22,10 +23,7 @@ def _new_user() -> str:
 
 def _admin_conn():
     """Conexão como owner (dbadmin) — bypassa RLS — só para setup/asserts."""
-    return psycopg2.connect(
-        host="localhost", port=5433, user="dbadmin",
-        password="localdev_cv", dbname="contrato_visto", connect_timeout=5,
-    )
+    return admin_conn()
 
 
 def _reset():

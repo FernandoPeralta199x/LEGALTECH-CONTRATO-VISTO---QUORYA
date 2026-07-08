@@ -10,6 +10,7 @@ Multi-tenant (Fundação V2): membros da operação são semeados na MESMA organ
 test_users_handlers). A RLS de cases/case_results/documents ainda é por-dono nesta
 fase (Parte 1A); a virada para por-organização é a Parte 1B.
 """
+from _dbadmin import admin_conn
 import json
 import uuid
 
@@ -31,10 +32,7 @@ ORG_ID = "00000000-0000-0000-0000-000000000001"  # org de sistema (migração 00
 
 
 def _admin_conn():
-    return psycopg2.connect(
-        host="localhost", port=5433, user="dbadmin",
-        password="localdev_cv", dbname="contrato_visto", connect_timeout=5,
-    )
+    return admin_conn()
 
 
 @pytest.fixture()

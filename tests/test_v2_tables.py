@@ -1,4 +1,5 @@
 """Fundação V2 — RLS por organização das tabelas estruturais novas (PG18 + cv_app)."""
+from _dbadmin import admin_conn
 import uuid
 
 import psycopg2
@@ -15,10 +16,7 @@ def _uid() -> str:
 
 
 def _admin_conn():
-    return psycopg2.connect(
-        host="localhost", port=5433, user="dbadmin",
-        password="localdev_cv", dbname="contrato_visto", connect_timeout=5,
-    )
+    return admin_conn()
 
 
 @pytest.fixture(autouse=True)

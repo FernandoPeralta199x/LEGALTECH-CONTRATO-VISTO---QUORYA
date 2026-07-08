@@ -1,5 +1,6 @@
 """Smoke test do dev-server local (DEV-ONLY): roteamento, prefixo /api/v1,
 simulação do JWT Authorizer e conversão HTTP<->event ponta a ponta."""
+from _dbadmin import admin_conn
 import json
 import threading
 import urllib.error
@@ -26,8 +27,7 @@ def base_url():
 
 
 def _seed_admin(email, password):
-    conn = psycopg2.connect(host="localhost", port=5433, user="dbadmin",
-                            password="localdev_cv", dbname="contrato_visto", connect_timeout=5)
+    conn = admin_conn()
     conn.autocommit = True
     with conn.cursor() as cur:
         cur.execute(

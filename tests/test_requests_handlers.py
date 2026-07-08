@@ -5,6 +5,7 @@ achatados) e valida, ponta a ponta: criação atômica de request + case (awaiti
 + partes + documento + plano de triagem + timeline + price_snapshot, RLS por org,
 sequência do código, override de preço, idempotência e RBAC.
 """
+from _dbadmin import admin_conn
 import json
 import uuid
 from collections import Counter
@@ -28,8 +29,7 @@ N_TRIAGE = len(plan_for_selection(
 
 
 def _admin_conn():
-    return psycopg2.connect(host="localhost", port=5433, user="dbadmin",
-                            password="localdev_cv", dbname="contrato_visto", connect_timeout=5)
+    return admin_conn()
 
 
 def _reset():

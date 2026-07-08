@@ -3,6 +3,7 @@
 `public.documents` tem RLS por `uploaded_by`. Upload exige case visível + papel
 writer; download/get filtrado pela RLS (dono ou admin). S3 via backend `local`.
 """
+from _dbadmin import admin_conn
 import json
 import uuid
 
@@ -17,10 +18,7 @@ OTHER_ORG = "00000000-0000-0000-0000-0000000000ff"
 
 
 def _admin_conn():
-    return psycopg2.connect(
-        host="localhost", port=5433, user="dbadmin",
-        password="localdev_cv", dbname="contrato_visto", connect_timeout=5,
-    )
+    return admin_conn()
 
 
 @pytest.fixture()

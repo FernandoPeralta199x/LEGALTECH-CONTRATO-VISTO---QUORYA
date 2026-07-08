@@ -4,6 +4,7 @@ Cria um pedido via wizard (que popula partes/timeline/triagem) e valida as abas:
 partes (com PII MASCARADA), timeline, triagem, e o GET /cases/{id} enriquecido
 (campos de produto + contagens + pricing). Cobre isolamento por org e 404.
 """
+from _dbadmin import admin_conn
 import json
 import uuid
 
@@ -22,8 +23,7 @@ OTHER_ORG = "00000000-0000-0000-0000-0000000000ff"
 
 
 def _admin_conn():
-    return psycopg2.connect(host="localhost", port=5433, user="dbadmin",
-                            password="localdev_cv", dbname="contrato_visto", connect_timeout=5)
+    return admin_conn()
 
 
 def _reset():
@@ -203,7 +203,8 @@ def test_criar_parte_viewer_403(case_id):
 def test_run_triage_executa_modulos_e_evidencias(case_id):
     a = str(uuid.uuid4())
     result = _data(tr_h.run_triage(_event(a, path={"caseId": case_id}), None))
-    assert result["modules_executed"] == 8  # plano de analise_contratual
+    # 5 = só módulos habilitados pela seleção (ia_deepseek + analise_contratual_ia)
+    assert result["modules_executed"] == 5
     assert result["risk_level"] in ("low", "medium", "high")
     # todos os módulos viraram 'done'
     mods = _data(tr_h.list_triage(_event(a, path={"caseId": case_id}), None))
@@ -212,16 +213,16 @@ def test_run_triage_executa_modulos_e_evidencias(case_id):
     conn = _admin_conn()
     with conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM public.provider_results WHERE case_id=%s", (case_id,))
-        assert cur.fetchone()[0] == 8
+        assert cur.fetchone()[0] == 5
         cur.execute("SELECT count(*) FROM public.external_queries_cache WHERE case_id=%s", (case_id,))
-        assert cur.fetchone()[0] == 8
+        assert cur.fetchone()[0] == 5
     conn.close()
     # idempotente: re-executar não duplica provider_results
     _data(tr_h.run_triage(_event(a, path={"caseId": case_id}), None))
     conn = _admin_conn()
     with conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM public.provider_results WHERE case_id=%s", (case_id,))
-        assert cur.fetchone()[0] == 8
+        assert cur.fetchone()[0] == 5
     conn.close()
 
 
@@ -240,7 +241,7 @@ def test_gerar_revisar_relatorio_e_aggregate(case_id):
     # recommendation é enum (não texto livre): casa com recommendationLabel do front
     assert rep["recommendation"] in (
         "proceed", "proceed_with_caution", "do_not_proceed", "human_review_required")
-    assert len(rep["source_refs"]) == 8  # 8 módulos de analise_contratual
+    assert len(rep["source_refs"]) == 5  # só módulos habilitados pela seleção
     # aparece no aggregate + summary.report_status
     agg = _data(cases_h.get_case_aggregate(_event(a, path={"caseId": case_id}), None))
     assert agg["report"] and agg["report"]["status"] == "ready"

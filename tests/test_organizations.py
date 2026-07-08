@@ -1,4 +1,5 @@
 """Fundação V2 — RLS da tabela organizations (PG18 + role não-owner cv_app)."""
+from _dbadmin import admin_conn
 import uuid
 
 import psycopg2
@@ -10,10 +11,7 @@ SYSTEM_ORG_ID = "00000000-0000-0000-0000-000000000001"
 
 
 def _admin_conn():
-    return psycopg2.connect(
-        host="localhost", port=5433, user="dbadmin",
-        password="localdev_cv", dbname="contrato_visto", connect_timeout=5,
-    )
+    return admin_conn()
 
 
 def _set_org(cur, org_id):

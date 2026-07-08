@@ -2,6 +2,7 @@
 por job (agent_executions, UNIQUE org+job_id), dedupe por documento (chunks existentes),
 falhas determinísticas, rejeição de metadata sensível e o handler SQS (partial batch).
 """
+from _dbadmin import admin_conn
 import json
 import uuid
 
@@ -22,8 +23,7 @@ SYSTEM_ORG = "00000000-0000-0000-0000-000000000001"
 
 
 def _admin_conn():
-    return psycopg2.connect(host="localhost", port=5433, user="dbadmin",
-                            password="localdev_cv", dbname="contrato_visto", connect_timeout=5)
+    return admin_conn()
 
 
 def _reset():
