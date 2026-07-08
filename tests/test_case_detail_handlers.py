@@ -107,7 +107,9 @@ def test_timeline_do_caso(case_id):
 def test_triagem_do_caso(case_id):
     a = str(uuid.uuid4())
     mods = _data(tr_h.list_triage(_event(a, path={"caseId": case_id}), None))
-    assert len(mods) == 8  # plano de analise_contratual
+    # plano executável de analise_contratual com ia_deepseek + analise_contratual_ia:
+    # document_parser, ocr, contract_risk_analysis, obligations_mapping, ai_report
+    assert len(mods) == 5
     assert all(m["status"] == "not_started" for m in mods)
     assert all(m["provider"].startswith(("mock_", "mock")) for m in mods)
 
@@ -121,7 +123,7 @@ def test_get_case_enriquecido(case_id):
     assert case["parties_count"] == 2
     assert case["documents_count"] == 1
     assert case["timeline_count"] == 7
-    assert case["triage_count"] == 8
+    assert case["triage_count"] == 5  # só módulos habilitados pela seleção
     assert case["pricing"]["total_price_cents"] == 10800
 
 
@@ -162,7 +164,7 @@ def test_get_case_aggregate(case_id):
     assert empresa["email"] is None and empresa["email_masked"] == "c******@empresax.com"
     assert len(agg["documents"]) == 1
     assert len(agg["timeline"]) == 7
-    assert len(agg["triage_modules"]) == 8
+    assert len(agg["triage_modules"]) == 5  # só módulos habilitados pela seleção
     assert agg["summary"]["parties_count"] == 2 and agg["summary"]["documents_count"] == 1
     assert agg["summary"]["timeline_count"] == 7
     assert agg["summary"]["triage_status"] in ("pending", "not_started")

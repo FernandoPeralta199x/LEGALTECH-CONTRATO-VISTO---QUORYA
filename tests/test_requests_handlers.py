@@ -14,11 +14,17 @@ import psycopg2
 import pytest
 
 from src.handlers import requests as req_h
-from src.services.triage_plan import plan_for_product
+from src.services.pricing.estimate import normalize_selected_modules
+from src.services.triage_plan import plan_for_selection
 
 SYSTEM_ORG = "00000000-0000-0000-0000-000000000001"
 OTHER_ORG = "00000000-0000-0000-0000-0000000000ff"
-N_TRIAGE = len(plan_for_product("analise_contratual"))  # 8
+# Triagem executa APENAS o que foi comprado (infra do produto + módulos técnicos
+# dos comerciais selecionados) — mesma seleção do _payload() abaixo.
+N_TRIAGE = len(plan_for_selection(
+    "analise_contratual",
+    normalize_selected_modules("analise_contratual",
+                               ["ia_deepseek", "analise_contratual_ia"])))  # 5
 
 
 def _admin_conn():
@@ -224,8 +230,44 @@ def test_produto_dados_partes_gera_plano_proprio():
     a = str(uuid.uuid4())
     p = _payload(product_type="dados_partes", selected_modules=["escavador", "targetdata", "ia_deepseek"])
     data = _data(req_h.create_request(_event(a, body=p), None))
-    assert data["triage_modules_count"] == len(plan_for_product("dados_partes"))  # 6
+    # sem serasa_procon comprado, serasa/procon ficam FORA do plano executável:
+    # parties_validation + escavador + reputation_summary + ai_summary
+    assert data["triage_modules_count"] == len(plan_for_selection(
+        "dados_partes",
+        normalize_selected_modules("dados_partes",
+                                   ["escavador", "targetdata", "ia_deepseek"])))  # 4
     assert data["total_price_cents"] == 6000 + 3900 + 2900  # 12800
+
+
+def test_triagem_nao_inclui_conectores_nao_comprados():
+    """BUG 2026-07-08: seleção mínima não pode gerar serasa/procon/escavador
+    (módulos comerciais não comprados) no plano de triagem."""
+    a = str(uuid.uuid4())
+    data = _data(req_h.create_request(_event(a, body=_payload()), None))
+    conn = _admin_conn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT module_key FROM public.triage_modules WHERE case_id=%s",
+                    (data["case_id"],))
+        keys = {r[0] for r in cur.fetchall()}
+    conn.close()
+    assert keys == {"document_parser", "ocr", "contract_risk_analysis",
+                    "obligations_mapping", "ai_report"}
+    assert not {"serasa", "procon", "escavador"} & keys
+
+
+def test_serasa_procon_comprado_entra_na_triagem():
+    a = str(uuid.uuid4())
+    p = _payload(selected_modules=["ia_deepseek", "analise_contratual_ia", "serasa_procon"])
+    data = _data(req_h.create_request(_event(a, body=p), None))
+    assert data["total_price_cents"] == 2900 + 7900 + 5900
+    conn = _admin_conn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT module_key FROM public.triage_modules WHERE case_id=%s",
+                    (data["case_id"],))
+        keys = {r[0] for r in cur.fetchall()}
+    conn.close()
+    assert {"serasa", "procon"} <= keys
+    assert "escavador" not in keys  # continua não comprado
 
 
 def _seed_client(org, legal_name="Cliente Vinculado LTDA"):
