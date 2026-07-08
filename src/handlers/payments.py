@@ -56,13 +56,16 @@ def create_case_payment(event, context):
         # ── TX 1 (curta): ler caso/plano/config e validar. Nenhum I/O externo aqui. ──
         with tenant_tx(user["user_id"], user["role"], org) as cur:
             cur.execute(
-                "SELECT r.id, r.total_price_cents, r.installment_plan, r.payment_status"
-                " FROM public.requests r JOIN public.cases c ON c.request_id = r.id"
-                "  AND c.organization_id = r.organization_id"
+                "SELECT r.id AS request_id, r.total_price_cents, r.installment_plan,"
+                " r.payment_status"
+                " FROM public.cases c LEFT JOIN public.requests r"
+                "  ON r.id = c.request_id AND r.organization_id = c.organization_id"
                 " WHERE c.id = %s AND c.deleted_at IS NULL", (case_id,))
             row = cur.fetchone()
             if not row:
                 return error_response(404, "Caso não encontrado")
+            if not row["request_id"]:
+                return error_response(409, "Caso sem pedido associado: não há nada a pagar")
 
             plan = row["installment_plan"]
             new_hash = _payload_hash(sel)
@@ -75,7 +78,7 @@ def create_case_payment(event, context):
                 return error_response(409, "Pagamento já registrado com outros dados")
 
             icfg, iver = _read_config(cur, org)
-            request_id = row["id"]
+            request_id = row["request_id"]
             total = row["total_price_cents"] or 0
 
         ref = datetime.now(_BRT).date()

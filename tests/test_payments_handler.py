@@ -61,6 +61,44 @@ def seed_case_and_config():
     }), None)
     return _data(resp)["case_id"], admin
 
+
+def _insert_case_without_request():
+    conn = _admin_conn()
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute("SELECT set_config('app.organization_id', %s, false)", (SYSTEM_ORG,))
+        cur.execute(
+            "INSERT INTO public.cases (organization_id, case_type, status, product_type,"
+            " product_label, title) VALUES (%s, 'analise_contratual', 'open',"
+            " 'analise_contratual', 'Análise', 'Caso sem pedido') RETURNING id",
+            (SYSTEM_ORG,),
+        )
+        case_id = cur.fetchone()[0]
+    conn.close()
+    return str(case_id)
+
+
+def test_pagamento_case_inexistente_retorna_404():
+    admin = str(uuid.uuid4())
+    resp = pay_h.create_case_payment(_event(admin, body={
+        "parcelas": 1, "method": "pix", "idempotency_key": "missing-case"},
+        path={"caseId": str(uuid.uuid4())}), None)
+    body = json.loads(resp["body"])
+    assert resp["statusCode"] == 404, resp
+    assert body["error"] == "Caso não encontrado"
+
+
+def test_pagamento_case_sem_pedido_retorna_409():
+    admin = str(uuid.uuid4())
+    case_id = _insert_case_without_request()
+    resp = pay_h.create_case_payment(_event(admin, body={
+        "parcelas": 1, "method": "pix", "idempotency_key": "sem-pedido"},
+        path={"caseId": case_id}), None)
+    body = json.loads(resp["body"])
+    assert resp["statusCode"] == 409, resp
+    assert "sem pedido" in body["error"]
+
+
 def test_pagamento_grava_plano_e_status(seed_case_and_config):
     case_id, admin = seed_case_and_config  # caso pending + config habilitada
     body = {"parcelas": 3, "method": "cartao", "idempotency_key": "p1",
