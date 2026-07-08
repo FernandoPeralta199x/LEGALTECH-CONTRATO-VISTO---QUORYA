@@ -12,6 +12,7 @@ from src.adapters.ocr import create_ocr_adapter
 from src.services.chunking import chunk_text
 from src.services.embeddings import embeddings_service
 from src.services.rag import store_chunk, store_embedding
+from src.utils.mime import mime_for
 
 
 class DocumentNotFound(Exception):
@@ -20,16 +21,6 @@ class DocumentNotFound(Exception):
 
 class OcrFailed(Exception):
     """OCR não retornou texto utilizável."""
-
-
-_MIME = {
-    "pdf": "application/pdf", "png": "image/png", "jpg": "image/jpeg",
-    "jpeg": "image/jpeg", "tiff": "image/tiff",
-}
-
-
-def _content_type(file_type: str) -> str:
-    return _MIME.get((file_type or "").lower(), "application/octet-stream")
 
 
 def ingest_document(cur, org, doc_id) -> dict:
@@ -50,7 +41,7 @@ def ingest_document(cur, org, doc_id) -> dict:
 
     ocr = create_ocr_adapter()
     res = ocr.extract_text(doc["s3_path"] or f"local/{doc_id}",
-                           _content_type(doc.get("file_type") or "pdf"))
+                           mime_for(doc.get("file_type") or "pdf"))
     if not res.success or not res.data.get("text"):
         cur.execute("UPDATE public.documents SET ocr_status='failed',"
                     " extraction_status='failed' WHERE id = %s", (str(doc_id),))
