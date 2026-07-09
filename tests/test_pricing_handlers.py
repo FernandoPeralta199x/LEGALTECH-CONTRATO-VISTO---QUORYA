@@ -189,7 +189,8 @@ def test_put_config_todos_metodos_desabilitados_400():
     cfg = {"installment_config": {"enabled": True, "max_parcelas": 1, "allowed_methods": {
         "pix": {"enabled": False, "max_parcelas": 1},
         "boleto": {"enabled": False, "max_parcelas": 1},
-        "cartao": {"enabled": False, "max_parcelas": 1}}}}
+        "cartao": {"enabled": False, "max_parcelas": 1},
+        "debito": {"enabled": False, "max_parcelas": 1}}}}
     resp = pr_h.update_pricing_config(_event(a, body=cfg), None)
     assert resp["statusCode"] == 400
     assert "método de pagamento" in json.loads(resp["body"])["error"]

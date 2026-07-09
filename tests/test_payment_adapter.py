@@ -9,7 +9,7 @@ def _req(method="cartao"):
                           case_reference="case-1", organization_id="org-1",
                           idempotency_key="k1", schedule=[{"numero": 1, "valor_cents": 3334}])
 
-@pytest.mark.parametrize("method", ["pix", "boleto", "cartao"])
+@pytest.mark.parametrize("method", ["pix", "boleto", "cartao", "debito"])
 def test_mock_retorna_simulated_por_metodo(method):
     res = MockPaymentProvider().create_charge(_req(method))
     assert res.status == "simulated" and res.method == method
@@ -59,3 +59,31 @@ def test_mock_cartao_usa_hints_e_marca_simulated():
     res = MockPaymentProvider().create_charge(req)
     pub = res.to_public()["payment_form"]
     assert pub["last4"] == "4242" and pub["brand"] == "visa" and pub["simulated"] is True
+
+
+# ── Débito é um cartão: mesma tokenização/hints/allowlist PCI que "cartao" ──
+
+def test_mock_debito_trata_como_cartao_com_hints():
+    from src.adapters.payment import PaymentRequest, MockPaymentProvider
+    req = PaymentRequest(amount_cents=10000, installments=1, method="debito",
+                         case_reference="c1", organization_id="o1", idempotency_key="k",
+                         schedule=[], card_token="tok_mock_deb", card_last4_hint="5151",
+                         card_brand_hint="elo")
+    res = MockPaymentProvider().create_charge(req)
+    assert res.method == "debito" and res.status == "simulated"
+    pub = res.to_public()["payment_form"]
+    assert pub["type"] == "debito" and pub["last4"] == "5151" and pub["brand"] == "elo"
+    assert pub["authorization_code"] == "MOCK-AUTH-123" and pub["simulated"] is True
+
+
+def test_to_public_allowlist_debito_remove_sensivel():
+    from src.adapters.payment import PaymentResult
+    r = PaymentResult(provider="mock", mode="mock", status="simulated", method="debito",
+                      external_reference="mock_x",
+                      payment_form={"type": "debito", "brand": "elo", "last4": "5151",
+                                    "authorization_code": "A", "simulated": True,
+                                    "card_number": "5111111111111111", "cvv": "123",
+                                    "token": "tok_secret", "cpf": "060..."})
+    keys = set(r.to_public()["payment_form"].keys())
+    assert keys <= {"type", "brand", "last4", "authorization_code", "simulated"}
+    assert "card_number" not in keys and "cvv" not in keys and "token" not in keys

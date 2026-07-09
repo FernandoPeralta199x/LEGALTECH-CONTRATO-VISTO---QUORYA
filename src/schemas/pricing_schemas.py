@@ -60,7 +60,7 @@ class PaymentSelectionSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     parcelas: int = Field(ge=1, le=24)
-    method: Literal["pix", "boleto", "cartao"]
+    method: Literal["pix", "boleto", "cartao", "debito"]
     pricing_config_version: int | None = None
     idempotency_key: str = Field(min_length=1, max_length=255)
     # Cartão: só o token + hints de exibição. NUNCA número/CVV/validade (extra=forbid rejeita).
@@ -71,6 +71,14 @@ class PaymentSelectionSchema(BaseModel):
 
     @model_validator(mode="after")
     def _cartao_exige_token(self) -> "PaymentSelectionSchema":
-        if self.method == "cartao" and not self.card_token:
+        # Débito é um cartão: mesma tokenização client-side que crédito ("cartao").
+        if self.method in ("cartao", "debito") and not self.card_token:
             raise ValueError("cartão exige card_token (tokenização client-side)")
+        return self
+
+    @model_validator(mode="after")
+    def _debito_e_a_vista(self) -> "PaymentSelectionSchema":
+        # Débito é sempre à vista: parcelas == 1 (vira 400 no handler se != 1).
+        if self.method == "debito" and self.parcelas != 1:
+            raise ValueError("débito é à vista: parcelas deve ser 1")
         return self

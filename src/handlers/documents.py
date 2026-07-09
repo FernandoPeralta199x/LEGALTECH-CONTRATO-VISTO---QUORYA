@@ -23,6 +23,7 @@ from src.services.storage import storage_service
 from src.utils.context import require_user, require_writer
 from src.utils.doc_status import DOC_STATUS_MAP as _DOC_STATUS_MAP, DOC_STATUS_REV as _DOC_STATUS_REV
 from src.utils.helpers import error_response, success_response
+from src.utils.mime import mime_for
 from src.utils.lambda_io import fmt_validation_error as _fmt, parse_json_body as _parse_body, valid_uuid as _valid_uuid
 from src.utils.safety import enforce_production_safety
 
@@ -99,7 +100,7 @@ def upload_document(event, context):
                                  "pgcode": getattr(e, "pgcode", None)}))
         return error_response(500, "Erro ao registrar documento")
 
-    upload_url = storage_service.presign_put(s3_key, _content_type(data.file_type))
+    upload_url = storage_service.presign_put(s3_key, mime_for(data.file_type))
     logger.info(json.dumps({"event": "DOCUMENT_UPLOADED", "document_id": doc_id,
                             "case_id": case_id}))
     return success_response(201, "Documento registrado; use a URL para enviar o arquivo", {
@@ -342,7 +343,7 @@ def _serialize_v2(row) -> dict:
         "id": str(row["id"]),
         "case_id": str(row["case_id"]),
         "filename": row["file_name"],
-        "content_type": _content_type(row.get("file_type") or ""),
+        "content_type": mime_for(row.get("file_type")),
         "size_bytes": row.get("file_size_bytes") or 0,
         "file_hash": row.get("file_hash"),
         "status": _DOC_STATUS_MAP.get(raw_status, raw_status),
@@ -357,10 +358,3 @@ def _serialize_v2(row) -> dict:
     }
 
 
-def _content_type(file_type: str) -> str:
-    return {
-        "pdf": "application/pdf", "jpg": "image/jpeg", "jpeg": "image/jpeg",
-        "png": "image/png", "tiff": "image/tiff", "txt": "text/plain",
-        "doc": "application/msword",
-        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    }.get(file_type, "application/octet-stream")

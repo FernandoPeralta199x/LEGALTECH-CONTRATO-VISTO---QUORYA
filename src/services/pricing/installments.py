@@ -9,8 +9,9 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-_METHODS = ("pix", "boleto", "cartao")
-# Apenas o cartão de crédito parcela; Pix/Boleto são sempre à vista (1x).
+_METHODS = ("pix", "boleto", "cartao", "debito")
+# Apenas o cartão de crédito parcela; Pix/Boleto/Débito são sempre à vista (1x).
+# Débito é um cartão, mas cobrado à vista => fora de _INSTALLMENT_METHODS.
 _INSTALLMENT_METHODS = ("cartao",)
 _CURRENCY = "BRL"
 
@@ -62,7 +63,8 @@ def _effective_methods(config: InstallmentConfig) -> dict[str, MethodRule]:
         return config.allowed_methods
     return {"pix": MethodRule(enabled=True, max_parcelas=1),
             "boleto": MethodRule(enabled=True, max_parcelas=1),
-            "cartao": MethodRule(enabled=True, max_parcelas=config.max_parcelas)}
+            "cartao": MethodRule(enabled=True, max_parcelas=config.max_parcelas),
+            "debito": MethodRule(enabled=True, max_parcelas=1)}
 
 
 def _methods_for(n: int, config: InstallmentConfig) -> list[str]:

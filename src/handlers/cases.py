@@ -19,6 +19,7 @@ from src.services.pricing.installments import InstallmentConfig, compute_install
 from src.handlers.requests import _next_request_code
 from src.utils.context import require_user, require_writer
 from src.utils.doc_status import to_v2_status
+from src.utils.mime import mime_for
 from src.services.case_lifecycle import CasesLimitReached, assert_cases_within_limit
 from src.services.report_generator import get_report as _get_report
 from src.utils.pii import mask_document, mask_email, mask_phone
@@ -159,15 +160,6 @@ def get_case(event, context):
 _PII_KEYS = {"email", "phone", "document", "document_number", "cpf", "cnpj", "rg"}
 
 
-def _mime(file_type) -> str:
-    return {
-        "pdf": "application/pdf", "jpg": "image/jpeg", "jpeg": "image/jpeg",
-        "png": "image/png", "tiff": "image/tiff", "txt": "text/plain",
-        "doc": "application/msword",
-        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    }.get((file_type or "").lower(), "application/octet-stream")
-
-
 def _triage_status(modules) -> str:
     if not modules:
         return "not_started"
@@ -250,7 +242,7 @@ def _agg_documents(cur, org, case_id):
         documents.append({
             "id": str(d["id"]), "case_id": str(d["case_id"]), "organization_id": str(org),
             "filename": d["file_name"], "original_filename": d["file_name"],
-            "mime_type": _mime(d.get("file_type")),
+            "mime_type": mime_for(d.get("file_type")),
             "size_bytes": d.get("file_size_bytes") or 0,
             "storage_provider": "s3", "storage_key": d.get("s3_path") or "",
             # mesma normalização da lista (ocr_status 'done' -> 'processed'): fonte única
