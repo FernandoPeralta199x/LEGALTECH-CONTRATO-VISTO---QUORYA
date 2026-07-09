@@ -95,11 +95,20 @@ def create_case_party(event, context):
     body, err = _parse_body(event)
     if err:
         return err
-    name = (body.get("name") or "").strip()
-    party_type = (body.get("party_type") or "").strip()
+    # Type-safe: campos com tipo errado (ex.: name:123, metadata:"x") -> 400, nunca 500
+    # (achado do pentest 2026-07-09; antes .strip()/.get() em não-str/não-dict estourava).
+    name = body.get("name")
+    party_type = body.get("party_type")
+    document = body.get("document")
+    if not isinstance(name, str) or not isinstance(party_type, str) \
+            or (document is not None and not isinstance(document, str)):
+        return error_response(400, "name, party_type e document devem ser texto")
+    name, party_type = name.strip(), party_type.strip()
     if not name or not party_type:
         return error_response(400, "name e party_type são obrigatórios")
-    raw_md = body.get("metadata") or {}
+    raw_md = body.get("metadata")
+    if not isinstance(raw_md, dict):
+        raw_md = {}
     metadata = {"created_by": user["user_id"]}
     for k in _META_ALLOWLIST:  # allowlist estrita (não aceita metadata arbitrário)
         v = body.get(k, raw_md.get(k))

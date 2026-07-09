@@ -261,8 +261,13 @@ def update_document(event, context):
 
 
 @require_user
+@require_writer
 def get_document_download_url(event, context):
-    """URL pré-assinada de download (shape DocumentDownloadUrl do frontend)."""
+    """URL pré-assinada de download (shape DocumentDownloadUrl do frontend).
+
+    Writer-only (admin/analyst): o documento bruto pode conter PII que é mascarada
+    nas telas de partes/clientes; não expor a versão crua a ``viewer`` via URL
+    pré-assinada (achado do pentest 2026-07-09)."""
     user = event["user"]
     doc_id = _valid_uuid((event.get("pathParameters") or {}).get("docId"))
     if not doc_id:

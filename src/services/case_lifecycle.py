@@ -25,6 +25,10 @@ class CasePaymentRequired(Exception):
     """Gate de pagamento (PAYMENT_GATE=hard): trabalho pago exige pagamento → 402."""
 
 
+class CaseNotTriaged(Exception):
+    """Relatório exige triagem executada (evidências) → 409."""
+
+
 class CasesLimitReached(Exception):
     """A organização atingiu o limite de casos (pricing_configs.cases_limit) → 402."""
 
@@ -66,6 +70,20 @@ def assert_case_paid(cur, case_id) -> None:
     status = (row["payment_status"] if row else None) or "pending"
     if status not in _PAID_STATUSES:
         raise CasePaymentRequired()
+
+
+def assert_case_triaged(cur, case_id) -> None:
+    """Exige que a triagem tenha SIDO EXECUTADA antes de gerar o parecer — um
+    relatório não pode ser produzido sem análise/evidências (achado do pentest
+    2026-07-09). Levanta ``CaseNotTriaged`` (409) se nenhum ``triage_module`` do
+    caso está ``done``. Chamar dentro da ``tenant_tx``, ANTES de gerar o relatório."""
+    cur.execute(
+        "SELECT count(*) AS n FROM public.triage_modules"
+        " WHERE case_id = %s AND status = 'done'",
+        (str(case_id),),
+    )
+    if cur.fetchone()["n"] == 0:
+        raise CaseNotTriaged()
 
 
 def cases_limit_status(cur, org):
