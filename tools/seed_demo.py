@@ -42,7 +42,7 @@ DEMO_ROLE = "admin"
 DEMO_EMAIL = "demo@contratovisto.com"
 DEMO_PASSWORD = "DemoLocal#2026"
 
-# Parcelamento demo: à vista (Pix/Boleto) + cartão em até 6x com juros leves.
+# Parcelamento demo: à vista (Pix/Boleto/Débito) + cartão de crédito em até 6x com juros leves.
 _DEMO_INSTALLMENT = {
     "enabled": True,
     "max_parcelas": 6,
@@ -55,6 +55,7 @@ _DEMO_INSTALLMENT = {
         "pix": {"enabled": True, "max_parcelas": 1},
         "boleto": {"enabled": True, "max_parcelas": 1},
         "cartao": {"enabled": True, "max_parcelas": 6},
+        "debito": {"enabled": True, "max_parcelas": 1},  # débito: à vista (1x)
     },
 }
 

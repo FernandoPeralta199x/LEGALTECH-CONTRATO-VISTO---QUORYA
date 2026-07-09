@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Literal, Protocol, runtime_checkable
 
-Method = Literal["pix", "boleto", "cartao"]
+Method = Literal["pix", "boleto", "cartao", "debito"]
 Mode = Literal["mock", "sandbox", "live"]
 Status = Literal["simulated", "pending", "paid", "failed", "canceled", "expired", "refunded"]
 
@@ -37,6 +37,8 @@ _PUBLIC_FORM_KEYS = {
     "pix": ("type", "qr_code", "copia_cola"),
     "boleto": ("type", "url", "linha_digitavel"),
     "cartao": ("type", "brand", "last4", "authorization_code", "simulated"),
+    # Débito é um cartão: mesma allowlist PCI de "cartao" (nunca número/CVV crus).
+    "debito": ("type", "brand", "last4", "authorization_code", "simulated"),
 }
 
 
@@ -69,15 +71,17 @@ def _mock_form(method: Method) -> dict:
         return {"type": "pix", "qr_code": "MOCK-PIX-QR", "copia_cola": "000201MOCK"}
     if method == "boleto":
         return {"type": "boleto", "url": "https://mock/boleto", "linha_digitavel": "00000.00000"}
-    return {"type": "cartao", "authorization_code": "MOCK-AUTH-123"}
+    # cartão de crédito ("cartao") e débito ("debito"): ambos são cartão.
+    return {"type": method, "authorization_code": "MOCK-AUTH-123"}
 
 
 class MockPaymentProvider:
     def create_charge(self, req: PaymentRequest) -> PaymentResult:
         form = _mock_form(req.method)
-        if req.method == "cartao":
-            # last4/brand vêm dos HINTS (do provider mock), nunca de dado cru do cliente.
-            form = {"type": "cartao", "brand": req.card_brand_hint or "desconhecida",
+        if req.method in ("cartao", "debito"):
+            # Débito é um cartão: mesma tokenização/hints. last4/brand vêm dos HINTS
+            # (do provider mock), nunca de dado cru do cliente.
+            form = {"type": req.method, "brand": req.card_brand_hint or "desconhecida",
                     "last4": req.card_last4_hint or "0000",
                     "authorization_code": "MOCK-AUTH-123", "simulated": True}
         return PaymentResult(

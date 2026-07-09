@@ -86,6 +86,31 @@ def test_somente_cartao_parcela_pix_boleto_1x():
     assert set(umx["allowed_methods"]) == {"pix", "boleto", "cartao"}
 
 
+def test_debito_e_metodo_valido_a_vista_1x():
+    import pytest
+    # débito é reconhecido em allowed_methods; à vista => max_parcelas > 1 é rejeitado.
+    with pytest.raises(Exception):
+        _cfg(allowed_methods={"debito": {"enabled": True, "max_parcelas": 2}})
+    cfg = _cfg(allowed_methods={"pix": {"enabled": True, "max_parcelas": 1},
+                                "boleto": {"enabled": True, "max_parcelas": 1},
+                                "cartao": {"enabled": True, "max_parcelas": 6},
+                                "debito": {"enabled": True, "max_parcelas": 1}})
+    opts = compute_installment_options(23700, cfg, REF)
+    # em 1x, débito é ofertado junto de pix/boleto/cartão
+    umx = next(o for o in opts if o["parcelas"] == 1)
+    assert "debito" in umx["allowed_methods"]
+    # em 3x (parcelado) débito NÃO é ofertado (à vista); só o cartão de crédito
+    tres = next(o for o in opts if o["parcelas"] == 3)
+    assert tres["allowed_methods"] == ["cartao"]
+
+
+def test_debito_no_default_quando_sem_config_explicita():
+    # sem allowed_methods explícitos, os defaults incluem débito (à vista, 1x).
+    opts = compute_installment_options(10000, _cfg(allowed_methods={}), REF)
+    umx = next(o for o in opts if o["parcelas"] == 1)
+    assert "debito" in umx["allowed_methods"]
+
+
 def test_sem_dia_fixo_respeita_primeiro_vencimento_em_dia_31():
     # dia_vencimento=None (padrão) e base caindo no dia 31: o 1º vencimento NÃO pode
     # ser puxado para o dia 28 (encurtaria o prazo prometido por primeiro_vencimento_dias).

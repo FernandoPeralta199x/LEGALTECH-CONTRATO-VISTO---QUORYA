@@ -10,8 +10,30 @@ from src.handlers import payments as pay_h
 from src.handlers import pricing as pr_h
 from src.handlers import requests as req_h
 from src.handlers import triage as tri_h
+from src.schemas.pricing_schemas import PaymentSelectionSchema
 
 SYSTEM_ORG = "00000000-0000-0000-0000-000000000001"
+
+
+# ── Schema puro (sem DB): validadores de débito ──────────────────────────────
+
+def test_schema_debito_aceita_1x_com_token():
+    s = PaymentSelectionSchema(parcelas=1, method="debito", idempotency_key="k",
+                               card_token="tok_x")
+    assert s.method == "debito" and s.parcelas == 1
+
+
+def test_schema_debito_parcelas_diferente_de_1_falha():
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        PaymentSelectionSchema(parcelas=2, method="debito", idempotency_key="k",
+                               card_token="tok_x")
+
+
+def test_schema_debito_sem_token_falha():
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        PaymentSelectionSchema(parcelas=1, method="debito", idempotency_key="k")
 
 
 def _admin_conn():
@@ -163,6 +185,50 @@ def test_cartao_grava_last4_sem_dado_sensivel(seed_case_and_config):
     assert pay["payment_form"]["last4"] == "4242"
     assert "card_token" not in blob and "tok_mock_1" not in blob and "cvv" not in blob
     assert "holder" not in blob and "Fulano" not in blob
+
+
+# ── Débito: cartão à vista (parcelas==1, mesma tokenização que crédito) ───────
+
+def _enable_debito(admin):
+    """Habilita débito (à vista) além de crédito na config da org."""
+    pr_h.update_pricing_config(_event(admin, body={"installment_config": {
+        "enabled": True, "max_parcelas": 6, "sem_juros_ate": 3, "juros_mensal_bps": 299,
+        "valor_minimo_parcela_cents": 0, "primeiro_vencimento_dias": 30, "dia_vencimento": 10,
+        "allowed_methods": {"cartao": {"enabled": True, "max_parcelas": 6},
+                            "debito": {"enabled": True, "max_parcelas": 1}}}}), None)
+
+
+def test_debito_a_vista_grava_plano(seed_case_and_config):
+    case_id, admin = seed_case_and_config
+    _enable_debito(admin)  # config precisa ofertar débito no 1x
+    resp = pay_h.create_case_payment(_event(admin, body={
+        "parcelas": 1, "method": "debito", "idempotency_key": "d1",
+        "card_token": "tok_mock_deb", "card_last4": "5151", "card_brand": "elo"},
+        path={"caseId": case_id}), None)
+    data = _data(resp)
+    assert data["payment_status"] == "simulated"
+    plan = data["installment_plan"]
+    assert plan["parcelas"] == 1 and plan["method"] == "debito"
+    assert plan["payment"]["payment_form"]["last4"] == "5151"
+    # invariante PCI: nada de token/CVV/holder crus persistidos
+    blob = json.dumps(plan)
+    assert "tok_mock_deb" not in blob and "card_token" not in blob and "cvv" not in blob
+
+
+def test_debito_exige_parcela_1_senao_400(seed_case_and_config):
+    case_id, admin = seed_case_and_config
+    resp = pay_h.create_case_payment(_event(admin, body={
+        "parcelas": 3, "method": "debito", "idempotency_key": "d2",
+        "card_token": "tok_mock_deb"}, path={"caseId": case_id}), None)
+    assert resp["statusCode"] == 400, resp
+
+
+def test_debito_sem_token_400(seed_case_and_config):
+    case_id, admin = seed_case_and_config
+    resp = pay_h.create_case_payment(_event(admin, body={
+        "parcelas": 1, "method": "debito", "idempotency_key": "d3"},
+        path={"caseId": case_id}), None)
+    assert resp["statusCode"] == 400, resp
 
 
 # ── Gate de pagamento na triagem (PAYMENT_GATE=hard) ──────────────────────────
