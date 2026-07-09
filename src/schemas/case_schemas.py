@@ -12,9 +12,12 @@ CASE_TYPE_PATTERN = (
     "|compra_venda|prestacao_servicos|locacao|confidencialidade|parceria|outro)$"
 )
 # Status de caso realmente usados: open (default), awaiting_triage (wizard),
-# report_ready (após geração do relatório), in_progress/completed/closed (ciclo).
+# triage_completed (após a triagem — triage_runner), report_ready (após geração do
+# relatório), in_progress/completed/closed (ciclo). Deve incluir TODO estado que o
+# backend grava em cases.status; senão um PATCH que reenvia o status corrente (mesmo
+# inalterado) é rejeitado com 400 ao editar um caso já triado (bug fe-be-dto-01).
 CASE_STATUS_PATTERN = (
-    "^(open|in_progress|awaiting_triage|report_ready|completed|closed)$"
+    "^(open|in_progress|awaiting_triage|triage_completed|report_ready|completed|closed)$"
 )
 PRIORITY_PATTERN = "^(low|normal|high|urgent)$"
 RISK_LEVEL_PATTERN = "^(low|medium|high|critical)$"

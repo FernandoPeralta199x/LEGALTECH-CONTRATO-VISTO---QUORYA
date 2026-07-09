@@ -16,6 +16,7 @@ from src.schemas.client_schemas import ClientCreateSchema, ClientUpdateSchema
 from src.services.database import tenant_tx
 from src.utils.context import require_user, require_writer
 from src.utils.helpers import error_response, success_response
+from src.utils.pii import mask_document
 from src.utils.lambda_io import fmt_validation_error as _fmt, parse_json_body as _parse_body, parse_pagination as _paginate, valid_uuid as _valid_uuid
 from src.utils.safety import enforce_production_safety
 
@@ -195,16 +196,20 @@ def delete_client(event, context):
 _SELECT_COLS = (
     "SELECT id, legal_name, document_type, document_number, email, phone,"
     " address_street, address_city, address_state, address_zip, rg, status,"
-    " created_at, updated_at"
+    " created_at, updated_at,"
+    # nº de casos que referenciam o cliente (mesma org via RLS) — antes o front
+    # fixava 0 e a UI ficava morta (fe-be-dto-05); análogo ao parties_count em cases.py
+    " (SELECT count(*) FROM public.cases c"
+    "  WHERE c.client_id = public.clients.id AND c.deleted_at IS NULL) AS cases_count"
     " FROM public.clients"
 )
 
 
-def _mask_document(num: str) -> str:
-    """Mascara o documento mantendo só os 4 últimos dígitos (PII p/ viewer)."""
-    if not num or len(num) <= 4:
-        return num
-    return "*" * (len(num) - 4) + num[-4:]
+def _mask_document(num):
+    """Mascara CPF/CNPJ pela util compartilhada (``pii.mask_document`` — 2 últimos
+    dígitos, mesma regra de partes/relatórios). Antes havia uma reimplementação
+    local com 4 dígitos, divergente e menos privada (be-dry-05)."""
+    return mask_document(num)
 
 
 def _serialize(row, role="admin") -> dict:
@@ -237,6 +242,7 @@ def _serialize(row, role="admin") -> dict:
         "address": address,
         "rg": rg,
         "metadata": {},
+        "cases_count": row.get("cases_count") or 0,  # fe-be-dto-05
         "status": row["status"],
         "created_at": str(row["created_at"]) if row.get("created_at") else None,
         "updated_at": str(row["updated_at"]) if row.get("updated_at") else None,

@@ -31,7 +31,7 @@ class MockCNJAdapter:
     """Implementação local com dados fictícios."""
 
     def search_by_number(self, process_number: str) -> AdapterResult:
-        logger.info("MockCNJ.search_by_number number=%s", process_number)
+        logger.info("MockCNJ.search_by_number number_len=%d", len(process_number))  # sem PII no log (be-sec-05)
         return AdapterResult(
             success=True,
             source="mock",
@@ -51,7 +51,7 @@ class MockCNJAdapter:
         )
 
     def search_by_party(self, name: str, document: str | None = None) -> AdapterResult:
-        logger.info("MockCNJ.search_by_party name=%s", name[:10])
+        logger.info("MockCNJ.search_by_party name_len=%d", len(name))  # sem PII no log (be-sec-05)
         return AdapterResult(
             success=True,
             source="mock",

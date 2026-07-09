@@ -132,6 +132,32 @@ def test_upload_and_get(client_id):
     assert du["url"].startswith("https://") and du["method"] == "GET"
 
 
+def test_get_document_viewer_sem_download_url(client_id):
+    """be-upload-01: viewer vê a metadata do documento, mas NÃO a URL crua de download
+    (só writer/admin/analyst). Fecha o segundo caminho que driblava o guard
+    writer-only do endpoint /download-url (achado do pentest 2026-07-09)."""
+    a = str(uuid.uuid4())
+    case_id = _make_case(a, client_id)
+    doc_id = _data(_upload(a, case_id, file_size_bytes=1024))["document_id"]
+    v = str(uuid.uuid4())  # viewer da MESMA org (SYSTEM_ORG) — enxerga via RLS
+    got = _data(d.get_document(_event(v, role="viewer", path={"docId": doc_id}), None))
+    assert got["filename"] == "contrato.pdf" and got["status"] == "pending_upload"
+    assert got["download_url"] is None and got.get("expires_in") is None
+    # o endpoint dedicado permanece writer-only (403 p/ viewer)
+    assert d.get_document_download_url(
+        _event(v, role="viewer", path={"docId": doc_id}), None)["statusCode"] == 403
+
+
+def test_upload_file_name_reduz_a_basename(client_id):
+    """be-upload-03: file_name é saneado para um basename (sem componentes de caminho)
+    antes de persistir — defesa em profundidade p/ Content-Disposition/exibição."""
+    a = str(uuid.uuid4())
+    case_id = _make_case(a, client_id)
+    doc_id = _data(_upload(a, case_id, file_name="../../etc/relatorio final.pdf"))["document_id"]
+    got = _data(d.get_document(_event(a, path={"docId": doc_id}), None))
+    assert got["filename"] == "relatorio final.pdf"
+
+
 def test_upload_requires_visible_case(client_id):
     a, b = str(uuid.uuid4()), str(uuid.uuid4())
     case_id = _make_case(a, client_id)

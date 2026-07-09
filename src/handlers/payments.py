@@ -166,5 +166,9 @@ def _read_config(cur, org):
     ver = r["version"] if r else 0
     try:
         return InstallmentConfig(**raw), ver
-    except Exception:
+    except Exception as e:
+        # Config de parcelamento inválida no banco: cai no default seguro, mas NÃO
+        # silenciar — logar para diagnóstico de preço mal configurado (be-sec-06).
+        logger.warning(json.dumps({"event": "INSTALLMENT_CONFIG_INVALID",
+                                   "error": type(e).__name__, "version": ver}))
         return InstallmentConfig(), ver

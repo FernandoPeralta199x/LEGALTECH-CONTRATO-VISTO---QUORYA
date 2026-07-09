@@ -3,7 +3,8 @@
 - Rotas PÚBLICAS: `create_user` (signup), `login`, `forgot_password`,
   `reset_password`. As demais são protegidas pelo JWT Authorizer (`@require_user`).
 - `public.users` NÃO tem RLS → usa `simple_tx` (transação global, sem contexto).
-- Segurança: signup cria sempre `viewer` (menor privilégio; promoção via admin);
+- Segurança: signup cria o 1º usuário da org como `admin` (dono do tenant; papéis
+  alterados depois por admin via `update_user`);
   nunca loga PII (email/token) nem `str(e)`; senha com bcrypt; token via
   `create_access_token` (sem segredo padrão).
 """

@@ -4,7 +4,7 @@ e (opcionalmente) `file_size_bytes`/`file_hash`; o arquivo vai direto ao S3.
 """
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # allowlist alinhada ao frontend (inclui 'md'); 'tiff'/'doc' mantidos (mais permissivo)
 FILE_TYPE_PATTERN = "^(pdf|jpg|jpeg|png|tiff|doc|docx|txt|md)$"
@@ -22,3 +22,14 @@ class DocumentUploadSchema(BaseModel):
     file_size_bytes: Optional[int] = Field(default=None, ge=0, le=MAX_UPLOAD_BYTES)
     file_hash: Optional[str] = Field(default=None, max_length=64)
     document_classification: Optional[str] = Field(default=None, max_length=50)
+
+    @field_validator("file_name")
+    @classmethod
+    def _safe_basename(cls, v: str) -> str:
+        # Nome de EXIBIÇÃO reduzido a um basename seguro (sem componentes de caminho).
+        # Defesa em profundidade: o objeto real fica em s3_path gerado pelo servidor,
+        # mas o nome cru era persistido e reaparece em Content-Disposition (be-upload-03).
+        base = v.replace("\\", "/").rsplit("/", 1)[-1].strip()
+        if not base or base in (".", ".."):
+            raise ValueError("file_name inválido")
+        return base

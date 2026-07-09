@@ -5,7 +5,8 @@ import os
 logger = logging.getLogger()
 
 # Valores padrão/inseguros que NÃO podem ir para staging/produção.
-_INSECURE_SECRETS = {"", "sua-chave-secreta", "sua-chave-secreta-aqui"}
+_INSECURE_SECRETS = {"", "sua-chave-secreta", "sua-chave-secreta-aqui",
+                     "troque-este-segredo-local"}  # placeholder do .env.example
 
 # Apenas estes ambientes são tratados como NÃO-produtivos. Qualquer outro stage
 # (prod, prd, staging, homolog, qa, sandbox, ...) é tratado como produtivo

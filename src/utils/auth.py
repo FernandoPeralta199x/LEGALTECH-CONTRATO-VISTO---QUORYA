@@ -8,7 +8,11 @@ from datetime import datetime, timedelta, timezone
 
 import jwt
 
-_TOKEN_TTL_HOURS = int(os.getenv("JWT_TTL_HOURS", "8"))
+# Default 2h (era 8h): mitigação da defasagem de revogação — como os handlers
+# ainda confiam nos claims do token (papel/status), o TTL menor encurta a janela em
+# que um usuário rebaixado/desativado mantém privilégio. Fix definitivo = re-checar
+# papel/status no banco nas rotas de escrita/admin (follow-up be-auth-01/be-sec-02).
+_TOKEN_TTL_HOURS = int(os.getenv("JWT_TTL_HOURS", "2"))
 TOKEN_TTL_SECONDS = _TOKEN_TTL_HOURS * 3600  # exposto no login (expires_in)
 
 

@@ -20,7 +20,7 @@ from src.services.document_ingestion import DocumentNotFound, OcrFailed, ingest_
 from src.services.document_worker import process_job
 from src.services.queue import create_queue_client
 from src.services.storage import storage_service
-from src.utils.context import require_user, require_writer
+from src.utils.context import WRITE_ROLES, require_user, require_writer
 from src.utils.doc_status import DOC_STATUS_MAP as _DOC_STATUS_MAP, DOC_STATUS_REV as _DOC_STATUS_REV
 from src.utils.helpers import error_response, success_response
 from src.utils.mime import mime_for
@@ -212,11 +212,17 @@ def get_document(event, context):
     if not row:
         return error_response(404, "Documento não encontrado")
 
-    download_url = storage_service.presign_get(row["s3_path"]) if row["s3_path"] else None
+    # Só writer (admin/analyst) recebe a URL do documento BRUTO: ele pode conter PII
+    # e o endpoint dedicado /download-url já é writer-only (achado do pentest
+    # 2026-07-09). Viewer vê a metadata, mas NÃO a URL crua pré-assinada — este
+    # get_document era um segundo caminho que driblava aquele guard (be-upload-01).
+    is_writer = user["role"] in WRITE_ROLES
+    download_url = (storage_service.presign_get(row["s3_path"])
+                    if row["s3_path"] and is_writer else None)
     # shape V2 esperado pelo frontend (mapBackendDocument) + url de download
     data = _serialize_v2(row)
     data["download_url"] = download_url
-    data["expires_in"] = storage_service.expires
+    data["expires_in"] = storage_service.expires if download_url else None
     return success_response(200, "Documento encontrado", data)
 
 
