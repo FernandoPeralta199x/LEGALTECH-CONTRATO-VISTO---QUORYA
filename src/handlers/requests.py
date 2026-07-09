@@ -19,6 +19,7 @@ from src.schemas.request_schemas import RequestCreateSchema
 from src.services.case_lifecycle import CasesLimitReached, assert_cases_within_limit
 from src.services.database import tenant_tx
 from src.services.pricing.config import PRODUCTS
+from src.services.pricing.org_config import read_module_overrides
 from src.services.pricing.estimate import estimate, normalize_selected_modules
 from src.services.storage import storage_service
 from src.services.triage_plan import plan_for_selection
@@ -95,13 +96,8 @@ def create_request(event, context):
         with tenant_tx(uid, user["role"], org) as cur:
             # quota de casos da organização (pricing_configs.cases_limit); NULL => ilimitado
             assert_cases_within_limit(cur, org)
-            # overrides de preço da organização (pricing_configs)
-            cur.execute(
-                "SELECT module_overrides FROM public.pricing_configs WHERE organization_id = %s",
-                (org,),
-            )
-            row = cur.fetchone()
-            overrides = row["module_overrides"] if row else None
+            # overrides de preço da organização (pricing_configs) — repo único (be-dry-03)
+            overrides = read_module_overrides(cur, org)
             est = estimate(data.product_type, selected, overrides)
 
             # cliente vinculado (opcional): valida UUID + existência/visibilidade (RLS)

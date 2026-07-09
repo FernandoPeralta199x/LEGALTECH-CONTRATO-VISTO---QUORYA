@@ -12,7 +12,8 @@ from pydantic import ValidationError
 from src.adapters.payment import PaymentRequest, create_payment_provider
 from src.schemas.pricing_schemas import PaymentSelectionSchema
 from src.services.database import tenant_tx
-from src.services.pricing.installments import InstallmentConfig, compute_installment_options
+from src.services.pricing.installments import compute_installment_options
+from src.services.pricing.org_config import read_installment_config
 from src.utils.context import require_user, require_writer
 from src.utils.helpers import error_response, success_response
 from src.utils.lambda_io import (fmt_validation_error as _fmt, parse_json_body as _parse_body,
@@ -159,16 +160,5 @@ def create_case_payment(event, context):
 
 
 def _read_config(cur, org):
-    cur.execute("SELECT installment_config, version FROM public.pricing_configs"
-                " WHERE organization_id = %s", (org,))
-    r = cur.fetchone()
-    raw = (r["installment_config"] if r else None) or {}
-    ver = r["version"] if r else 0
-    try:
-        return InstallmentConfig(**raw), ver
-    except Exception as e:
-        # Config de parcelamento inválida no banco: cai no default seguro, mas NÃO
-        # silenciar — logar para diagnóstico de preço mal configurado (be-sec-06).
-        logger.warning(json.dumps({"event": "INSTALLMENT_CONFIG_INVALID",
-                                   "error": type(e).__name__, "version": ver}))
-        return InstallmentConfig(), ver
+    # delega ao repositório único (fail-safe + log INSTALLMENT_CONFIG_INVALID) — be-dry-02
+    return read_installment_config(cur, org)

@@ -29,6 +29,8 @@ from src.services.pricing.estimate import (
     normalize_selected_modules,
 )
 from src.services.pricing.installments import InstallmentConfig, compute_installment_options
+from src.services.pricing.org_config import read_installment_config, read_module_overrides
+from src.services.case_lifecycle import cases_limit_status
 from src.utils.context import require_role, require_user
 from src.utils.helpers import error_response, success_response
 from src.utils.lambda_io import fmt_validation_error as _fmt, parse_json_body as _parse_body
@@ -41,25 +43,13 @@ _BRT = timezone(timedelta(hours=-3))
 
 
 def _org_module_overrides(cur, org):
-    """Lê ``pricing_configs.module_overrides`` da org (dict ou None)."""
-    cur.execute("SELECT module_overrides FROM public.pricing_configs WHERE organization_id = %s",
-                (org,))
-    row = cur.fetchone()
-    return row["module_overrides"] if row else None
+    """module_overrides da org (delega ao repo único) — be-dry-03."""
+    return read_module_overrides(cur, org)
 
 
 def _org_installment(cur, org) -> tuple[InstallmentConfig, int]:
-    """Lê ``installment_config`` + ``version`` da org (fail-safe: config default = só 1x)."""
-    cur.execute("SELECT installment_config, version FROM public.pricing_configs"
-                " WHERE organization_id = %s", (org,))
-    row = cur.fetchone()
-    raw = (row["installment_config"] if row else None) or {}
-    version = (row["version"] if row else 0)
-    try:
-        cfg = InstallmentConfig(**raw)
-    except Exception:
-        cfg = InstallmentConfig()  # fail-safe: só 1x
-    return cfg, version
+    """installment_config + version da org (delega ao repo único) — be-dry-02."""
+    return read_installment_config(cur, org)
 
 
 @require_user
@@ -259,12 +249,7 @@ def check_cases_limit(event, context):
     org = user["organization_id"]
     try:
         with tenant_tx(user["user_id"], user["role"], org) as cur:
-            cur.execute("SELECT cases_limit FROM public.pricing_configs WHERE organization_id = %s",
-                        (org,))
-            row = cur.fetchone()
-            cases_limit = row["cases_limit"] if row else None
-            cur.execute("SELECT count(*) AS n FROM public.cases WHERE deleted_at IS NULL")
-            active = cur.fetchone()["n"]
+            cases_limit, active = cases_limit_status(cur, org)  # be-dry-04: reusa o canônico
     except Exception as e:
         logger.error(json.dumps({"event": "PRICING_LIMIT_CHECK_ERROR", "error": type(e).__name__}))
         return error_response(500, "Erro ao verificar limite de casos")
