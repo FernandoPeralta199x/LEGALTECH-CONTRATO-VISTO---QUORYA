@@ -120,7 +120,9 @@ def _claims_from_bearer(headers) -> dict | None:
     if not auth.startswith("Bearer "):
         return None
     try:
-        return jwt.decode(auth[7:], os.environ["JWT_SECRET_KEY"], algorithms=["HS256"])
+        # espelha o jwt_authorizer de produção: exige exp (rejeita token sem expiração)
+        return jwt.decode(auth[7:], os.environ["JWT_SECRET_KEY"], algorithms=["HS256"],
+                          options={"require": ["exp"]})
     except Exception:
         return None
 
