@@ -296,3 +296,13 @@ def test_aggregate_normaliza_status_done_para_processed(client_id):
     agg = _data(cases_h.get_case_aggregate(_event(a, path={"caseId": case_id}), None))
     doc = next(x for x in agg["documents"] if x["id"] == doc_id)
     assert doc["status"] == "processed"
+
+
+def test_download_url_viewer_403():
+    # Regressão pentest #5: download-url é writer-only; viewer -> 403 (não expõe doc bruto/PII).
+    a = str(uuid.uuid4())
+    resp = d.get_document_download_url(_event(a, role="viewer", path={"docId": str(uuid.uuid4())}), None)
+    assert resp["statusCode"] == 403
+    # writer (analyst) passa do gate de papel (doc inexistente -> 404, não 403)
+    resp2 = d.get_document_download_url(_event(a, role="analyst", path={"docId": str(uuid.uuid4())}), None)
+    assert resp2["statusCode"] != 403

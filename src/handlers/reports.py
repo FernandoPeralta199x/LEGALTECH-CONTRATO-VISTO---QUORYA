@@ -8,9 +8,11 @@ import logging
 
 from src.services.case_lifecycle import (
     CaseFinalized,
+    CaseNotTriaged,
     CaseNotVisible,
     CasePaymentRequired,
     assert_case_paid,
+    assert_case_triaged,
     assert_case_writable,
 )
 from src.services.database import tenant_tx
@@ -72,6 +74,8 @@ def generate_case_report(event, context):
             assert_case_writable(cur, case_id)
             # Gate de pagamento (PAYMENT_GATE=hard): relatório é trabalho pago.
             assert_case_paid(cur, case_id)
+            # #3: parecer exige triagem executada (evidências) — não gerar "no vácuo".
+            assert_case_triaged(cur, case_id)
             report = _generate(cur, org, case_id, user["user_id"])
     except CaseNotVisible:
         return error_response(404, "Caso não encontrado")
@@ -79,6 +83,8 @@ def generate_case_report(event, context):
         return error_response(409, "caso finalizado não aceita regeneração de relatório")
     except CasePaymentRequired:
         return error_response(402, "Pagamento pendente: conclua o pagamento antes de gerar o relatório")
+    except CaseNotTriaged:
+        return error_response(409, "Execute a triagem antes de gerar o relatório (o parecer exige evidências)")
     except Exception as e:
         logger.error(json.dumps({"event": "REPORT_GENERATE_ERROR", "error": type(e).__name__,
                                  "pgcode": getattr(e, "pgcode", None)}))

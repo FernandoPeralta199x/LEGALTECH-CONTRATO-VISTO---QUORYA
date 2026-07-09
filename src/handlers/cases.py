@@ -511,6 +511,14 @@ def update_case(event, context):
 
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
+            # #6: assigned_to deve ser um usuário ATIVO da MESMA organização — não um
+            # UUID qualquer/de outra org (achado do pentest 2026-07-09).
+            if data.assigned_to is not None:
+                cur.execute("SELECT 1 FROM public.users WHERE id = %s"
+                            " AND organization_id = %s AND status = 'active'",
+                            (assigned, user["organization_id"]))
+                if cur.fetchone() is None:
+                    return error_response(400, "assigned_to deve ser um usuário ativo da organização")
             cur.execute(
                 f"UPDATE public.cases SET {', '.join(fields)} WHERE id = %s",
                 tuple(values),

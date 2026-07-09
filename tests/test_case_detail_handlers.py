@@ -348,3 +348,31 @@ def test_review_valida_recommendation_e_sincroniza_cases(case_id):
         cur.execute("SELECT recommendation FROM public.cases WHERE id=%s", (case_id,))
         assert cur.fetchone()[0] == "do_not_proceed"
     conn.close()
+
+
+def test_report_generate_exige_triagem_409(monkeypatch):
+    # Regressão pentest #3: gerar parecer sem triagem executada -> 409.
+    monkeypatch.setenv("PAYMENT_GATE", "soft")
+    _reset()
+    a = str(uuid.uuid4())
+    case_id = _data(req_h.create_request(_event(a, body=_wizard_payload()), None))["case_id"]
+    resp = rep_h.generate_case_report(_event(a, path={"caseId": case_id}), None)
+    assert resp["statusCode"] == 409
+
+
+def test_update_case_assigned_to_invalido_400():
+    # Regressão pentest #6: assigned_to deve ser usuário ativo da mesma org -> UUID qualquer = 400.
+    _reset()
+    a = str(uuid.uuid4())
+    case_id = _data(req_h.create_request(_event(a, body=_wizard_payload()), None))["case_id"]
+    resp = cases_h.update_case(_event(a, path={"caseId": case_id}, body={"assigned_to": str(uuid.uuid4())}), None)
+    assert resp["statusCode"] == 400
+
+
+def test_create_party_tipo_errado_400_nao_500():
+    # Regressão pentest #8: campos com tipo errado -> 400 (nunca 500).
+    _reset()
+    a = str(uuid.uuid4())
+    case_id = _data(req_h.create_request(_event(a, body=_wizard_payload()), None))["case_id"]
+    resp = cp_h.create_case_party(_event(a, path={"caseId": case_id}, body={"name": 123, "party_type": "reu"}), None)
+    assert resp["statusCode"] == 400

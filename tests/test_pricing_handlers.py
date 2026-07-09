@@ -245,3 +245,12 @@ def test_update_config_grava_auditoria():
     assert row is not None
     assert row[0] in ("INSERT", "UPDATE") and row[1] == "pricing_configs"
     assert row[2] and row[2].get("cases_limit") == 4242  # change_after audita o novo valor
+
+
+def test_put_config_override_acima_do_teto_400():
+    # Regressão pentest #7: override de preço absurdo (> MAX_PRICE_CENTS) -> 400.
+    _reset()
+    a = str(uuid.uuid4())
+    cfg = {"module_overrides": {"escavador": {"price_cents": 10 ** 15}}}
+    resp = pr_h.update_pricing_config(_event(a, body=cfg), None)
+    assert resp["statusCode"] == 400

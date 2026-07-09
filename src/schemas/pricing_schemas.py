@@ -22,12 +22,17 @@ class PricingEstimateRequest(BaseModel):
     modules: list[str] = Field(default_factory=list)
 
 
+# Teto de preço (R$ 1.000.000,00) — evita overflow/valores absurdos em overrides
+# que quebrariam cobrança/UI/cálculos (achado do pentest 2026-07-09).
+MAX_PRICE_CENTS = 100_000_000
+
+
 class ProductOverrideInput(BaseModel):
     """Override parcial de um produto (admin)."""
 
     model_config = ConfigDict(extra="forbid")
 
-    base_price_cents: int = Field(ge=0)
+    base_price_cents: int = Field(ge=0, le=MAX_PRICE_CENTS)
 
 
 class ModuleOverrideInput(BaseModel):
@@ -35,7 +40,7 @@ class ModuleOverrideInput(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    price_cents: int = Field(ge=0)
+    price_cents: int = Field(ge=0, le=MAX_PRICE_CENTS)
 
 
 class UpdatePricingConfigRequest(BaseModel):
