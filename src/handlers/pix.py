@@ -187,23 +187,16 @@ def get_pix_status(event, context):
 
 # ─────────────────────────── pixWebhook (confirmação) ───────────────────────────
 
-def _project_paid(org, request_id, amount_cents, currency) -> None:
-    """Projeta o PAID em requests.payment_status (que tem RLS => precisa de contexto de org).
-    A org vem da cobrança já verificada por assinatura. Grava um snapshot mínimo do plano
-    (Pix 1x) para o agregado do caso exibir "Pagamento já registrado"."""
-    snapshot = {
+def _paid_snapshot(amount_cents, currency) -> dict:
+    """Snapshot mínimo do plano (Pix 1x) gravado em requests.installment_plan na confirmação,
+    para o agregado do caso exibir "Pagamento já registrado"."""
+    return {
         "version": 1, "method": "pix", "parcelas": 1,
         "valor_total_cents": amount_cents, "currency": currency,
         "paid_at": datetime.now(timezone.utc).isoformat(),
         "payment": {"provider": _provider_name(), "mode": os.getenv("PAYMENT_MODE", "mock"),
-                    "status": "paid", "method": "pix",
-                    "payment_form": {"type": "pix"}},
+                    "status": "paid", "method": "pix", "payment_form": {"type": "pix"}},
     }
-    with tenant_tx(str(org), "admin", str(org)) as cur:
-        cur.execute(
-            "UPDATE public.requests SET payment_status = 'paid', installment_plan = %s,"
-            " updated_at = now() WHERE id = %s AND payment_status IN ('pending', 'processing')",
-            (Json(snapshot), request_id))
 
 
 def _enqueue_pix_paid(request_id, payment_id) -> None:
@@ -230,16 +223,9 @@ def pix_webhook(event, context):
         return error_response(400, "Payload inválido")
 
     try:
-        # ── Dedup (append-only): mesmo event_id 2x => 200 ACK sem reprocessar. ──
-        with simple_tx() as cur:
-            cur.execute(
-                "INSERT INTO public.pix_webhook_events (event_id, provider, payment_id, status)"
-                " VALUES (%s,%s,%s,%s) ON CONFLICT (event_id) DO NOTHING",
-                (ev.event_id, provider_name, ev.payment_id, ev.status))
-            if cur.rowcount == 0:
-                return success_response(200, "Evento já processado", {"deduped": True})
-
-        # ── Carrega a cobrança por payment_id (tabela de sistema, sem RLS). ──
+        # ── Leitura da cobrança (por payment_id; pix_charges sem RLS) p/ obter org + valor.
+        #    Antes do dedup: um webhook que chega antes do INSERT da charge commitar => "desconhecida"
+        #    e NÃO consome slot de dedup, então o retro do provider reprocessa. ──
         with simple_tx() as cur:
             cur.execute(
                 "SELECT request_id, organization_id, status, amount_cents, currency"
@@ -261,19 +247,44 @@ def pix_webhook(event, context):
             return success_response(200, "Transição não aplicável", {"ignored": True})
 
         paid = target == states.PAID
-        # ── Transição guardada (idempotente pelo WHERE do status atual). ──
-        with simple_tx() as cur:
-            cur.execute(
-                "UPDATE public.pix_charges SET status = %s,"
-                " paid_at = CASE WHEN %s THEN now() ELSE paid_at END, updated_at = now()"
-                " WHERE provider = %s AND payment_id = %s AND status = %s",
-                (target, paid, provider_name, ev.payment_id, charge["status"]))
-            applied = cur.rowcount
+        org = charge["organization_id"]
+        request_id = charge["request_id"]
 
+        # ── ATÔMICO (corrige A1/A2): dedup + transição da charge + projeção numa ÚNICA
+        #    transação, no contexto de org da cobrança (verificada por assinatura). Se qualquer
+        #    passo falhar, TUDO reverte (o dedup NÃO fica commitado) e o retry at-least-once do
+        #    provider reprocessa — sem perder o pagamento por falha pós-dedup. ──
+        deduped = False
+        applied = 0
+        with tenant_tx(str(org), "admin", str(org)) as cur:
+            cur.execute(
+                "INSERT INTO public.pix_webhook_events (event_id, provider, payment_id, status)"
+                " VALUES (%s,%s,%s,%s) ON CONFLICT (event_id) DO NOTHING",
+                (ev.event_id, provider_name, ev.payment_id, ev.status))
+            if cur.rowcount == 0:
+                deduped = True
+            else:
+                cur.execute(
+                    "UPDATE public.pix_charges SET status = %s,"
+                    " paid_at = CASE WHEN %s THEN now() ELSE paid_at END, updated_at = now()"
+                    " WHERE provider = %s AND payment_id = %s AND status = %s",
+                    (target, paid, provider_name, ev.payment_id, charge["status"]))
+                applied = cur.rowcount
+                if applied and paid:
+                    # WHERE 'pending' AND installment_plan IS NULL (corrige M1): não sobrescreve
+                    # a reserva 'processing' de um cartão em voo nem um plano já gravado.
+                    cur.execute(
+                        "UPDATE public.requests SET payment_status = 'paid',"
+                        " installment_plan = %s, updated_at = now()"
+                        " WHERE id = %s AND payment_status = 'pending'"
+                        "   AND installment_plan IS NULL",
+                        (Json(_paid_snapshot(charge["amount_cents"], charge["currency"])),
+                         request_id))
+
+        if deduped:
+            return success_response(200, "Evento já processado", {"deduped": True})
         if applied and paid:
-            _project_paid(charge["organization_id"], charge["request_id"],
-                          charge["amount_cents"], charge["currency"])
-            _enqueue_pix_paid(charge["request_id"], ev.payment_id)
+            _enqueue_pix_paid(request_id, ev.payment_id)  # pós-commit (best-effort)
     except Exception as e:
         logger.error(json.dumps({"event": "PIX_WEBHOOK_ERROR", "error": type(e).__name__}))
         return error_response(500, "Erro ao processar webhook")

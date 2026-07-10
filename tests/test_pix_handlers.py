@@ -192,9 +192,13 @@ def test_webhook_dedup(seed):
     amount = _pstatus(charge["paymentId"])
     payload, sig = _signed(charge["paymentId"], amount, event_id="dup-1")
     r1 = _webhook(payload, sig)
-    r2 = _webhook(payload, sig)
+    r2 = _webhook(payload, sig)  # mesmo event_id 2x
     assert r1["statusCode"] == 200 and r2["statusCode"] == 200
-    assert json.loads(r2["body"])["data"].get("deduped") is True
+    # o 2o webhook do mesmo evento NÃO reprocessa (dedup do event_id OU transição já-aplicada):
+    d2 = json.loads(r2["body"])["data"]
+    assert d2.get("deduped") or d2.get("ignored")
+    assert _status(case_id, admin)["status"] == "PAID"  # pago uma única vez
+    assert _request_payment_status() == "paid"
 
 
 def test_webhook_divergencia_de_valor_nao_paga(seed):
