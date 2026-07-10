@@ -4,6 +4,7 @@ Cobre o caminho crítico de segurança: criar SÓ cria (PENDING_PAYMENT, nunca p
 confirmação SÓ por webhook assinado, dedup, cross-check de valor, replay e RBAC."""
 from _dbadmin import admin_conn
 import json
+import logging
 import uuid
 
 import pytest
@@ -233,3 +234,78 @@ def test_simulate_sem_cobranca_404(seed):
     case_id, admin = seed
     resp = pix_h.simulate_pix_paid(_event(admin, path={"caseId": case_id}), None)
     assert resp["statusCode"] == 404  # não há cobrança ativa para simular
+
+
+# ─────────────── observabilidade & fail-closed (correções da revisão PR #6) ───────────────
+
+def _request_id_do_caso(case_id):
+    conn = _admin_conn(); conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute("SELECT request_id FROM public.cases WHERE id=%s", (case_id,))
+        rid = cur.fetchone()[0]
+    conn.close()
+    return rid
+
+
+def test_webhook_paid_sem_projecao_alerta(seed, caplog):
+    # A2: cobrança criada com a request 'pending'; um fluxo de cartão concorrente move a request
+    # para 'processing'. O webhook Pix PAID confirma a charge (dinheiro recebido) mas a projeção
+    # casa 0 linhas (M1 não clobbera o cartão em voo). Isso NÃO pode ser silencioso: alerta.
+    case_id, admin = seed
+    charge = _data(_create(case_id, admin))
+    amount = _pstatus(charge["paymentId"])
+    conn = _admin_conn(); conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute("UPDATE public.requests SET payment_status='processing'")
+    conn.close()
+    payload, sig = _signed(charge["paymentId"], amount)
+    with caplog.at_level(logging.ERROR):
+        resp = _webhook(payload, sig)
+    assert resp["statusCode"] == 200
+    assert _status(case_id, admin)["status"] == "PAID"        # charge confirmada (dinheiro recebido)
+    assert _request_payment_status() == "processing"          # request NÃO sobrescrita (M1)
+    assert any("PIX_PAID_NOT_PROJECTED" in r.getMessage() for r in caplog.records)
+
+
+def test_create_colisao_no_indice_traduz_uniqueviolation_em_409(seed):
+    # A4: cobre o `except UniqueViolation` (rede anti-dupla-cobrança). Injeta uma cobrança PENDING
+    # para o MESMO request sob OUTRA org (pix_charges sem RLS; o índice único parcial é por
+    # request_id, org-agnóstico). A checagem de cobrança-ativa da TX1 (escopada pela org do
+    # chamador) NÃO a vê, o handler segue até o INSERT, que colide no índice -> 409.
+    case_id, admin = seed
+    request_id = _request_id_do_caso(case_id)
+    conn = _admin_conn(); conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO public.pix_charges (request_id, organization_id, provider, payment_id,"
+            " status, amount_cents, currency)"
+            " VALUES (%s,%s,'mock',%s,'PENDING_PAYMENT',100,'BRL')",
+            (request_id, str(uuid.uuid4()), "mock_pix_outro_" + uuid.uuid4().hex[:8]))
+    conn.close()
+    resp = _create(case_id, admin, key="corrida")
+    assert resp["statusCode"] == 409  # UniqueViolation traduzida em 409
+
+
+def test_simulate_bloqueado_fora_do_mock(seed, monkeypatch):
+    # A8: a trava DEV-ONLY do simulate (PAYMENT_MODE != mock -> 404) impede autoconfirmar em prod.
+    case_id, admin = seed
+    _data(_create(case_id, admin))
+    monkeypatch.setenv("PAYMENT_MODE", "live")
+    resp = pix_h.simulate_pix_paid(_event(admin, path={"caseId": case_id}), None)
+    assert resp["statusCode"] == 404
+    assert _status(case_id, admin)["status"] == "PENDING_PAYMENT"  # nada foi confirmado
+
+
+def test_webhook_refunded_muda_charge_mas_nao_reverte_request(seed):
+    # Comportamento ATUAL (política de revogação de acesso = Fase 7): um REFUNDED assinado move a
+    # charge para REFUNDED, mas requests.payment_status permanece 'paid'. Documenta a decisão.
+    case_id, admin = seed
+    charge = _data(_create(case_id, admin))
+    amount = _pstatus(charge["paymentId"])
+    p1, s1 = _signed(charge["paymentId"], amount, status="PAID", event_id="pay-1")
+    assert _webhook(p1, s1)["statusCode"] == 200
+    assert _request_payment_status() == "paid"
+    p2, s2 = _signed(charge["paymentId"], amount, status="REFUNDED", event_id="ref-1")
+    assert _webhook(p2, s2)["statusCode"] == 200
+    assert _status(case_id, admin)["status"] == "REFUNDED"    # charge estornada
+    assert _request_payment_status() == "paid"                # request NÃO revertida (Fase 7)

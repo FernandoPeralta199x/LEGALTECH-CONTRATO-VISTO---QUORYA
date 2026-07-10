@@ -6,12 +6,22 @@ logger = logging.getLogger()
 
 # Valores padrão/inseguros que NÃO podem ir para staging/produção.
 _INSECURE_SECRETS = {"", "sua-chave-secreta", "sua-chave-secreta-aqui",
-                     "troque-este-segredo-local"}  # placeholder do .env.example
+                     "troque-este-segredo-local",
+                     "dev-pix-mock-secret"}  # placeholders do .env.example + segredo do mock Pix
+
+# Comprimento mínimo (chars) de um segredo HMAC de webhook em produção (~256 bits).
+_WEBHOOK_SECRET_MIN_LEN = 32
 
 # Apenas estes ambientes são tratados como NÃO-produtivos. Qualquer outro stage
 # (prod, prd, staging, homolog, qa, sandbox, ...) é tratado como produtivo
 # (fail-safe: um stage desconhecido NÃO deve escapar das travas).
 _NON_PROD_ENVS = {"", "local", "dev", "development", "test", "testing"}
+
+
+def is_productive_environment() -> bool:
+    """True se ``ENVIRONMENT`` é tratado como produtivo (fail-safe: um stage desconhecido
+    — prod/staging/qa/homolog/... — é considerado produtivo)."""
+    return os.getenv("ENVIRONMENT", "local").lower() not in _NON_PROD_ENVS
 
 
 def enforce_production_safety():
@@ -21,10 +31,10 @@ def enforce_production_safety():
     Usa ``ENVIRONMENT`` (nome real definido no ``serverless.yml``). Fail-safe:
     qualquer ambiente que não esteja na allowlist de dev é considerado produtivo.
     """
-    environment = os.getenv("ENVIRONMENT", "local").lower()
-    if environment in _NON_PROD_ENVS:
+    if not is_productive_environment():
         return
 
+    environment = os.getenv("ENVIRONMENT", "local").lower()
     violations = []
     secret = os.getenv("JWT_SECRET_KEY")
     if not secret or secret in _INSECURE_SECRETS:
@@ -48,6 +58,17 @@ def enforce_production_safety():
         violations.append("PAYMENT_PROVIDER/PAYMENT_MODE=mock em ambiente produtivo")
     elif not os.getenv("PAYMENT_API_KEY"):
         violations.append("PAYMENT_API_KEY ausente para gateway real (sandbox/live)")
+    # Pix: a factory create_pix_provider() chaveia por PIX_PROVIDER (default "mock") e o webhook
+    # público é autenticado por PIX_WEBHOOK_SECRET. Sem estas travas, prod poderia cair
+    # silenciosamente no MockPixProvider (segredo público) => marcar pago sem pagar. Fail-closed:
+    if os.getenv("PIX_PROVIDER", "mock") == "mock":
+        violations.append("PIX_PROVIDER=mock (ou ausente) em ambiente produtivo")
+    pix_secret = os.getenv("PIX_WEBHOOK_SECRET")
+    if not pix_secret or pix_secret in _INSECURE_SECRETS:
+        violations.append("PIX_WEBHOOK_SECRET ausente ou com valor padrão inseguro")
+    elif len(pix_secret) < _WEBHOOK_SECRET_MIN_LEN:
+        violations.append(
+            f"PIX_WEBHOOK_SECRET fraco (< {_WEBHOOK_SECRET_MIN_LEN} chars) em ambiente produtivo")
 
     if violations:
         message = f"BOOT BLOQUEADO ({environment}): " + "; ".join(violations)

@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Protocol, runtime_checkable
 
 from src.services.pix.states import PENDING_PAYMENT
+from src.utils.safety import is_productive_environment
 
 # TTL padrão do QR dinâmico (o provider real pode sobrescrever via order.expires_in_seconds).
 DEFAULT_PIX_TTL_SECONDS = 15 * 60
@@ -136,7 +137,15 @@ class MockPixProvider:
 
 class RealPixProvider:
     """Placeholder — provider Pix real (Asaas / Mercado Pago / ...) na Fase 7.
-    Requer credenciais (PAYMENT_API_KEY) e segredo de webhook (Secrets Manager)."""
+    Requer credenciais (PAYMENT_API_KEY) e segredo de webhook (Secrets Manager).
+
+    Nota p/ Fase 7 — webhooks diferem por provider e precisam de validadores DISTINTOS:
+    - Asaas: token ESTÁTICO no header ``asaas-access-token`` (NÃO há HMAC de payload);
+      comparar constant-time; anti-replay via dedup do ``id`` do evento + allowlist de IP.
+    - Mercado Pago: HMAC-SHA256 do manifest ``id:{data.id};request-id:{x-request-id};ts:{ts};``
+      (headers ``x-signature``/``x-request-id``); validar a janela do ``ts`` (~5 min) anti-replay.
+    Ambos: responder 2xx rápido (Asaas trava a fila após 15 falhas consecutivas), re-fetch do
+    recurso via API p/ confirmar status/valor, e rotação de segredo aceitando {atual, anterior}."""
 
     def __init__(self, provider: str, mode: str, api_key: str,
                  webhook_secret: str | None) -> None:
@@ -165,6 +174,12 @@ def create_pix_provider(provider: str | None = None, mode: str | None = None,
     api_key = api_key or os.getenv("PAYMENT_API_KEY")
     webhook_secret = webhook_secret or os.getenv("PIX_WEBHOOK_SECRET")
     if provider == "mock" or mode == "mock":
+        # Fail-closed (defesa em profundidade além de enforce_production_safety): o mock assina
+        # o webhook com um segredo público e NUNCA pode autenticar pagamentos em produção.
+        if is_productive_environment():
+            raise RuntimeError(
+                "MockPixProvider bloqueado em ambiente produtivo: configure PIX_PROVIDER real "
+                "e PIX_WEBHOOK_SECRET (Pix mock jamais roda em produção).")
         return MockPixProvider(webhook_secret=webhook_secret)
     if not api_key:
         raise ValueError("PAYMENT_API_KEY obrigatória para provider Pix real")

@@ -224,8 +224,10 @@ def pix_webhook(event, context):
 
     try:
         # ── Leitura da cobrança (por payment_id; pix_charges sem RLS) p/ obter org + valor.
-        #    Antes do dedup: um webhook que chega antes do INSERT da charge commitar => "desconhecida"
-        #    e NÃO consome slot de dedup, então o retro do provider reprocessa. ──
+        #    Cobrança desconhecida => 200 {ignored}, SEM consumir slot de dedup. O 200 é
+        #    deliberado: um payment_id inexistente/de outro ambiente nunca vai casar e um 5xx
+        #    geraria retry infinito. A observabilidade fica no warning PIX_WEBHOOK_UNKNOWN_CHARGE
+        #    (promover a métrica/alarme na Fase 7). ──
         with simple_tx() as cur:
             cur.execute(
                 "SELECT request_id, organization_id, status, amount_cents, currency"
@@ -256,6 +258,7 @@ def pix_webhook(event, context):
         #    provider reprocessa — sem perder o pagamento por falha pós-dedup. ──
         deduped = False
         applied = 0
+        projected = 0
         with tenant_tx(str(org), "admin", str(org)) as cur:
             cur.execute(
                 "INSERT INTO public.pix_webhook_events (event_id, provider, payment_id, status)"
@@ -280,11 +283,27 @@ def pix_webhook(event, context):
                         "   AND installment_plan IS NULL",
                         (Json(_paid_snapshot(charge["amount_cents"], charge["currency"])),
                          request_id))
+                    projected = cur.rowcount
 
         if deduped:
             return success_response(200, "Evento já processado", {"deduped": True})
-        if applied and paid:
-            _enqueue_pix_paid(request_id, ev.payment_id)  # pós-commit (best-effort)
+        # Uma confirmação PAID NUNCA pode ser silenciosa: distinguimos os 3 desfechos.
+        if paid:
+            if applied and projected:
+                _enqueue_pix_paid(request_id, ev.payment_id)  # happy path (pós-commit)
+            elif applied and not projected:
+                # A2: charge=PAID (dinheiro recebido) mas a request não estava 'pending' (ex.:
+                # reserva de cartão concorrente ou plano já gravado) — a projeção casou 0 linhas.
+                # NÃO dispara o fluxo "pago"; alerta para reconciliação/estorno manual.
+                logger.error(json.dumps({"event": "PIX_PAID_NOT_PROJECTED",
+                                         "request_id": str(request_id),
+                                         "payment_id": ev.payment_id}))
+            else:  # applied == 0
+                # A3: target=PAID mas o UPDATE guardado da charge casou 0 linhas (o status mudou
+                # entre a leitura e a transação atômica) — dinheiro sem confirmar registrada.
+                logger.error(json.dumps({"event": "PIX_PAID_NOT_APPLIED",
+                                         "payment_id": ev.payment_id,
+                                         "from_status": charge["status"]}))
     except Exception as e:
         logger.error(json.dumps({"event": "PIX_WEBHOOK_ERROR", "error": type(e).__name__}))
         return error_response(500, "Erro ao processar webhook")

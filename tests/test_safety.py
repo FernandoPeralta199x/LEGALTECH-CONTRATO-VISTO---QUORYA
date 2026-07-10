@@ -98,6 +98,9 @@ def test_production_passes_with_strong_secret(monkeypatch):
     monkeypatch.setenv("PAYMENT_PROVIDER", "pagarme")
     monkeypatch.setenv("PAYMENT_MODE", "live")
     monkeypatch.setenv("PAYMENT_API_KEY", "chave-de-gateway-real")
+    # Pix: provider real (!= mock) + segredo de webhook forte configurados
+    monkeypatch.setenv("PIX_PROVIDER", "asaas")
+    monkeypatch.setenv("PIX_WEBHOOK_SECRET", "segredo-pix-forte-de-verdade-0123456789")
     enforce_production_safety()  # não levanta com tudo configurado para produção
 
 
@@ -107,7 +110,8 @@ def _prod_env(monkeypatch, **over):
     base = {"ENVIRONMENT": "prod", "JWT_SECRET_KEY": "x" * 40,
             "AI_ANALYSIS_BACKEND": "real", "EMAIL_BACKEND": "ses",
             "STORAGE_BACKEND": "s3", "EMBEDDINGS_BACKEND": "real", "OCR_BACKEND": "real",
-            "PAYMENT_PROVIDER": "pagarme", "PAYMENT_MODE": "live", "PAYMENT_API_KEY": "k"}
+            "PAYMENT_PROVIDER": "pagarme", "PAYMENT_MODE": "live", "PAYMENT_API_KEY": "k",
+            "PIX_PROVIDER": "asaas", "PIX_WEBHOOK_SECRET": "x" * 40}
     base.update(over)
     for k, v in base.items():
         monkeypatch.setenv(k, v)

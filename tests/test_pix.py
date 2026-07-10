@@ -141,3 +141,70 @@ def test_factory_real_com_api_key_retorna_placeholder():
 
 def test_ttl_default_15min():
     assert DEFAULT_PIX_TTL_SECONDS == 15 * 60
+
+
+# ─────────────────────── fail-closed em produção (A1) ───────────────────────
+
+def test_is_productive_environment(monkeypatch):
+    from src.utils import safety
+    for env in ("", "local", "dev", "development", "test", "testing"):
+        monkeypatch.setenv("ENVIRONMENT", env)
+        assert safety.is_productive_environment() is False
+    for env in ("prod", "production", "staging", "homolog", "qa", "sandbox"):
+        monkeypatch.setenv("ENVIRONMENT", env)
+        assert safety.is_productive_environment() is True
+
+
+def test_factory_bloqueia_mock_em_producao(monkeypatch):
+    # Fail-closed: em prod, PIX_PROVIDER ausente/"mock" NÃO pode devolver o mock (segredo público).
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.delenv("PIX_PROVIDER", raising=False)
+    monkeypatch.delenv("PAYMENT_MODE", raising=False)
+    with pytest.raises(RuntimeError):
+        create_pix_provider()
+    # Mesmo com PAYMENT_MODE=live, PIX_PROVIDER=mock explícito segue bloqueado.
+    monkeypatch.setenv("PAYMENT_MODE", "live")
+    monkeypatch.setenv("PIX_PROVIDER", "mock")
+    with pytest.raises(RuntimeError):
+        create_pix_provider()
+
+
+def test_factory_prod_com_provider_real_nao_e_mock(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("PIX_PROVIDER", "asaas")
+    monkeypatch.setenv("PAYMENT_MODE", "live")
+    prov = create_pix_provider(api_key="k", webhook_secret="s" * 40)
+    assert isinstance(prov, RealPixProvider)  # nunca cai no mock em produção
+
+
+def test_enforce_production_safety_exige_pix_provider_e_secret(monkeypatch):
+    from src.utils import safety
+    # Ambiente produtivo com TODAS as outras travas satisfeitas — só o Pix inseguro.
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("JWT_SECRET_KEY", "j" * 40)
+    monkeypatch.setenv("AI_ANALYSIS_BACKEND", "real")
+    monkeypatch.setenv("EMAIL_BACKEND", "ses")
+    monkeypatch.setenv("STORAGE_BACKEND", "s3")
+    monkeypatch.setenv("EMBEDDINGS_BACKEND", "real")
+    monkeypatch.setenv("OCR_BACKEND", "real")
+    monkeypatch.setenv("PAYMENT_PROVIDER", "asaas")
+    monkeypatch.setenv("PAYMENT_MODE", "live")
+    monkeypatch.setenv("PAYMENT_API_KEY", "k")
+    monkeypatch.delenv("PIX_PROVIDER", raising=False)        # mock => viola
+    monkeypatch.delenv("PIX_WEBHOOK_SECRET", raising=False)  # ausente => viola
+    with pytest.raises(RuntimeError) as ei:
+        safety.enforce_production_safety()
+    msg = str(ei.value)
+    assert "PIX_PROVIDER" in msg and "PIX_WEBHOOK_SECRET" in msg
+    # O segredo default público também é rejeitado.
+    monkeypatch.setenv("PIX_PROVIDER", "asaas")
+    monkeypatch.setenv("PIX_WEBHOOK_SECRET", "dev-pix-mock-secret")
+    with pytest.raises(RuntimeError):
+        safety.enforce_production_safety()
+    # Segredo curto (< 32 chars) é rejeitado.
+    monkeypatch.setenv("PIX_WEBHOOK_SECRET", "curto")
+    with pytest.raises(RuntimeError):
+        safety.enforce_production_safety()
+    # Config Pix segura (provider real + segredo forte) => NÃO levanta.
+    monkeypatch.setenv("PIX_WEBHOOK_SECRET", "s" * 40)
+    safety.enforce_production_safety()
