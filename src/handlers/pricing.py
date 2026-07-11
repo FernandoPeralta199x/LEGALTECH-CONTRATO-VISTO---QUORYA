@@ -168,11 +168,15 @@ def update_pricing_config(event, context):
     changed = data.model_fields_set
     if not changed:
         return error_response(400, "Nenhum campo para atualizar")
-    # valida códigos dos overrides contra o catálogo
+    # product_overrides é VESTIGIAL: por design o preço do PRODUTO deriva da soma dos módulos
+    # required (catalog.py/estimate.py só aplicam module_overrides; não há read_product_overrides).
+    # Aceitar um override de produto criaria uma config "morta" (200 + no-op silencioso) que
+    # engana o admin — a Config exibiria um preço que o wizard/estimate/cobrança nunca aplicam.
+    # Rejeitamos explicitamente em vez de persistir algo sem efeito (o FE nunca envia este campo).
     if data.product_overrides:
-        bad = [c for c in data.product_overrides if c not in PRODUCTS]
-        if bad:
-            return error_response(400, f"produtos inválidos: {', '.join(bad)}")
+        return error_response(
+            400, "Override de preço por produto não é suportado: edite os Preços de Módulos "
+                 "(o preço do produto é a soma dos módulos obrigatórios).")
     if data.module_overrides:
         bad = [c for c in data.module_overrides if c not in MODULES]
         if bad:

@@ -254,3 +254,19 @@ def test_put_config_override_acima_do_teto_400():
     cfg = {"module_overrides": {"escavador": {"price_cents": 10 ** 15}}}
     resp = pr_h.update_pricing_config(_event(a, body=cfg), None)
     assert resp["statusCode"] == 400
+
+
+def test_put_config_product_override_rejeitado_400():
+    # product_overrides é vestigial (preço do produto = soma dos módulos). Um override de
+    # produto NÃO pode ser persistido silenciosamente (config "morta" que engana o admin):
+    # o handler rejeita 400 e nada é gravado (o catálogo/estimate seguem o padrão).
+    _reset()
+    a = str(uuid.uuid4())
+    resp = pr_h.update_pricing_config(
+        _event(a, body={"product_overrides": {"analise_contratual": {"base_price_cents": 999}}}),
+        None)
+    assert resp["statusCode"] == 400
+    assert "produto" in json.loads(resp["body"])["error"].lower()
+    # nada persistido: config segue default (sem row) -> version 0, sem overrides
+    cfg = _data(pr_h.get_pricing_config(_event(a), None))
+    assert cfg["product_overrides"] == {} and cfg["version"] == 0
