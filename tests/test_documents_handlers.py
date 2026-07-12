@@ -222,6 +222,24 @@ def test_update_document_patch(client_id):
     conn.close()
 
 
+def test_update_document_sanitiza_filename_crlf(client_id):
+    # BE-01: rename com CR/LF (e componente de caminho) é sanitizado antes de
+    # persistir — senão o nome reapareceria cru em Content-Disposition e permitiria
+    # header splitting. O nome guardado não pode conter CR/LF nem "/".
+    a = str(uuid.uuid4())
+    case_id = _make_case(a, client_id)
+    doc_id = _data(_upload(a, case_id))["document_id"]
+    upd = _data(d.update_document(_event(a, path={"docId": doc_id},
+                body={"filename": "../evil\r\nX-Injected: 1.pdf"}), None))
+    assert upd["filename"] == "evilX-Injected: 1.pdf"
+    conn = _admin_conn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT file_name FROM public.documents WHERE id=%s", (doc_id,))
+        stored = cur.fetchone()[0]
+    conn.close()
+    assert "\r" not in stored and "\n" not in stored and "/" not in stored
+
+
 def test_update_document_sem_campos_400(client_id):
     a = str(uuid.uuid4())
     case_id = _make_case(a, client_id)

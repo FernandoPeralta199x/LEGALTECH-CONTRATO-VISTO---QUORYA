@@ -13,7 +13,7 @@ import uuid
 
 from pydantic import ValidationError
 
-from src.schemas.document_schemas import DocumentUploadSchema
+from src.schemas.document_schemas import DocumentUploadSchema, safe_display_filename
 from src.schemas.queue_schemas import DocumentProcessingJob, EnqueueDocumentProcessingResult
 from src.services.database import tenant_tx
 from src.services.document_ingestion import DocumentNotFound, OcrFailed, ingest_document
@@ -240,8 +240,14 @@ def update_document(event, context):
         return err
     sets, vals = [], []
     if "filename" in body and body["filename"]:
+        # Sanitiza o rename com a MESMA regra do upload: basename sem caracteres de
+        # controle, senão um CR/LF viraria header splitting em Content-Disposition (BE-01).
+        try:
+            file_name = safe_display_filename(body["filename"])
+        except (ValueError, TypeError):
+            return error_response(400, "filename inválido")
         sets.append("file_name = %s")
-        vals.append(body["filename"])
+        vals.append(file_name)
     if "status" in body and body["status"]:
         if body["status"] not in _DOC_STATUS_REV:
             return error_response(400, "status inválido (use: pending_upload, processed, failed)")
