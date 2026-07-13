@@ -83,8 +83,10 @@ def create_request(event, context):
     # Lista vazia/omitida => só obrigatórios (mesmo resultado do preview).
     try:
         selected = normalize_selected_modules(data.product_type, data.selected_modules)
-    except ValueError as e:
-        return error_response(400, str(e))
+    except ValueError:
+        # Domínio: seleção inválida (ex.: módulo não aplicável ao produto). Mensagem
+        # ESTÁTICA (não ecoa str(e)), alinhada ao padrão dos demais handlers (BE-03).
+        return error_response(400, "Seleção de módulos inválida para o produto")
     request_id = generate_uuid()
     case_id = generate_uuid()
     # Triagem executa APENAS o que foi comprado: infra básica do produto + módulos
