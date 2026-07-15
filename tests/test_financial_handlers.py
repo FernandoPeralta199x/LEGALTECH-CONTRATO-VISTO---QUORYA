@@ -16,7 +16,7 @@ from src.handlers import requests as req_h
 SYSTEM_ORG = "00000000-0000-0000-0000-000000000001"
 OTHER_ORG = "00000000-0000-0000-0000-0000000000ff"
 
-_NULL_KPIS = ("overdue_cents", "net_cents", "tax_cents", "invoices_count", "margin_cents")
+_NULL_KPIS = ("overdue_cents", "net_cents", "margin_cents")
 
 
 def _reset():
@@ -24,9 +24,11 @@ def _reset():
     conn.autocommit = True
     with conn.cursor() as cur:
         cur.execute(
-            "TRUNCATE public.timeline_events, public.triage_modules, public.case_parties,"
-            " public.documents, public.requests, public.cases, public.clients,"
-            " public.request_code_sequences, public.pricing_configs RESTART IDENTITY CASCADE")
+            "TRUNCATE public.external_api_costs, public.tax_provisions,"
+            " public.fiscal_documents, public.timeline_events, public.triage_modules,"
+            " public.case_parties, public.documents, public.requests, public.cases,"
+            " public.clients, public.request_code_sequences, public.pricing_configs"
+            " RESTART IDENTITY CASCADE")
     conn.close()
 
 
@@ -96,8 +98,10 @@ def test_overview_vazio():
     assert k["ticket_cents"] is None
     for key in _NULL_KPIS:
         assert k[key] is None, key
-    # api_cost_cents tem fonte (external_api_costs, Fase 4): vazio = 0, não null
+    # api_cost/tax/invoices têm fonte (Fases 4-5): vazio = 0, não null
     assert k["api_cost_cents"] == 0
+    assert k["tax_cents"] == 0
+    assert k["invoices_count"] == 0
     assert data["currency"] == "BRL"
     assert data["period"] == "month"
 

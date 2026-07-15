@@ -332,6 +332,51 @@ functions:
           cors: true
           authorizer: ${self:custom.jwtAuthorizer}
 
+  # TIER 1 - Financeiro / Tributos e Notas (controle interno, spec 12)
+  getFinancialTaxes:
+    handler: src/handlers/financial_fiscal.list_taxes
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: financial/taxes
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  createFinancialTax:
+    handler: src/handlers/financial_fiscal.create_tax
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: financial/taxes
+          method: post
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  getFinancialFiscalDocuments:
+    handler: src/handlers/financial_fiscal.list_fiscal_documents
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: financial/fiscal-documents
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  createFinancialFiscalDocument:
+    handler: src/handlers/financial_fiscal.create_fiscal_document
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: financial/fiscal-documents
+          method: post
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
   # TIER 1 - Pricing (catálogo + estimativa + config por organização)
   getPricing:
     handler: src/handlers/pricing.get_pricing
