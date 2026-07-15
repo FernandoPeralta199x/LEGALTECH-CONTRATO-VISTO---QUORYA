@@ -16,8 +16,7 @@ from src.handlers import requests as req_h
 SYSTEM_ORG = "00000000-0000-0000-0000-000000000001"
 OTHER_ORG = "00000000-0000-0000-0000-0000000000ff"
 
-_NULL_KPIS = ("overdue_cents", "net_cents", "api_cost_cents", "tax_cents",
-              "invoices_count", "margin_cents")
+_NULL_KPIS = ("overdue_cents", "net_cents", "tax_cents", "invoices_count", "margin_cents")
 
 
 def _reset():
@@ -97,6 +96,8 @@ def test_overview_vazio():
     assert k["ticket_cents"] is None
     for key in _NULL_KPIS:
         assert k[key] is None, key
+    # api_cost_cents tem fonte (external_api_costs, Fase 4): vazio = 0, não null
+    assert k["api_cost_cents"] == 0
     assert data["currency"] == "BRL"
     assert data["period"] == "month"
 

@@ -9,6 +9,8 @@ honestamente como "sem dados", nunca como número forjado.
 O cursor deve vir de ``tenant_tx`` (RLS por organização já aplicada).
 """
 
+from src.services.financial.api_costs import compute_api_costs
+
 # Buckets de payment_status — espelham adapters/payment.Status.
 _RECEIVED = ["paid", "simulated"]        # dinheiro que entrou (simulated = mock pago em dev)
 _PENDING = ["pending", "processing"]     # venda feita, ainda não paga
@@ -51,8 +53,11 @@ def compute_overview(cur, start, end) -> dict:
     gross = int(r["gross_cents"])
     ticket = round(gross / priced) if priced else None
 
+    # Custos de API agora TÊM fonte (external_api_costs, Fase 4): vazio = 0, não null.
+    api = compute_api_costs(cur, start, end)
+
     return {
-        # KPIs com fonte real (requests):
+        # KPIs com fonte real (requests + external_api_costs):
         "count": count,
         "gross_cents": gross,
         "received_cents": int(r["received_cents"]),
@@ -60,10 +65,11 @@ def compute_overview(cur, start, end) -> dict:
         "canceled_cents": int(r["canceled_cents"]),
         "refunded_cents": int(r["refunded_cents"]),
         "ticket_cents": ticket,
+        "api_cost_cents": api["api_cost_cents"],
+        "api_cost_forecast_cents": api["api_cost_forecast_cents"],
         # KPIs sem fonte de dados hoje — honestamente nulos (frontend: "R$ —"):
         "overdue_cents": None,
         "net_cents": None,
-        "api_cost_cents": None,
         "tax_cents": None,
         "invoices_count": None,
         "margin_cents": None,

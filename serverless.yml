@@ -309,6 +309,29 @@ functions:
           cors: true
           authorizer: ${self:custom.jwtAuthorizer}
 
+  # TIER 1 - Financeiro / Gastos com APIs (custos de APIs externas por organização)
+  getFinancialApiCosts:
+    handler: src/handlers/financial_api_costs.list_api_costs
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: financial/api-costs
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  createFinancialApiCost:
+    handler: src/handlers/financial_api_costs.create_api_cost
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: financial/api-costs
+          method: post
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
   # TIER 1 - Pricing (catálogo + estimativa + config por organização)
   getPricing:
     handler: src/handlers/pricing.get_pricing
