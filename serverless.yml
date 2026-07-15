@@ -413,6 +413,18 @@ functions:
           cors: true
           authorizer: ${self:custom.jwtAuthorizer}
 
+  # TIER 1 - Financeiro / Auditoria (leitura read-only de audit.audit_log, admin-only)
+  getFinancialAudit:
+    handler: src/handlers/financial_audit.list_audit
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: financial/audit
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
   # TIER 1 - Pricing (catálogo + estimativa + config por organização)
   getPricing:
     handler: src/handlers/pricing.get_pricing
