@@ -389,6 +389,30 @@ functions:
           cors: true
           authorizer: ${self:custom.jwtAuthorizer}
 
+  # TIER 1 - Financeiro / Serviços (agregação read-only de requests por product_type)
+  getFinancialServices:
+    handler: src/handlers/financial_services.list_services
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: financial/services
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  # TIER 1 - Financeiro / Clientes (receita por cliente via requests→cases→clients)
+  getFinancialClients:
+    handler: src/handlers/financial_clients.list_clients_revenue
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: financial/clients
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
   # TIER 1 - Pricing (catálogo + estimativa + config por organização)
   getPricing:
     handler: src/handlers/pricing.get_pricing
