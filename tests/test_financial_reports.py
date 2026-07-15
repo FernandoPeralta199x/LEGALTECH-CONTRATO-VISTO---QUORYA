@@ -161,6 +161,19 @@ def test_report_custom_exige_from_to():
     assert d["metadata"]["filters"]["from"] == "2020-01-01"
 
 
+def test_report_preset_ignora_from_to_espurios():
+    # Regressão: em período preset, from/to na query são ignorados por _resolve_range,
+    # então metadata.filters.from/to devem vir None (sem "filtro aplicado" falso).
+    a = _admin()
+    d = _data(rep_h.get_executive_report(
+        _event(a, query={"period": "month", "from": "2020-01-01", "to": "2020-12-31"}), None))
+    f = d["metadata"]["filters"]
+    assert f["period"] == "month"
+    assert f["from"] is None and f["to"] is None
+    # e o range continua sendo o do preset (mês corrente), não 2020 — params espúrios ignorados
+    assert d["metadata"]["range"]["from"][:4] != "2020"
+
+
 def test_report_audit_log_emitido(caplog):
     a = _admin()
     with caplog.at_level(logging.INFO):
