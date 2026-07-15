@@ -377,6 +377,18 @@ functions:
           cors: true
           authorizer: ${self:custom.jwtAuthorizer}
 
+  # TIER 1 - Financeiro / Relatório Executivo (consolidação Fases 3-5, Fase 6)
+  getFinancialExecutiveReport:
+    handler: src/handlers/financial_reports.get_executive_report
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: financial/reports/executive
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
   # TIER 1 - Pricing (catálogo + estimativa + config por organização)
   getPricing:
     handler: src/handlers/pricing.get_pricing
