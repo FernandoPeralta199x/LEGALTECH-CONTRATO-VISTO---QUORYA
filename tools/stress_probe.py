@@ -116,7 +116,8 @@ def main() -> int:
     args = ap.parse_args()
     call = make_call(args.base)
 
-    st, _, b = call("POST", "/auth/login", body={"email": "demo@contratovisto.com", "password": "DemoLocal#2026"})
+    st, _, b = call("POST", "/auth/login", body={"email": "demo@contratovisto.com",
+                                                 "password": os.environ.get("DEMO_PASSWORD", "")})
     tok = d(b).get("access_token")
     if not tok:
         print(f"[setup] login demo falhou (st={st}) — dev-server no ar e org demo semeada?")
