@@ -2,6 +2,8 @@
 
 Valida a canonicalização dos providers da triagem, a resolução para o adapter
 Mock e o comportamento de "flip para real" (o único ponto de wiring)."""
+import logging
+
 import pytest
 
 from src.adapters.base import AdapterResult
@@ -62,3 +64,23 @@ def test_flip_para_real_exige_api_key(monkeypatch):
     monkeypatch.delenv("SERASA_API_KEY", raising=False)
     with pytest.raises(ValueError):
         query_provider("mock_serasa", {"cpf_cnpj": "123"})
+
+
+def test_provider_desconhecido_loga_aviso(caplog):
+    """M1: um provider sem binding (typo/wiring ausente) vira no-op — deve logar
+    aviso para não degradar silenciosamente."""
+    with caplog.at_level(logging.WARNING, logger="src.adapters.registry"):
+        assert query_provider("provider_inexistente") is None
+    assert any(
+        "provider_inexistente" in r.getMessage() and r.levelno == logging.WARNING
+        for r in caplog.records
+    )
+
+
+def test_provider_local_nao_loga_aviso(caplog):
+    """'local'/'parties_validation' têm None ESPERADO (sem adapter externo) —
+    não devem gerar aviso."""
+    with caplog.at_level(logging.WARNING, logger="src.adapters.registry"):
+        assert query_provider("parties_validation") is None
+        assert query_provider("mock_local") is None
+    assert not [r for r in caplog.records if r.levelno == logging.WARNING]

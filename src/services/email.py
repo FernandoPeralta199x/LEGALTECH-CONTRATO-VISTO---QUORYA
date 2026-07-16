@@ -37,7 +37,7 @@ class EmailService:
 
     def _send_ses(self, to_email, reset_link, user_name=None):
         import boto3  # import tardio: só quando o backend real é usado
-        client = boto3.client("ses", region_name=os.getenv("AWS_REGION", "us-east-1"))
+        client = boto3.client("ses", region_name=os.getenv("AWS_REGION", "sa-east-1"))
         greeting = f"Olá {user_name}," if user_name else "Olá,"
         body_text = (
             f"{greeting}\n\nRecebemos um pedido para redefinir sua senha. "

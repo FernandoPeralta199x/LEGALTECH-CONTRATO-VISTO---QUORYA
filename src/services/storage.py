@@ -55,7 +55,7 @@ class StorageService:
 
     def _client(self):
         import boto3  # import tardio: só quando o backend real é usado
-        return boto3.client("s3", region_name=os.getenv("AWS_REGION", "us-east-1"))
+        return boto3.client("s3", region_name=os.getenv("AWS_REGION", "sa-east-1"))
 
 
 storage_service = StorageService()
