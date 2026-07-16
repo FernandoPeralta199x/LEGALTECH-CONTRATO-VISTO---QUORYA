@@ -1,7 +1,9 @@
 """Schemas Pydantic do Pedido (wizard Novo Pedido) — POST /requests."""
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from src.schemas.br_documents import validate_document
 
 # teto de tamanho declarado para upload (S-02): a chave do S3 é sempre gerada pelo
 # backend (S-01), então o cliente nunca informa storage_key.
@@ -19,6 +21,18 @@ class PartyInput(BaseModel):
     email: str | None = Field(default=None, max_length=255)
     phone: str | None = Field(default=None, max_length=32)
     metadata: dict = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _validate_party_document(self):
+        # B7: valida o documento server-side quando presente (não confiar no FE) —
+        # mesma regra do ClientCreate (CPF/CNPJ com dígito, CNPJ alfanumérico 2026).
+        # Ausente/vazio é permitido (a parte pode não ter documento). Normaliza para
+        # o valor limpo para consistência do mascaramento/persistência.
+        if self.document:
+            cleaned, dtype = validate_document(self.document, self.document_type)
+            self.document = cleaned
+            self.document_type = dtype
+        return self
 
 
 class DocumentInput(BaseModel):
