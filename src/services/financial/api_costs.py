@@ -4,6 +4,40 @@ public.external_api_costs. Todas as funções operam sobre um cursor já em
 
 `status='processado'` = custo real incorrido (entra em api_cost_cents / margem);
 `status='previsto'` = estimativa (exposto à parte, NÃO reduz a margem real).
+
+Custo AUTOMÁTICO: derivado do USO REAL das APIs externas (tabela triage_modules,
+módulos efetivamente executados) × uma tarifa de custo por provedor. Quantidade =
+real e automática; tarifa = configurada (a API real ainda é mock, então é uma
+estimativa honesta, não um número forjado).
+"""
+
+# ── Tarifa de custo por consulta de cada API externa ─────────────────────────────
+# O que PAGAMOS ao provedor por consulta (≠ do preço ao cliente do catálogo de
+# pricing). PLACEHOLDERS — AJUSTAR aos contratos reais. Chave = provider canônico
+# (sem o prefixo 'mock_' do dev). Admin-editável por org fica para uma próxima fase.
+API_PROVIDER_TARIFF = {
+    "escavador":  {"label": "Escavador",  "unit_cost_cents": 200},
+    "targetdata": {"label": "TargetData", "unit_cost_cents": 150},
+    "serasa":     {"label": "Serasa",     "unit_cost_cents": 300},
+    "procon":     {"label": "Procon",     "unit_cost_cents": 100},
+}
+
+# Uso real por provedor: módulos de triagem executados (status 'done') no período.
+# provider vem com prefixo 'mock_' em dev → canonizado. Incorrido em finished_at
+# (execução); cai para started_at/created_at se nulo.
+#
+# PREMISSA v1: 1 consulta por módulo concluído (count). Retentativas (attempts>1),
+# módulos em 'error' já cobrados e cache-first (reuso sem nova chamada) NÃO são
+# refinados aqui — isso depende da cobrança real por chamada (Fase 7). Só os
+# provedores da tarifa entram (IA/OCR ficam de fora até terem tarifa própria).
+_USAGE_SQL = """
+    SELECT regexp_replace(provider, '^mock_', '') AS prov, count(*) AS qty
+    FROM public.triage_modules
+    WHERE status = 'done'
+      AND COALESCE(finished_at, started_at, created_at) >= %(start)s
+      AND COALESCE(finished_at, started_at, created_at) < %(end)s
+      AND regexp_replace(provider, '^mock_', '') = ANY(%(providers)s)
+    GROUP BY prov
 """
 
 _AGG_SQL = """
@@ -59,6 +93,31 @@ def costs_by_provider(cur, start, end) -> list:
     cur.execute(_BY_PROVIDER_SQL, {"start": start, "end": end})
     return [{"provider": row["provider"], "total_cents": int(row["total_cents"])}
             for row in cur.fetchall()]
+
+
+def automatic_api_costs(cur, start, end) -> dict:
+    """Custo ESTIMADO das APIs derivado do USO REAL (triage_modules, status='done')
+    × tarifa configurada por provedor. Quantidade = real (automática); tarifa =
+    config. Retorna TODOS os provedores da tarifa (0 quando não houve uso — honesto).
+    """
+    providers = list(API_PROVIDER_TARIFF.keys())
+    cur.execute(_USAGE_SQL, {"start": start, "end": end, "providers": providers})
+    used = {row["prov"]: int(row["qty"]) for row in cur.fetchall()}
+    by_provider, total, calls = [], 0, 0
+    for key, meta in API_PROVIDER_TARIFF.items():
+        qty = used.get(key, 0)
+        cost = qty * meta["unit_cost_cents"]
+        total += cost
+        calls += qty
+        by_provider.append({
+            "provider": key,
+            "provider_label": meta["label"],
+            "quantity": qty,
+            "unit_cost_cents": meta["unit_cost_cents"],
+            "total_cents": cost,
+        })
+    by_provider.sort(key=lambda p: (-p["total_cents"], p["provider"]))
+    return {"by_provider": by_provider, "total_cents": total, "calls": calls}
 
 
 def list_costs(cur, start, end, provider, status, limit, offset):

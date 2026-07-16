@@ -55,6 +55,7 @@ def list_api_costs(event, context):
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
             summary = svc.compute_api_costs(cur, start, end)
             by_provider = svc.costs_by_provider(cur, start, end)
+            automatic = svc.automatic_api_costs(cur, start, end)
             items, total = svc.list_costs(cur, start, end, provider, status, page_size, offset)
     except Exception as e:
         logger.error(json.dumps({"event": "API_COSTS_LIST_ERROR", "error": type(e).__name__}))
@@ -64,6 +65,15 @@ def list_api_costs(event, context):
         "period": period,
         "range": {"from": start.isoformat(), "to": end.isoformat()},
         "currency": "BRL",
+        # Gasto AUTOMÁTICO: derivado do uso real das APIs (triage_modules) × tarifa
+        # configurada por provedor — estimativa honesta (quantidade real, tarifa config).
+        "automatic": {
+            **automatic,
+            "disclaimer": "Estimado das APIs de consulta (Escavador, TargetData, Serasa, "
+                          "Procon): 1 consulta por módulo executado × tarifa de custo "
+                          "configurada. NÃO inclui IA/OCR. Ajuste a tarifa aos contratos.",
+        },
+        # Lançamentos MANUAIS avulsos (custos fora da triagem), como antes.
         "summary": {**summary, "by_provider": by_provider},
         "items": items,
         "total": total,
