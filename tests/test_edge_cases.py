@@ -25,6 +25,29 @@ def _ev(body, role="analyst", path=None, query=None):
     }
 
 
+def _seed_writer(user_id=_UID, role="analyst", org=_ORG):
+    """Semeia o user do token em public.users — as rotas de ESCRITA reconsultam o papel
+    ATUAL no banco (assert_active_writer, SEC-01), então o _UID sintético não semeado
+    seria recusado com 403 (janela de revogação) antes de exercitar o caso sob teste."""
+    conn = admin_conn()
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO public.users (id, email, password_hash, name, role, status, organization_id)"
+            " VALUES (%s,%s,'x','Test',%s,'active',%s)"
+            " ON CONFLICT (id) DO UPDATE SET role=EXCLUDED.role, status='active'",
+            (user_id, f"u_{user_id}@t.c", role, org))
+    conn.close()
+
+
+@pytest.fixture(autouse=True)
+def _seed_token_user():
+    # o _UID usado por _ev é uma constante global; semeia-o (analyst ativo) antes de
+    # cada teste para que as rotas de escrita passem pelo recheck de revogação.
+    _seed_writer()
+    yield
+
+
 # body JSON válido mas que NÃO é objeto: deve dar 400, nunca exceção/500.
 _NON_OBJECT_BODIES = ["[]", "123", '"texto"', "null", "true"]
 _BODY_HANDLERS = [

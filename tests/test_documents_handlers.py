@@ -21,6 +21,24 @@ def _admin_conn():
     return admin_conn()
 
 
+def _seed_writer(user_id, role, org=SYSTEM_ORG):
+    """Semeia o user do token no banco com o papel dado. As rotas de escrita reconsultam
+    o papel ATUAL (assert_active_writer, SEC-01), então um user_id não-semeado seria 403.
+    DO UPDATE do papel/status: um mesmo user_id é reutilizado com papéis diferentes no
+    mesmo teste (ex.: viewer e depois analyst), então o seed reflete o papel do token
+    atual — o gate de papel (@require_writer) barra o viewer pelo claim do token."""
+    conn = _admin_conn()
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO public.users (id, email, password_hash, name, role, status, organization_id)"
+            " VALUES (%s,%s,'x','Test',%s,'active',%s)"
+            " ON CONFLICT (id) DO UPDATE SET role=EXCLUDED.role, status='active',"
+            " organization_id=EXCLUDED.organization_id",
+            (user_id, f"u_{user_id}@t.c", role, org))
+    conn.close()
+
+
 @pytest.fixture()
 def client_id():
     conn = _admin_conn()
@@ -41,6 +59,9 @@ def client_id():
 
 
 def _event(user_id, role="analyst", body=None, path=None, org_id=SYSTEM_ORG):
+    # O user do token existe no banco com o papel do teste (senão o recheck de escrita
+    # do SEC-01 recusaria antes de exercitar o comportamento sob teste).
+    _seed_writer(user_id, role, org_id)
     return {
         "requestContext": {"authorizer": {"user_id": user_id, "email": "u@t.c", "role": role, "organization_id": org_id}},
         "body": json.dumps(body) if body is not None else None,

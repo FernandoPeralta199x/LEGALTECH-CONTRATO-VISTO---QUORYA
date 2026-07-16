@@ -23,7 +23,8 @@ from src.services.pricing.org_config import read_module_overrides
 from src.services.pricing.estimate import estimate, normalize_selected_modules
 from src.services.storage import storage_service
 from src.services.triage_plan import plan_for_selection
-from src.utils.context import require_user, require_writer
+from src.utils.context import (CallerRevoked, assert_active_writer, require_user,
+                               require_writer)
 from src.utils.helpers import error_response, generate_uuid, success_response
 from src.utils.lambda_io import fmt_validation_error as _fmt, parse_json_body as _parse_body, valid_uuid as _valid_uuid
 from src.utils.safety import enforce_production_safety
@@ -96,6 +97,8 @@ def create_request(event, context):
 
     try:
         with tenant_tx(uid, user["role"], org) as cur:
+            # SEC-01: fecha a janela de revogação (~2h) do token antes de qualquer escrita.
+            assert_active_writer(cur, uid, org)
             # quota de casos da organização (pricing_configs.cases_limit); NULL => ilimitado
             assert_cases_within_limit(cur, org)
             # overrides de preço da organização (pricing_configs) — repo único (be-dry-03)
@@ -206,6 +209,8 @@ def create_request(event, context):
                     " VALUES (%s,%s,%s,%s,%s,%s)",
                     (org, case_id, etype, etitle, edesc, eactor),
                 )
+    except CallerRevoked:
+        return error_response(403, "Permissão de escrita revogada")
     except CasesLimitReached:
         return error_response(402, "limite de casos da organização atingido")
     except psycopg2.errors.UniqueViolation:

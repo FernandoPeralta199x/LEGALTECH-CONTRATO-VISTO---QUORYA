@@ -14,7 +14,8 @@ from pydantic import ValidationError
 
 from src.schemas.client_schemas import ClientCreateSchema, ClientUpdateSchema
 from src.services.database import tenant_tx
-from src.utils.context import require_user, require_writer
+from src.utils.context import (CallerRevoked, assert_active_writer, require_user,
+                               require_writer)
 from src.utils.helpers import error_response, success_response
 from src.utils.pii import mask_document
 from src.utils.lambda_io import fmt_validation_error as _fmt, parse_json_body as _parse_body, parse_pagination as _paginate, valid_uuid as _valid_uuid
@@ -38,6 +39,8 @@ def create_client(event, context):
 
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
+            # SEC-01: fecha a janela de revogação (~2h) do token; usa o papel ATUAL do banco.
+            role = assert_active_writer(cur, user["user_id"], user["organization_id"])
             cur.execute(
                 "INSERT INTO public.clients"
                 " (organization_id, legal_name, document_type, document_number, email, phone,"
@@ -51,6 +54,8 @@ def create_client(event, context):
                  data.address_city, data.address_state, data.address_zip, data.rg),
             )
             row = cur.fetchone()
+    except CallerRevoked:
+        return error_response(403, "Permissão de escrita revogada")
     except psycopg2.errors.UniqueViolation:
         return error_response(409, "document_number já cadastrado")
     except Exception as e:
@@ -60,7 +65,7 @@ def create_client(event, context):
         return error_response(500, "Erro ao criar cliente")
 
     logger.info(json.dumps({"event": "CLIENT_CREATED", "client_id": str(row["id"])}))
-    return success_response(201, "Cliente criado com sucesso", _serialize(row, user["role"]))
+    return success_response(201, "Cliente criado com sucesso", _serialize(row, role))
 
 
 @require_user
@@ -154,6 +159,8 @@ def update_client(event, context):
 
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
+            # SEC-01: fecha a janela de revogação (~2h) do token; usa o papel ATUAL do banco.
+            role = assert_active_writer(cur, user["user_id"], user["organization_id"])
             cur.execute(
                 f"UPDATE public.clients SET {', '.join(fields)} WHERE id = %s",
                 tuple(values),
@@ -162,11 +169,13 @@ def update_client(event, context):
                 return error_response(404, "Cliente não encontrado")
             cur.execute(_SELECT_COLS + " WHERE id = %s", (client_id,))
             row = cur.fetchone()
+    except CallerRevoked:
+        return error_response(403, "Permissão de escrita revogada")
     except Exception as e:
         logger.error(json.dumps({"event": "CLIENT_UPDATE_ERROR", "error": type(e).__name__}))
         return error_response(500, "Erro ao atualizar cliente")
     logger.info(json.dumps({"event": "CLIENT_UPDATED", "client_id": client_id}))
-    return success_response(200, "Cliente atualizado com sucesso", _serialize(row, user["role"]))
+    return success_response(200, "Cliente atualizado com sucesso", _serialize(row, role))
 
 
 @require_user
@@ -178,12 +187,16 @@ def delete_client(event, context):
         return error_response(400, "clientId inválido")
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
+            # SEC-01: fecha a janela de revogação (~2h) do token antes de desativar.
+            assert_active_writer(cur, user["user_id"], user["organization_id"])
             cur.execute(
                 "UPDATE public.clients SET status = 'inactive', is_active = false,"
                 " updated_at = NOW() WHERE id = %s",
                 (client_id,),
             )
             updated = cur.rowcount
+    except CallerRevoked:
+        return error_response(403, "Permissão de escrita revogada")
     except Exception as e:
         logger.error(json.dumps({"event": "CLIENT_DELETE_ERROR", "error": type(e).__name__}))
         return error_response(500, "Erro ao deletar cliente")

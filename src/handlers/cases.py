@@ -18,7 +18,8 @@ from src.services.database import tenant_tx
 from src.services.pricing.installments import compute_installment_options
 from src.services.pricing.org_config import read_installment_config
 from src.handlers.requests import _next_request_code
-from src.utils.context import require_user, require_writer
+from src.utils.context import (CallerRevoked, assert_active_writer, require_user,
+                               require_writer)
 from src.utils.doc_status import to_v2_status
 from src.utils.mime import mime_for
 from src.services.case_lifecycle import CasesLimitReached, assert_cases_within_limit
@@ -89,6 +90,8 @@ def create_case(event, context):
 
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
+            # SEC-01: fecha a janela de revogação (~2h) do token antes de qualquer escrita.
+            assert_active_writer(cur, user["user_id"], user["organization_id"])
             # Cliente deve existir (evita FK→500) e estar ATIVO (não criar caso
             # para cliente desativado).
             cur.execute("SELECT status FROM public.clients WHERE id = %s", (client_id,))
@@ -111,6 +114,8 @@ def create_case(event, context):
                  title, product, code),
             )
             row = cur.fetchone()
+    except CallerRevoked:
+        return error_response(403, "Permissão de escrita revogada")
     except _ClientNotFound:
         return error_response(400, "client_id inexistente")
     except _ClientInactive:
@@ -506,6 +511,8 @@ def update_case(event, context):
 
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
+            # SEC-01: fecha a janela de revogação (~2h) do token antes de qualquer escrita.
+            assert_active_writer(cur, user["user_id"], user["organization_id"])
             # #6: assigned_to deve ser um usuário ATIVO da MESMA organização — não um
             # UUID qualquer/de outra org (achado do pentest 2026-07-09).
             if data.assigned_to is not None:
@@ -523,6 +530,8 @@ def update_case(event, context):
             cur.execute(
                 f"SELECT {_CASE_COLS} FROM public.cases WHERE id = %s", (case_id,))
             row = cur.fetchone()
+    except CallerRevoked:
+        return error_response(403, "Permissão de escrita revogada")
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_UPDATE_ERROR",
                                  "error": type(e).__name__,
@@ -541,11 +550,15 @@ def delete_case(event, context):
         return error_response(400, "caseId inválido")
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
+            # SEC-01: fecha a janela de revogação (~2h) do token antes de arquivar.
+            assert_active_writer(cur, user["user_id"], user["organization_id"])
             # soft-delete: a UI promete arquivar (recuperável), não apaga de fato
             cur.execute("UPDATE public.cases SET deleted_at = now()"
                         " WHERE id = %s AND deleted_at IS NULL RETURNING deleted_at", (case_id,))
             row = cur.fetchone()
             deleted = cur.rowcount
+    except CallerRevoked:
+        return error_response(403, "Permissão de escrita revogada")
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_DELETE_ERROR",
                                  "error": type(e).__name__,

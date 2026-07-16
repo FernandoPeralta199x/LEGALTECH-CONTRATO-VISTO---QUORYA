@@ -15,7 +15,8 @@ from src.services.case_lifecycle import (
 )
 from src.services.database import tenant_tx
 from src.services.triage_runner import run_case_triage
-from src.utils.context import require_user, require_writer
+from src.utils.context import (CallerRevoked, assert_active_writer, require_user,
+                               require_writer)
 from src.utils.helpers import error_response, success_response
 from src.utils.lambda_io import valid_uuid as _valid_uuid
 from src.utils.safety import enforce_production_safety
@@ -81,12 +82,16 @@ def run_triage(event, context):
         return error_response(400, "caseId inválido")
     try:
         with tenant_tx(user["user_id"], user["role"], org) as cur:
+            # SEC-01: fecha a janela de revogação (~2h) do token antes de escrever.
+            assert_active_writer(cur, user["user_id"], org)
             # CVS-007: caso inexistente/deletado (404) ou finalizado (409) não roda triagem
             # (evita "desfazer" a conclusão de um caso já completed/closed).
             assert_case_writable(cur, case_id)
             # Gate de pagamento (PAYMENT_GATE=hard): triagem só roda com o pedido pago.
             assert_case_paid(cur, case_id)
             result = run_case_triage(cur, org, case_id, user["user_id"])
+    except CallerRevoked:
+        return error_response(403, "Permissão de escrita revogada")
     except CaseNotVisible:
         return error_response(404, "Caso não encontrado")
     except CaseFinalized:

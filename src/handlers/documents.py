@@ -20,7 +20,8 @@ from src.services.document_ingestion import DocumentNotFound, OcrFailed, ingest_
 from src.services.document_worker import process_job
 from src.services.queue import create_queue_client
 from src.services.storage import storage_service
-from src.utils.context import WRITE_ROLES, require_user, require_writer
+from src.utils.context import (CallerRevoked, WRITE_ROLES, assert_active_writer,
+                               require_user, require_writer)
 from src.utils.doc_status import DOC_STATUS_MAP as _DOC_STATUS_MAP, DOC_STATUS_REV as _DOC_STATUS_REV
 from src.utils.helpers import error_response, success_response
 from src.utils.mime import mime_for
@@ -66,6 +67,8 @@ def upload_document(event, context):
 
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
+            # SEC-01: fecha a janela de revogação (~2h) do token antes de escrever.
+            assert_active_writer(cur, user["user_id"], user["organization_id"])
             # Atômico: só insere se o case for VISÍVEL ao usuário (RLS de cases).
             cur.execute(
                 "INSERT INTO public.documents"
@@ -90,6 +93,8 @@ def upload_document(event, context):
                 if cur.fetchone() is None:
                     raise _CaseNotVisible()
                 raise _CaseFinalized()
+    except CallerRevoked:
+        return error_response(403, "Permissão de escrita revogada")
     except _CaseNotVisible:
         return error_response(404, "Caso não encontrado ou sem acesso")
     except _CaseFinalized:
@@ -126,7 +131,11 @@ def process_document(event, context):
         return error_response(400, "docId inválido")
     try:
         with tenant_tx(user["user_id"], user["role"], org) as cur:
+            # SEC-01: fecha a janela de revogação (~2h) do token antes de escrever.
+            assert_active_writer(cur, user["user_id"], org)
             res = ingest_document(cur, org, doc_id)
+    except CallerRevoked:
+        return error_response(403, "Permissão de escrita revogada")
     except DocumentNotFound:
         return error_response(404, "Documento não encontrado")
     except OcrFailed:
@@ -165,6 +174,8 @@ def enqueue_processing(event, context):
         return error_response(400, "docId inválido")
     try:
         with tenant_tx(user["user_id"], user["role"], org) as cur:
+            # SEC-01: fecha a janela de revogação (~2h) do token antes de escrever.
+            assert_active_writer(cur, user["user_id"], org)
             cur.execute("SELECT id, case_id FROM public.documents WHERE id = %s" + _ACTIVE_CASE,
                         (doc_id,))
             doc = cur.fetchone()
@@ -180,6 +191,8 @@ def enqueue_processing(event, context):
                 process_job(cur, org, job)
             result = EnqueueDocumentProcessingResult(
                 job_id=job.job_id, queue_backend=client.backend, document_id=doc_id)
+    except CallerRevoked:
+        return error_response(403, "Permissão de escrita revogada")
     except Exception as e:
         logger.error(json.dumps({"event": "DOCUMENT_ENQUEUE_ERROR", "error": type(e).__name__,
                                  "pgcode": getattr(e, "pgcode", None)}))
@@ -258,11 +271,15 @@ def update_document(event, context):
     vals.append(doc_id)
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
+            # SEC-01: fecha a janela de revogação (~2h) do token antes de escrever.
+            assert_active_writer(cur, user["user_id"], user["organization_id"])
             cur.execute(
                 f"UPDATE public.documents SET {', '.join(sets)} WHERE id = %s" + _ACTIVE_CASE +
                 " RETURNING id, case_id, file_name, file_type, file_size_bytes, file_hash,"
                 " ocr_status, uploaded_by, created_at", tuple(vals))
             row = cur.fetchone()
+    except CallerRevoked:
+        return error_response(403, "Permissão de escrita revogada")
     except Exception as e:
         logger.error(json.dumps({"event": "DOCUMENT_UPDATE_ERROR", "error": type(e).__name__,
                                  "pgcode": getattr(e, "pgcode", None)}))
@@ -286,9 +303,14 @@ def get_document_download_url(event, context):
         return error_response(400, "docId inválido")
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
+            # SEC-01: writer-only fecha a janela de revogação (~2h) — um analyst desativado
+            # não deve obter URL do documento CRU (com PII) até o token expirar.
+            assert_active_writer(cur, user["user_id"], user["organization_id"])
             cur.execute("SELECT s3_path FROM public.documents WHERE id = %s" + _ACTIVE_CASE,
                         (doc_id,))
             row = cur.fetchone()
+    except CallerRevoked:
+        return error_response(403, "Permissão de escrita revogada")
     except Exception as e:
         logger.error(json.dumps({"event": "DOCUMENT_DOWNLOAD_URL_ERROR",
                                  "error": type(e).__name__}))
