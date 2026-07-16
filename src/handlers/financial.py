@@ -10,7 +10,8 @@ from datetime import datetime, timedelta, timezone
 
 from src.services.database import tenant_tx
 from src.services.financial.overview import compute_overview
-from src.utils.context import require_user
+from src.utils.context import (CallerRevoked, assert_active_admin, require_role,
+                               require_user)
 from src.utils.helpers import error_response, success_response
 from src.utils.safety import enforce_production_safety
 
@@ -88,6 +89,7 @@ def _resolve_range(params: dict):
 
 
 @require_user
+@require_role("admin")
 def get_overview(event, context):
     """KPIs financeiros agregados da organização autenticada, no período."""
     user = event["user"]
@@ -100,7 +102,12 @@ def get_overview(event, context):
 
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
+            # SEC-02b: o Financeiro é admin-only. @require_role lê só o papel HISTÓRICO do
+            # token; reconsulta o papel ATUAL no banco para fechar a janela de revogação (~2h).
+            assert_active_admin(cur, user["user_id"], user["organization_id"])
             kpis = compute_overview(cur, start, end)
+    except CallerRevoked:
+        return error_response(403, "Permissão administrativa revogada")
     except Exception as e:
         logger.error(json.dumps({"event": "FINANCIAL_OVERVIEW_ERROR", "error": type(e).__name__}))
         return error_response(500, "Erro ao obter visão financeira")

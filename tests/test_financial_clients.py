@@ -134,7 +134,7 @@ def test_clients_isolado_por_org():
     cid = _seed_client(SYSTEM_ORG, "Cliente A")
     case = _seed_case(SYSTEM_ORG, cid)
     _seed_request(price=30000, case_id=case)
-    b = str(uuid.uuid4())
+    b = _admin(org=OTHER_ORG)  # admin ATIVO na outra org: o 0 vem da RLS, nao do 403 (SEC-02b)
     d = _data(cli_h.list_clients_revenue(_event(b, org_id=OTHER_ORG), None))
     assert d["summary"]["gross_cents"] == 0 and d["items"] == []
 

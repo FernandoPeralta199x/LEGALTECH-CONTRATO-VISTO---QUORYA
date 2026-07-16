@@ -146,7 +146,7 @@ def test_api_costs_revogacao_403():
 def test_api_costs_isolado_por_org():
     a = _admin()
     ac_h.create_api_cost(_event(a, body=_cost()), None)
-    b = str(uuid.uuid4())
+    b = _admin(org=OTHER_ORG)  # admin ATIVO na outra org: o 0 vem da RLS, nao do 403 (SEC-02b)
     data = _data(ac_h.list_api_costs(_event(b, org_id=OTHER_ORG), None))
     assert data["total"] == 0
     assert data["summary"]["api_cost_cents"] == 0

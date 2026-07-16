@@ -120,7 +120,7 @@ def test_report_consolida_todas_secoes():
 def test_report_isolado_por_org():
     a = _admin()
     req_h.create_request(_event(a, body=_sale_payload()), None)
-    b = str(uuid.uuid4())
+    b = _admin(org=OTHER_ORG)  # admin ATIVO na outra org: o 0 vem da RLS, nao do 403 (SEC-02b)
     d = _data(rep_h.get_executive_report(_event(b, org_id=OTHER_ORG), None))
     assert d["overview"]["count"] == 0
     assert d["api_costs"]["by_provider"] == [] and d["taxes"]["by_type"] == []

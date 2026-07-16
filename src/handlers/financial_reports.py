@@ -16,7 +16,8 @@ from src.services.financial.fiscal_documents import (compute_fiscal_documents,
                                                      fiscal_by_status)
 from src.services.financial.overview import compute_overview
 from src.services.financial.taxes import compute_taxes, taxes_by_type
-from src.utils.context import require_user
+from src.utils.context import (CallerRevoked, assert_active_admin, require_role,
+                               require_user)
 from src.utils.helpers import error_response, success_response
 from src.utils.safety import enforce_production_safety
 
@@ -37,6 +38,7 @@ _REPORT_DISCLAIMERS = [
 
 
 @require_user
+@require_role("admin")
 def get_executive_report(event, context):
     """DTO consolidado do relatório executivo da organização, no período."""
     user = event["user"]
@@ -50,6 +52,8 @@ def get_executive_report(event, context):
     try:
         # Tudo na MESMA tenant_tx → RLS por org aplicada e leitura consistente.
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
+            # SEC-02b: Financeiro é admin-only; fecha a janela de revogação (~2h) do token.
+            assert_active_admin(cur, user["user_id"], user["organization_id"])
             overview = compute_overview(cur, start, end)
             api_summary = compute_api_costs(cur, start, end)
             api_by_provider = costs_by_provider(cur, start, end)
@@ -57,6 +61,8 @@ def get_executive_report(event, context):
             tax_by_type = taxes_by_type(cur, start, end)
             fiscal_summary = compute_fiscal_documents(cur, start, end)
             fiscal_status = fiscal_by_status(cur, start, end)  # var local ≠ função importada
+    except CallerRevoked:
+        return error_response(403, "Permissão administrativa revogada")
     except Exception as e:
         logger.error(json.dumps({"event": "FINANCIAL_REPORT_ERROR", "error": type(e).__name__}))
         return error_response(500, "Erro ao gerar o relatório executivo")

@@ -10,14 +10,12 @@ O cursor deve vir de ``tenant_tx`` (RLS por organização já aplicada).
 """
 
 from src.services.financial.api_costs import compute_api_costs
+from src.services.financial.buckets import CANCELED, PENDING, RECEIVED, SIMULATED
 from src.services.financial.fiscal_documents import compute_fiscal_documents
 from src.services.financial.taxes import compute_taxes
 
-# Buckets de payment_status — espelham adapters/payment.Status.
-_RECEIVED = ["paid", "simulated"]        # dinheiro que entrou (simulated = mock pago em dev)
-_PENDING = ["pending", "processing"]     # venda feita, ainda não paga
-_CANCELED = ["canceled", "expired", "failed"]
-
+# PRC-01: `simulated` (pagamento mock) NÃO conta como recebido em produção — só em dev.
+# É sempre reportado à parte em `simulated_cents` (linha honesta "sem cobrança real").
 _SQL = """
     SELECT
       count(*)                                  AS count_all,
@@ -29,6 +27,8 @@ _SQL = """
                FILTER (WHERE payment_status = ANY(%(pending)s)), 0)  AS pending_cents,
       COALESCE(SUM(total_price_cents)
                FILTER (WHERE payment_status = ANY(%(canceled)s)), 0) AS canceled_cents,
+      COALESCE(SUM(total_price_cents)
+               FILTER (WHERE payment_status = ANY(%(simulated)s)), 0) AS simulated_cents,
       COALESCE(SUM(total_price_cents)
                FILTER (WHERE payment_status = 'refunded'), 0)        AS refunded_cents
     FROM public.requests
@@ -42,9 +42,10 @@ def compute_overview(cur, start, end) -> dict:
     Valores monetários em centavos (int). KPIs sem fonte de dados = ``None``.
     """
     cur.execute(_SQL, {
-        "received": _RECEIVED,
-        "pending": _PENDING,
-        "canceled": _CANCELED,
+        "received": RECEIVED,
+        "pending": PENDING,
+        "canceled": CANCELED,
+        "simulated": SIMULATED,
         "start": start,
         "end": end,
     })
@@ -67,6 +68,8 @@ def compute_overview(cur, start, end) -> dict:
         "received_cents": int(r["received_cents"]),
         "pending_cents": int(r["pending_cents"]),
         "canceled_cents": int(r["canceled_cents"]),
+        # PRC-01: pagamentos mock (simulated) reportados à parte — em prod não entram no recebido.
+        "simulated_cents": int(r["simulated_cents"]),
         "refunded_cents": int(r["refunded_cents"]),
         "ticket_cents": ticket,
         "api_cost_cents": api["api_cost_cents"],

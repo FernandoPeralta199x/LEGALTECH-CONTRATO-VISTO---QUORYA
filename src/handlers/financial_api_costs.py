@@ -31,6 +31,7 @@ _VALID_STATUS = {"previsto", "processado"}
 
 
 @require_user
+@require_role("admin")
 def list_api_costs(event, context):
     """Lista + agrega custos de API da organização, no período."""
     user = event["user"]
@@ -53,10 +54,14 @@ def list_api_costs(event, context):
 
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
+            # SEC-02b: Financeiro é admin-only; fecha a janela de revogação (~2h) do token.
+            assert_active_admin(cur, user["user_id"], user["organization_id"])
             summary = svc.compute_api_costs(cur, start, end)
             by_provider = svc.costs_by_provider(cur, start, end)
             automatic = svc.automatic_api_costs(cur, start, end)
             items, total = svc.list_costs(cur, start, end, provider, status, page_size, offset)
+    except CallerRevoked:
+        return error_response(403, "Permissão administrativa revogada")
     except Exception as e:
         logger.error(json.dumps({"event": "API_COSTS_LIST_ERROR", "error": type(e).__name__}))
         return error_response(500, "Erro ao listar custos de API")

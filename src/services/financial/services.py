@@ -7,10 +7,9 @@ Custo e margem POR SERVIÇO não têm fonte hoje (external_api_costs é por prov
 sem mapeamento produto↔custo) → o frontend os exibe honestamente como "—".
 """
 
-# Buckets de payment_status — espelham src/services/financial/overview.py.
-_RECEIVED = ["paid", "simulated"]        # dinheiro que entrou (simulated = mock pago em dev)
-_PENDING = ["pending", "processing"]     # venda feita, ainda não paga
-_CANCELED = ["canceled", "expired", "failed"]
+# Buckets de payment_status — fonte única em buckets.py (PRC-01: `simulated` (mock)
+# NUNCA conta como recebido; é reportado à parte).
+from src.services.financial.buckets import CANCELED, PENDING, RECEIVED
 
 _SUMMARY_SQL = """
     SELECT
@@ -47,7 +46,7 @@ _BY_PRODUCT_SQL = """
 
 
 def _params(start, end):
-    return {"received": _RECEIVED, "pending": _PENDING, "canceled": _CANCELED,
+    return {"received": RECEIVED, "pending": PENDING, "canceled": CANCELED,
             "start": start, "end": end}
 
 

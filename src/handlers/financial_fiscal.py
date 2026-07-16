@@ -57,6 +57,7 @@ def _parse_dt(value):
 
 # ── Tributos ────────────────────────────────────────────────────────────────
 @require_user
+@require_role("admin")
 def list_taxes(event, context):
     user = event["user"]
     params = event.get("queryStringParameters") or {}
@@ -76,9 +77,13 @@ def list_taxes(event, context):
         return error_response(400, "status inválido")
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
+            # SEC-02b: Financeiro é admin-only; fecha a janela de revogação (~2h) do token.
+            assert_active_admin(cur, user["user_id"], user["organization_id"])
             summary = tax.compute_taxes(cur, start, end)
             by_type = tax.taxes_by_type(cur, start, end)
             items, total = tax.list_taxes(cur, start, end, tax_type, status, page_size, offset)
+    except CallerRevoked:
+        return error_response(403, "Permissão administrativa revogada")
     except Exception as e:
         logger.error(json.dumps({"event": "TAXES_LIST_ERROR", "error": type(e).__name__}))
         return error_response(500, "Erro ao listar tributos")
@@ -131,6 +136,7 @@ def create_tax(event, context):
 
 # ── Notas fiscais ─────────────────────────────────────────────────────────────
 @require_user
+@require_role("admin")
 def list_fiscal_documents(event, context):
     user = event["user"]
     params = event.get("queryStringParameters") or {}
@@ -150,9 +156,13 @@ def list_fiscal_documents(event, context):
         return error_response(400, "status inválido")
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
+            # SEC-02b: Financeiro é admin-only; fecha a janela de revogação (~2h) do token.
+            assert_active_admin(cur, user["user_id"], user["organization_id"])
             summary = fdoc.compute_fiscal_documents(cur, start, end)
             by_status = fdoc.fiscal_by_status(cur, start, end)
             items, total = fdoc.list_fiscal_documents(cur, start, end, doc_type, status, page_size, offset)
+    except CallerRevoked:
+        return error_response(403, "Permissão administrativa revogada")
     except Exception as e:
         logger.error(json.dumps({"event": "FISCAL_LIST_ERROR", "error": type(e).__name__}))
         return error_response(500, "Erro ao listar notas fiscais")

@@ -9,9 +9,9 @@ cliente RECONCILIE com o bruto global — nunca descartamos receita em silêncio
 Sem migration (só leitura) e sem coluna nova.
 """
 
-# Buckets de payment_status — espelham src/services/financial/overview.py.
-_RECEIVED = ["paid", "simulated"]
-_PENDING = ["pending", "processing"]
+# Buckets de payment_status — fonte única em buckets.py (PRC-01: `simulated` (mock)
+# NUNCA conta como recebido; é reportado à parte).
+from src.services.financial.buckets import PENDING, RECEIVED
 
 # LEFT JOIN preserva vendas não-atribuíveis (case_id NULL ou client_id NULL) no
 # grupo cl.id IS NULL. O match por organization_id é redundante com a RLS (belt +
@@ -66,7 +66,7 @@ _COUNT_SQL = ("SELECT count(*) AS n FROM (SELECT cl.id" + _JOIN +
 
 
 def _params(start, end):
-    return {"received": _RECEIVED, "pending": _PENDING, "start": start, "end": end}
+    return {"received": RECEIVED, "pending": PENDING, "start": start, "end": end}
 
 
 def compute_clients_summary(cur, start, end) -> dict:

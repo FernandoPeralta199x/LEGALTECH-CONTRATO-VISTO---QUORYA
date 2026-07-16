@@ -109,7 +109,7 @@ def test_services_agrega_por_produto():
 def test_services_isolado_por_org():
     a = _admin()
     _seed_request(org=SYSTEM_ORG, price=10000)
-    b = str(uuid.uuid4())
+    b = _admin(org=OTHER_ORG)  # admin ATIVO na outra org: o 0 vem da RLS, nao do 403 (SEC-02b)
     d = _data(svc_h.list_services(_event(b, org_id=OTHER_ORG), None))
     assert d["summary"]["gross_cents"] == 0 and d["summary"]["by_product"] == []
 

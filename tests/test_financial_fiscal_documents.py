@@ -154,7 +154,7 @@ def test_fiscal_revogacao_403():
 def test_fiscal_isolado_por_org():
     a = _admin()
     ff_h.create_fiscal_document(_event(a, body=_note()), None)
-    b = str(uuid.uuid4())
+    b = _admin(org=OTHER_ORG)  # admin ATIVO na outra org: o 0 vem da RLS, nao do 403 (SEC-02b)
     assert _data(ff_h.list_fiscal_documents(_event(b, org_id=OTHER_ORG), None))["total"] == 0
 
 

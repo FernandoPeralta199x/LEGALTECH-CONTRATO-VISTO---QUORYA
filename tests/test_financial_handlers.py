@@ -32,6 +32,27 @@ def _reset():
     conn.close()
 
 
+def _seed_user(user_id, org=SYSTEM_ORG, role="admin", status="active"):
+    """Semeia public.users — o overview financeiro é admin-only e reconsulta o papel
+    ATUAL no banco (assert_active_admin, SEC-02b), então um user_id sintético leva 403."""
+    conn = admin_conn()
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO public.users (id, email, password_hash, name, role, status, organization_id)"
+            " VALUES (%s,%s,'x','Test',%s,%s,%s)"
+            " ON CONFLICT (id) DO UPDATE SET role=EXCLUDED.role, status=EXCLUDED.status",
+            (user_id, f"u_{user_id}@t.c", role, status, org))
+    conn.close()
+
+
+def _admin(org=SYSTEM_ORG):
+    """user_id de um admin ATIVO e existente no banco (na org indicada)."""
+    uid = str(uuid.uuid4())
+    _seed_user(uid, org=org, role="admin", status="active")
+    return uid
+
+
 def _event(user_id, role="admin", org_id=SYSTEM_ORG, query=None, body=None):
     return {
         "requestContext": {"authorizer": {"user_id": user_id, "email": "u@t.c",
@@ -88,7 +109,7 @@ def _clean():
 
 
 def test_overview_vazio():
-    a = str(uuid.uuid4())
+    a = _admin()
     data = _data(fin_h.get_overview(_event(a), None))
     k = data["kpis"]
     assert k["count"] == 0
@@ -107,7 +128,7 @@ def test_overview_vazio():
 
 
 def test_overview_conta_soma_pendente():
-    a = str(uuid.uuid4())
+    a = _admin()
     req_h.create_request(_event(a, body=_payload()), None)
     req_h.create_request(_event(a, body=_payload("dados_partes")), None)
 
@@ -127,7 +148,7 @@ def test_overview_conta_soma_pendente():
 
 
 def test_overview_recebido_vs_pendente():
-    a = str(uuid.uuid4())
+    a = _admin()
     req_h.create_request(_event(a, body=_payload()), None)
     req_h.create_request(_event(a, body=_payload("dados_partes")), None)
 
@@ -141,7 +162,7 @@ def test_overview_recebido_vs_pendente():
 
 
 def test_overview_periodo_exclui_fora_do_intervalo():
-    a = str(uuid.uuid4())
+    a = _admin()
     req_h.create_request(_event(a, body=_payload()), None)
     # criada agora → não deve aparecer no "mês passado"
     k = _data(fin_h.get_overview(_event(a, query={"period": "lastMonth"}), None))["kpis"]
@@ -153,28 +174,31 @@ def test_overview_periodo_exclui_fora_do_intervalo():
 
 
 def test_overview_isolado_por_org():
-    a, b = str(uuid.uuid4()), str(uuid.uuid4())
+    # `a` vende na SYSTEM_ORG; `b` é admin da OTHER_ORG (semeado lá) e não pode enxergar
+    # as vendas de `a`. b precisa ser admin ATIVO na sua org — senão o 0 viria do 403
+    # (SEC-02b), não da RLS, e o teste deixaria de provar isolamento por organização.
+    a = _admin()
+    b = _admin(org=OTHER_ORG)
     req_h.create_request(_event(a, body=_payload()), None)
-    # outra organização não enxerga as vendas (RLS)
     k = _data(fin_h.get_overview(_event(b, org_id=OTHER_ORG), None))["kpis"]
     assert k["count"] == 0
     assert k["gross_cents"] == 0
 
 
 def test_overview_periodo_invalido():
-    a = str(uuid.uuid4())
+    a = _admin()
     resp = fin_h.get_overview(_event(a, query={"period": "xpto"}), None)
     assert resp["statusCode"] == 400
 
 
 def test_overview_custom_exige_from_to():
-    a = str(uuid.uuid4())
+    a = _admin()
     resp = fin_h.get_overview(_event(a, query={"period": "custom"}), None)
     assert resp["statusCode"] == 400
 
 
 def test_overview_buckets_por_status():
-    a = str(uuid.uuid4())
+    a = _admin()
     for _ in range(4):
         req_h.create_request(_event(a, body=_payload()), None)
     prices = _prices()
@@ -186,14 +210,35 @@ def test_overview_buckets_por_status():
     _set_status(ids[3], "simulated")
 
     k = _data(fin_h.get_overview(_event(a), None))["kpis"]
-    assert k["received_cents"] == cents[ids[0]] + cents[ids[3]]   # paid + simulated
+    # PRC-01: 'recebido' é só dinheiro REAL (paid); o mock 'simulated' fica à parte.
+    assert k["received_cents"] == cents[ids[0]]                   # só paid
+    assert k["simulated_cents"] == cents[ids[3]]                  # simulated reportado à parte
     assert k["canceled_cents"] == cents[ids[1]]
     assert k["refunded_cents"] == cents[ids[2]]
     assert k["pending_cents"] == 0
 
 
+def test_overview_simulated_nunca_conta_como_recebido():
+    """PRC-01: um pagamento MOCK (simulated) NUNCA conta como receita recebida — o dinheiro
+    nunca entrou. É sempre reportado à parte em simulated_cents, em TODOS os ambientes.
+    Sem isso, o Relatório Executivo superdimensionava o recebido (~5,4× nos dados de dev)."""
+    a = _admin()
+    for _ in range(2):
+        req_h.create_request(_event(a, body=_payload()), None)
+    ids = [pid for pid, _ in _prices()]
+    cents = {pid: c for pid, c in _prices()}
+    _set_status(ids[0], "paid")
+    _set_status(ids[1], "simulated")
+
+    k = _data(fin_h.get_overview(_event(a), None))["kpis"]
+    assert k["received_cents"] == cents[ids[0]], "simulated não pode contar como recebido"
+    assert k["simulated_cents"] == cents[ids[1]]
+    # reconciliação: bruto = recebido + pendente + cancelado + simulado + reembolsado
+    assert k["gross_cents"] == cents[ids[0]] + cents[ids[1]]
+
+
 def test_overview_custom_valido_inclusivo():
-    a = str(uuid.uuid4())
+    a = _admin()
     req_h.create_request(_event(a, body=_payload()), None)
     incluso = _data(fin_h.get_overview(
         _event(a, query={"period": "custom", "from": "2020-01-01", "to": "2035-12-31"}), None))["kpis"]
@@ -204,7 +249,28 @@ def test_overview_custom_valido_inclusivo():
 
 
 def test_overview_custom_data_invalida():
-    a = str(uuid.uuid4())
+    a = _admin()
     resp = fin_h.get_overview(
         _event(a, query={"period": "custom", "from": "abc", "to": "2026-01-01"}), None)
     assert resp["statusCode"] == 400
+
+
+def test_overview_admin_only(monkeypatch):
+    """SEC-02b: o Financeiro é admin-only no backend, não só no AdminGuard do frontend.
+
+    Antes da correção, viewer/analyst recebiam 200 (o handler tinha só @require_user).
+    Agora: @require_role nega quem não é admin no token; e assert_active_admin nega
+    quem virou não-admin no banco depois do login (janela de revogação).
+    """
+    # (a) papel do token não é admin -> 403 já no decorator, sem tocar no banco
+    v = _admin()  # existe no banco, mas o token diz viewer
+    assert fin_h.get_overview(_event(v, role="viewer"), None)["statusCode"] == 403
+    assert fin_h.get_overview(_event(v, role="analyst"), None)["statusCode"] == 403
+    # (b) token diz admin, mas o banco já rebaixou -> 403 pelo recheck ATUAL
+    a = _admin()
+    assert fin_h.get_overview(_event(a), None)["statusCode"] == 200  # admin real: ok
+    _seed_user(a, role="viewer", status="active")
+    assert fin_h.get_overview(_event(a), None)["statusCode"] == 403
+    # (c) conta desativada -> 403
+    _seed_user(a, role="admin", status="inactive")
+    assert fin_h.get_overview(_event(a), None)["statusCode"] == 403
