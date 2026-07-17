@@ -225,7 +225,11 @@ def _mask_document(num):
     return mask_document(num)
 
 
-def _serialize(row, role="admin") -> dict:
+def _serialize(row, role) -> dict:
+    # SEC-08: `role` é obrigatório (sem default). É a função que decide a máscara de
+    # PII (viewer vê documento mascarado + e-mail/telefone/endereço/RG nulos); um
+    # default "admin" tornaria o ESQUECIMENTO do argumento um vazamento silencioso de
+    # PII. Sem default, o esquecimento vira TypeError no teste, não incidente em prod.
     document = row["document_number"]
     email = row.get("email")
     phone = row.get("phone")

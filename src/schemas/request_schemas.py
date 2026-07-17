@@ -1,6 +1,8 @@
 """Schemas Pydantic do Pedido (wizard Novo Pedido) — POST /requests."""
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from src.schemas.br_documents import validate_document
@@ -55,7 +57,11 @@ class RequestCreateSchema(BaseModel):
     product_label: str | None = Field(default=None, max_length=128)
     title: str | None = Field(default=None, max_length=255)
     description: str | None = Field(default=None, max_length=2000)
-    source_mode: str = "local"
+    # SRC-02: procedência é domínio fechado, não texto livre do cliente. Aceita só o
+    # que o wizard envia ("local") + o modo misto legítimo ("hybrid"); rejeita "real"/
+    # "mock"/"simulated" (forjar procedência) e strings > varchar(32) (que causavam
+    # StringDataRightTruncation → 500 na criação de pedido). Espelha reportLabels.ts.
+    source_mode: Literal["local", "hybrid"] = "local"
     idempotency_key: str | None = Field(default=None, max_length=255)
     parties: list[PartyInput] = Field(default_factory=list)
     document: DocumentInput | None = None
