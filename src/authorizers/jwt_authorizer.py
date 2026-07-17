@@ -86,7 +86,10 @@ def authorize(event, context):
             'context': {  # sem email (menos PII propagada aos handlers)
                 'user_id': payload['user_id'],
                 'role': payload['role'],
-                'organization_id': organization_id
+                'organization_id': organization_id,
+                # AUTH-02: propaga o iat (epoch) p/ load_active_caller revogar tokens
+                # anteriores ao último reset de senha. API Gateway serializa como string.
+                'iat': payload.get('iat')
             }
         }
     
