@@ -96,6 +96,15 @@ def create_case_payment(event, context):
             # soft (spec §7): recalcula com a config vigente; só registra a divergência
             logger.info(json.dumps({"event": "PAYMENT_CONFIG_VERSION_DIVERGED",
                                     "sent": sel.pricing_config_version, "current": iver}))
+        # PRC-02: consentimento por VALOR. Se a tela mandou o total que exibiu e ele não
+        # bate com o recalculado, NÃO cobra silenciosamente um valor diferente do
+        # confirmado — pede revisão (409). Não emite cobrança (falha antes da reserva).
+        if (sel.expected_total_cents is not None
+                and sel.expected_total_cents != opt["valor_total_cents"]):
+            logger.info(json.dumps({"event": "PAYMENT_TOTAL_DIVERGED",
+                                    "expected": sel.expected_total_cents,
+                                    "current": opt["valor_total_cents"]}))
+            return error_response(409, "Os valores foram atualizados. Revise o novo total antes de confirmar.")
 
         # ── Reserva atômica (anti-dupla-cobrança): só um request passa de pending->processing.
         #    Fecha a janela entre "checar" e "cobrar": quem perde a corrida recebe 409.

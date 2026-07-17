@@ -196,6 +196,26 @@ def test_override_de_preco_da_org_aplicado_ao_total():
     assert data["total_price_cents"] == 2900 + 9900  # ia_deepseek + override
 
 
+def test_preco_injetado_no_corpo_e_ignorado_prc05():
+    # PRC-05: o handler NUNCA lê preço do corpo — calcula server-side via estimate() e
+    # grava o resultado do cálculo. Um cliente que injete total_price_cents/price_snapshot
+    # deve ter esses campos descartados (extra="ignore"), e o valor cobrado/gravado é
+    # sempre o do servidor. Trava de não-regressão: se um dia adicionarem um campo de
+    # preço ao schema, este teste falha antes de o corpo do cliente virar preço.
+    a = str(uuid.uuid4())
+    p = _payload()
+    p["total_price_cents"] = 1
+    p["price_snapshot"] = {"total_price_cents": 1}
+    data = _data(req_h.create_request(_event(a, body=p), None))
+    assert data["total_price_cents"] == 2900 + 7900  # cálculo do servidor, não o 1 injetado
+
+    conn = _admin_conn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT total_price_cents FROM public.requests WHERE id=%s", (data["request_id"],))
+        assert cur.fetchone()[0] == 2900 + 7900
+    conn.close()
+
+
 def test_pedido_sem_documento_e_opcional():
     # documento é opcional (toggle "anexar contrato" off no wizard) -> cria sem doc
     a = str(uuid.uuid4())

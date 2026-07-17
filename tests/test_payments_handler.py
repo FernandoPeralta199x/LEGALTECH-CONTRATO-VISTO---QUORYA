@@ -155,6 +155,35 @@ def test_pagamento_grava_plano_e_status(seed_case_and_config):
     assert data["installment_plan"]["parcelas"] == 3
     assert "raw" not in data["installment_plan"]["payment"]
 
+def test_pagamento_expected_total_divergente_retorna_409_sem_cobrar(seed_case_and_config):
+    # PRC-02: o total confirmado na tela (expected_total_cents) != o recalculado com a
+    # config vigente -> 409 pedindo revisão, e NENHUMA cobrança emitida (request segue
+    # pending, sem plano). Prova o consentimento por valor.
+    case_id, admin = seed_case_and_config
+    resp = pay_h.create_case_payment(_event(admin, body={
+        "parcelas": 1, "method": "cartao", "idempotency_key": "prc02-diverge",
+        "card_token": "tok_mock_x", "expected_total_cents": 9999},  # valor que a tela "viu", errado
+        path={"caseId": case_id}), None)
+    assert resp["statusCode"] == 409, resp
+    conn = _admin_conn()  # dbadmin bypassa RLS
+    with conn.cursor() as cur:
+        cur.execute("SELECT payment_status, installment_plan FROM public.requests WHERE case_id=%s",
+                    (case_id,))
+        ps, plan = cur.fetchone()
+    conn.close()
+    assert ps == "pending" and plan is None  # nada foi cobrado
+
+
+def test_pagamento_expected_total_correto_prossegue(seed_case_and_config):
+    # PRC-02 não-regressão: expected batendo com o recalculado (1x = total, sem juros) -> segue.
+    case_id, admin = seed_case_and_config
+    resp = pay_h.create_case_payment(_event(admin, body={
+        "parcelas": 1, "method": "cartao", "idempotency_key": "prc02-ok",
+        "card_token": "tok_mock_x", "expected_total_cents": 2900 + 7900},
+        path={"caseId": case_id}), None)
+    assert resp["statusCode"] in (200, 201), resp
+
+
 def test_pagamento_rejeita_parcela_nao_ofertada(seed_case_and_config):
     case_id, admin = seed_case_and_config
     resp = pay_h.create_case_payment(
