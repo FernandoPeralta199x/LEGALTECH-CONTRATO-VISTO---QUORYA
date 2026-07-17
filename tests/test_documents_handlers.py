@@ -283,12 +283,30 @@ def test_list_documents_filtra_status(client_id):
     d.process_document(_event(a, path={"docId": doc1}), None)  # doc1 -> ocr_status='done'
     ev = _event(a)
     ev["queryStringParameters"] = {"status": "processed"}
-    ids = {x["id"] for x in _data(d.list_documents(ev, None))}
+    # C3-04: /documents agora devolve envelope paginado {items,total,...}.
+    ids = {x["id"] for x in _data(d.list_documents(ev, None))["items"]}
     assert doc1 in ids and doc2 not in ids
     ev2 = _event(a)
     ev2["queryStringParameters"] = {"status": "pending_upload"}
-    ids2 = {x["id"] for x in _data(d.list_documents(ev2, None))}
+    ids2 = {x["id"] for x in _data(d.list_documents(ev2, None))["items"]}
     assert doc2 in ids2 and doc1 not in ids2
+
+
+def test_list_documents_paginado(client_id):
+    """C3-04: /documents devolve envelope {items,total,page,...} e respeita page_size,
+    em vez de truncar em LIMIT 500 fixo e devolver um array cru."""
+    a = str(uuid.uuid4())
+    case_id = _make_case(a, client_id)
+    for i in range(3):
+        _data(_upload(a, case_id, file_name=f"doc{i}.pdf"))
+    ev = _event(a)
+    ev["queryStringParameters"] = {"case_id": case_id, "page": "1", "page_size": "2"}
+    r1 = _data(d.list_documents(ev, None))
+    assert r1["total"] == 3 and r1["page_size"] == 2 and r1["total_pages"] == 2
+    assert len(r1["items"]) == 2  # respeitou o LIMIT
+    ev["queryStringParameters"]["page"] = "2"
+    r2 = _data(d.list_documents(ev, None))
+    assert len(r2["items"]) == 1  # a 3ª
 
 
 # ── Varredura-qualidade #2: filtro ?classification= (separa relatórios finais) ──
@@ -301,14 +319,14 @@ def test_list_documents_filtra_por_classification(client_id):
     # com o filtro: só o relatório final, e o shape V2 expõe metadata.kind
     ev = _event(a)
     ev["queryStringParameters"] = {"case_id": case_id, "classification": "final_report"}
-    docs = _data(d.list_documents(ev, None))
+    docs = _data(d.list_documents(ev, None))["items"]  # C3-04: envelope paginado
     assert len(docs) == 1
     assert docs[0]["id"] == rel
     assert docs[0]["metadata"] == {"kind": "final_report"}
     # sem o filtro: ambos aparecem (era o que inflava o contador no frontend)
     ev_all = _event(a)
     ev_all["queryStringParameters"] = {"case_id": case_id}
-    assert len(_data(d.list_documents(ev_all, None))) == 2
+    assert _data(d.list_documents(ev_all, None))["total"] == 2
 
 
 # ── #26/Codex B3: status fora do conjunto mapeável é erro de contrato (400) ──
@@ -338,7 +356,7 @@ def test_documento_de_caso_arquivado_inacessivel(client_id):
     assert d.update_document(_event(a, path={"docId": doc_id},
             body={"filename": "x.pdf"}), None)["statusCode"] == 404
     assert d.process_document(_event(a, path={"docId": doc_id}), None)["statusCode"] == 404
-    assert doc_id not in {x["id"] for x in _data(d.list_documents(_event(a), None))}
+    assert doc_id not in {x["id"] for x in _data(d.list_documents(_event(a), None))["items"]}
 
 
 def test_upload_bloqueado_em_caso_arquivado(client_id):

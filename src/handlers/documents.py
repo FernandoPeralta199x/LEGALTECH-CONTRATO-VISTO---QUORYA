@@ -25,7 +25,8 @@ from src.utils.context import (CallerRevoked, WRITE_ROLES, assert_active_writer,
 from src.utils.doc_status import DOC_STATUS_MAP as _DOC_STATUS_MAP, DOC_STATUS_REV as _DOC_STATUS_REV
 from src.utils.helpers import error_response, success_response
 from src.utils.mime import mime_for
-from src.utils.lambda_io import fmt_validation_error as _fmt, parse_json_body as _parse_body, valid_uuid as _valid_uuid
+from src.utils.lambda_io import (fmt_validation_error as _fmt, parse_json_body as _parse_body,
+                                 parse_pagination, valid_uuid as _valid_uuid)
 from src.utils.safety import enforce_production_safety
 
 enforce_production_safety()
@@ -358,20 +359,34 @@ def list_documents(event, context):
         # dos demais uploads do caso (wizard/OCR). Mesmo padrão do filtro de status.
         args.append(params["classification"])
         conditions.append("document_classification = %s")
+    # C3-04: devolve envelope {items,total,...} (antes era array cru sem total). O default
+    # 500 preserva o comportamento anterior (o FE ainda não pagina esta lista) — a melhora
+    # é expor `total`, para o FE saber se há mais e não achar que a lista é completa.
+    pg, err = parse_pagination(params, default_size=500, max_size=500)
+    if err:
+        return err
+    page, page_size, offset = pg
+    where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
     sql = ("SELECT id, case_id, file_name, file_type, file_size_bytes, file_hash,"
-           " ocr_status, document_classification, uploaded_by, created_at FROM public.documents")
-    if conditions:
-        sql += " WHERE " + " AND ".join(conditions)
-    sql += " ORDER BY created_at DESC LIMIT 500"
-    args = tuple(args)
+           " ocr_status, document_classification, uploaded_by, created_at FROM public.documents"
+           + where + " ORDER BY created_at DESC LIMIT %s OFFSET %s")
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
-            cur.execute(sql, args)
+            cur.execute(f"SELECT count(*) AS n FROM public.documents{where}", tuple(args))
+            total = int(cur.fetchone()["n"])
+            cur.execute(sql, tuple(args + [page_size, offset]))
             rows = cur.fetchall()
     except Exception as e:
-        logger.error(json.dumps({"event": "DOCUMENT_LIST_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "DOCUMENT_LIST_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao listar documentos")
-    return success_response(200, f"{len(rows)} documentos", [_serialize_v2(r) for r in rows])
+    total_pages = (total + page_size - 1) // page_size if page_size else 1
+    return success_response(200, f"{total} documentos", {
+        "items": [_serialize_v2(r) for r in rows],
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "total_pages": total_pages,
+    })
 
 
 def _serialize_v2(row) -> dict:
