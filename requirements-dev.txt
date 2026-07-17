@@ -6,3 +6,4 @@ python-dotenv==1.2.2   # carrega .env nos testes (conftest.py)
 PyYAML==6.0.3          # tools/local_server.py parseia o serverless.yml (tests/test_local_server.py)
 pip-audit==2.10.1      # auditoria de vulnerabilidades das deps (tools/pip_audit.py)
 truststore==0.10.4     # TLS via cert store do SO p/ o pip-audit (proxy/AV re-assina)
+setuptools>=83.0.0     # ferramenta de build (não vai no Lambda); remedia PYSEC-2026-3447 do ambiente
