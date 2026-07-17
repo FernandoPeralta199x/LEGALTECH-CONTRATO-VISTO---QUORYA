@@ -40,7 +40,8 @@ no API Gateway.
 - **Documentos:** upload/download por **URL S3 pré-assinada** (o arquivo não passa pela Lambda);
   ingestão OCR→chunks→embeddings com **fila SQS/DLQ** (SP1).
 - **Busca (RAG):** embeddings 1536-dim (OpenAI ou mock) + pgvector (cosseno), herda a RLS por org.
-- **Módulo Financeiro (admin-only):** visão geral (`overview`), **custos de APIs externas**,
+- **Módulo Financeiro (admin-only):** visão geral (`overview`), **vendas** (projeção venda a
+  venda sobre `requests` — reconcilia com os KPIs por construção), **custos de APIs externas**,
   **tributos** e **notas fiscais** (registro informativo — o sistema não forja valor de tributo
   nem número de nota), **relatório executivo** imprimível no navegador, serviços/clientes e
   **trilha de auditoria**. Valores em centavos, totais `GENERATED` pelo banco (anti-forja).
@@ -48,8 +49,8 @@ no API Gateway.
   `EMAIL` (SES/log), `EMBEDDINGS` (OpenAI/mock), `OCR`, `PAYMENT`, e cada adapter externo (`*_BACKEND`).
 - **Segurança fail-closed:** `enforce_production_safety` bloqueia o boot fora de dev se houver
   segredo padrão ou backend mock/local (inclui pagamento e OCR).
-- **Qualidade:** **485 funções de teste** de integração contra PostgreSQL 18 (43 arquivos);
-  **24 migrations**; **67 rotas** + JWT Authorizer.
+- **Qualidade:** **497 funções de teste** de integração contra PostgreSQL 18 (44 arquivos);
+  **25 migrations**; **68 rotas** + JWT Authorizer.
 
 ## Arquitetura
 
@@ -127,7 +128,7 @@ flowchart LR
 | Triagem | `GET /cases/{caseId}/triage` · `POST /cases/{caseId}/triage/run` | **JWT** (writer) |
 | Relatório | `GET /cases/{caseId}/report` · `POST /cases/{caseId}/report/generate` · `POST /cases/{caseId}/report/review` | **JWT** (writer) |
 | Dashboard | `GET /dashboard/stats` | **JWT** |
-| Financeiro | `GET /financial/overview` · `GET/POST /financial/api-costs` · `GET/POST /financial/taxes` · `GET/POST /financial/fiscal-documents` · `GET /financial/reports/executive` · `GET /financial/services` · `GET /financial/clients` · `GET /financial/audit` | **JWT** (admin) |
+| Financeiro | `GET /financial/overview` · `GET /financial/sales` · `GET/POST /financial/api-costs` · `GET/POST /financial/taxes` · `GET/POST /financial/fiscal-documents` · `GET /financial/reports/executive` · `GET /financial/services` · `GET /financial/clients` · `GET /financial/audit` | **JWT** (admin) |
 | Documentos | `POST/GET /documents` · `GET /documents/{docId}` · `GET /documents/{docId}/download-url` · `POST /documents/{docId}/process` · `POST /documents/{docId}/enqueue-processing` | **JWT** |
 | Case-results | `POST/GET /case-results` · `GET/PUT/DELETE /case-results/{resultId}` | **JWT** |
 | Busca (RAG) | `POST /search` | **JWT** |
@@ -148,10 +149,10 @@ contrato_visto_backend/
 │   ├── services/      # database, email, embeddings, rag, storage, case_lifecycle,
 │   │                  #   triage_runner, report_generator, pricing/ (estimate + installments)
 │   └── utils/         # auth, context, helpers, lambda_io, safety
-├── migrations/        # 001–024 (RLS por dono → por organização, pipeline, pricing, parcelas,
+├── migrations/        # 001–025 (RLS por dono → por organização, pipeline, pricing, parcelas,
 │                      #   custos de APIs externas, tributos/notas fiscais, trilha de auditoria,
-│                      #   integridade/unicidade, revogação de sessão, minimização de PII)
-├── tests/             # 485 funções de teste de integração (pytest + PG18)
+│                      #   integridade/unicidade, revogação de sessão, minimização de PII, índices de vendas)
+├── tests/             # 497 funções de teste de integração (pytest + PG18)
 ├── tools/             # setup_test_db, pip_audit, apply_migrations (runner idempotente), ...
 ├── docs/              # PROGRESSO, PLANO_MIGRACAO_SERVERLESS, PLANO_FASE7_DEPLOY,
 │                      #   security/fase7-hardening-checklist, dicionario_de_dados, specs/plans
@@ -240,6 +241,7 @@ python -m venv .venv
 | `022_integrity_fk_setnull_unique.sql` | unicidade de NF robusta a NULL (`NULLS NOT DISTINCT`) + `ON DELETE SET NULL` **por-coluna** nas FKs org-scoped (preserva `organization_id`) |
 | `023_users_password_changed_at.sql` | `password_changed_at` — revoga tokens emitidos antes do reset de senha (AUTH-02) |
 | `024_audit_pii_redaction.sql` | minimização de PII na trilha — redige CPF/CNPJ, RG, e-mail e telefone (LGPD) |
+| `025_requests_created_index_sales.sql` | índices de performance da aba Vendas (`requests(org, created_at DESC)` + `fiscal_documents(org, request_id)`) |
 
 > **Runner idempotente** (`tools/apply_migrations.py`): registra o que foi aplicado em
 > `public.schema_migrations` e pula o já-aplicado (reaplicar deixa de estourar); `--baseline`
