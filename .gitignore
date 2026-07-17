@@ -12,3 +12,9 @@ node_modules/
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# DOCS-05: logs de runtime e artefatos sensíveis — evita commit acidental
+# (ex.: _e2e_server.log gerado por tools/local_server.py, dumps de banco).
+*.log
+*.sql.gz
+*.dump

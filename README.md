@@ -44,8 +44,8 @@ no API Gateway.
   `EMAIL` (SES/log), `EMBEDDINGS` (OpenAI/mock), `OCR`, `PAYMENT`, e cada adapter externo (`*_BACKEND`).
 - **Segurança fail-closed:** `enforce_production_safety` bloqueia o boot fora de dev se houver
   segredo padrão ou backend mock/local (inclui pagamento e OCR).
-- **Qualidade:** **268 funções de teste** de integração contra PostgreSQL 18 (25 arquivos);
-  **17 migrations**; **55 rotas** + JWT Authorizer.
+- **Qualidade:** **478 funções de teste** de integração contra PostgreSQL 18 (43 arquivos);
+  **21 migrations**; **67 rotas** + JWT Authorizer.
 
 ## Arquitetura
 
@@ -143,11 +143,12 @@ contrato_visto_backend/
 │   ├── services/      # database, email, embeddings, rag, storage, case_lifecycle,
 │   │                  #   triage_runner, report_generator, pricing/ (estimate + installments)
 │   └── utils/         # auth, context, helpers, lambda_io, safety
-├── migrations/        # 001–017 (RLS por dono → por organização, pipeline, pricing, parcelas)
-├── tests/             # 268 funções de teste de integração (pytest + PG18)
+├── migrations/        # 001–021 (RLS por dono → por organização, pipeline, pricing, parcelas,
+│                      #   custos de APIs externas, tributos/notas fiscais, trilha de auditoria)
+├── tests/             # 478 funções de teste de integração (pytest + PG18)
 ├── docs/              # PROGRESSO, PLANO_MIGRACAO_SERVERLESS, PLANO_FASE7_DEPLOY,
 │                      #   security/fase7-hardening-checklist, dicionario_de_dados, specs/plans
-├── serverless.yml     # 55 rotas + authorizer + IAM + SSM por stage
+├── serverless.yml     # 67 rotas + authorizer + IAM + SSM por stage
 ├── requirements.txt   # runtime (psycopg2, boto3, openai, pydantic, PyJWT, bcrypt, ...)
 ├── requirements-dev.txt
 └── conftest.py
@@ -187,7 +188,7 @@ docker run -d --name cv-pg18 -e POSTGRES_DB=contrato_visto `
   -e POSTGRES_USER=dbadmin -e POSTGRES_PASSWORD=localdev_cv `
   -p 5433:5432 pgvector/pgvector:pg18
 
-# 2) Restaurar schema + criar role de app NÃO-owner (cv_app) + aplicar migrations 001..017
+# 2) Restaurar schema + criar role de app NÃO-owner (cv_app) + aplicar migrations 001..021
 #    (ver docs/PROGRESSO.md — seção "Como RETOMAR o ambiente")
 
 # 3) venv + dependências de teste

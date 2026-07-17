@@ -3,6 +3,14 @@
 # Dependências de desenvolvimento/testes: ver requirements-dev.txt.
 
 # Versões alinhadas às testadas no PG18 (pip freeze do venv) — reprodutibilidade.
+#
+# DEP-05: este arquivo é a FONTE legível (top-level). O lock com integridade por hash
+# fica em `requirements.lock` (gerado por pip-compile --generate-hashes). Para o pacote
+# Lambda reprodutível, instale com:  pip install --require-hashes -r requirements.lock
+# Regenerar:  pip-compile --generate-hashes -o requirements.lock requirements.txt
+# IMPORTANTE (Fase 7): regenerar sob o Python do runtime ALVO (3.11) — o lock atual foi
+# gerado sob 3.14; os pins top-level batem, mas a resolução transitiva deve ser refeita
+# no build do deploy para fidelidade total.
 
 # Banco
 psycopg2-binary==2.9.12
