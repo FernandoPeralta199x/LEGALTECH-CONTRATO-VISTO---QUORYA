@@ -196,3 +196,45 @@ def test_audit_trigger_requests_captura_venda():
     assert ev["resource_type"] == "requests" and ev["action"] == "INSERT"
     assert ev["actor_email"] is not None  # ator identificado via app.user_id
     assert "requests" in d["resources"]  # escopo financeiro agora inclui vendas
+
+
+def _write_client_audited(org, user_id):
+    """Insere um cliente COM contexto (set_config) → dispara o trigger real
+    log_audit_org, que grava a linha em audit.audit_log. Retorna o id do cliente."""
+    conn = admin_conn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT set_config('app.user_id', %s, true)", (user_id,))
+        cur.execute("SELECT set_config('app.organization_id', %s, true)", (org,))
+        cur.execute(
+            "INSERT INTO public.clients"
+            " (legal_name, document_number, email, phone, rg, organization_id)"
+            " VALUES ('Acme Ltda', %s, 'contato@acme.com', '11999998888', '12.345.678-9', %s)"
+            " RETURNING id",
+            ("CNPJ" + uuid.uuid4().hex[:10], org))
+        cid = cur.fetchone()[0]
+    conn.commit()
+    conn.close()
+    return cid
+
+
+def test_db08_trigger_redige_pii_do_cliente_na_trilha():
+    """DB-08 (LGPD): o trigger REAL (log_audit_org) grava a linha do cliente em
+    audit.audit_log.change_after SEM os identificadores sensíveis (document_number/CPF,
+    rg, email, phone) — só QUE mudou, não o dado do titular — mas COM legal_name
+    (accountability). Distinto de test_audit_clients_pii_mascarado, que testa o
+    mascaramento na LEITURA; aqui os campos nem chegam a ser gravados."""
+    a = _admin()
+    cid = _write_client_audited(SYSTEM_ORG, a)
+    conn = admin_conn()
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT change_after FROM audit.audit_log"
+            " WHERE resource_type='clients' AND action='INSERT' AND resource_id::text = %s",
+            (str(cid),))
+        row = cur.fetchone()
+    conn.close()
+    assert row is not None, "evento de auditoria do cliente não encontrado"
+    after = row[0]  # jsonb -> dict (psycopg2)
+    assert after.get("legal_name") == "Acme Ltda"          # accountability preservada
+    for redigido in ("document_number", "rg", "email", "phone", "password_hash"):
+        assert redigido not in after, f"{redigido} vazou na trilha de auditoria"

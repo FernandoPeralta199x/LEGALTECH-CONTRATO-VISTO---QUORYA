@@ -122,6 +122,17 @@ def test_fiscal_numero_duplicado():
     assert ff_h.create_fiscal_document(_event(a, body=_note(status="authorized", numero="777", serie="1")), None)["statusCode"] == 409
 
 
+def test_db01_fiscal_numero_duplicado_sem_serie():
+    """DB-01: SEM serie (NULL), duas notas com o mesmo numero DEVEM colidir
+    (uq_fiscal_documents_org_numero NULLS NOT DISTINCT). Antes, a companheira serie
+    NULL era tratada como distinta e a NF duplicava silenciosamente."""
+    a = _admin()
+    assert ff_h.create_fiscal_document(
+        _event(a, body=_note(status="authorized", numero="888")), None)["statusCode"] == 201
+    assert ff_h.create_fiscal_document(
+        _event(a, body=_note(status="authorized", numero="888")), None)["statusCode"] == 409
+
+
 def test_fiscal_url_scheme_seguro():
     a = _admin()
     assert ff_h.create_fiscal_document(_event(a, body=_note(document_url="javascript:alert(1)")), None)["statusCode"] == 400
