@@ -16,7 +16,7 @@ from datetime import datetime
 import psycopg2
 from pydantic import ValidationError
 
-from src.handlers.financial import BR_TZ, _resolve_range
+from src.services.financial.period import BR_TZ, resolve_range
 from src.schemas.financial_schemas import (CreateFiscalDocumentRequest,
                                            CreateTaxProvisionRequest)
 from src.services.database import tenant_tx
@@ -62,7 +62,7 @@ def list_taxes(event, context):
     user = event["user"]
     params = event.get("queryStringParameters") or {}
     try:
-        start, end, period = _resolve_range(params)
+        start, end, period = resolve_range(params)
     except ValueError as e:
         return error_response(400, str(e))
     pg, err = parse_pagination(params)
@@ -141,7 +141,7 @@ def list_fiscal_documents(event, context):
     user = event["user"]
     params = event.get("queryStringParameters") or {}
     try:
-        start, end, period = _resolve_range(params)
+        start, end, period = resolve_range(params)
     except ValueError as e:
         return error_response(400, str(e))
     pg, err = parse_pagination(params)

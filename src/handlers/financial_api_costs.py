@@ -13,7 +13,7 @@ from datetime import datetime
 import psycopg2
 from pydantic import ValidationError
 
-from src.handlers.financial import BR_TZ, _resolve_range
+from src.services.financial.period import BR_TZ, resolve_range
 from src.schemas.financial_schemas import CreateApiCostRequest
 from src.services.database import tenant_tx
 from src.services.financial import api_costs as svc
@@ -38,7 +38,7 @@ def list_api_costs(event, context):
     params = event.get("queryStringParameters") or {}
 
     try:
-        start, end, period = _resolve_range(params)
+        start, end, period = resolve_range(params)
     except ValueError as e:
         return error_response(400, str(e))
 

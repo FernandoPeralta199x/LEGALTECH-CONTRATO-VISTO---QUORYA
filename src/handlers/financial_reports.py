@@ -9,7 +9,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from src.handlers.financial import _resolve_range  # reuso (BR_TZ embutido)
+from src.services.financial.period import resolve_range
 from src.services.database import tenant_tx
 from src.services.financial.api_costs import compute_api_costs, costs_by_provider
 from src.services.financial.fiscal_documents import (compute_fiscal_documents,
@@ -45,7 +45,7 @@ def get_executive_report(event, context):
     params = event.get("queryStringParameters") or {}
 
     try:
-        start, end, period = _resolve_range(params)
+        start, end, period = resolve_range(params)
     except ValueError as e:
         return error_response(400, str(e))
 
