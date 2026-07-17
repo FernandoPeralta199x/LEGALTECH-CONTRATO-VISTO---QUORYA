@@ -50,7 +50,7 @@ def get_stats(event, context):
                 "created_at": str(r["created_at"]) if r["created_at"] else None,
             } for r in cur.fetchall()]
     except Exception as e:
-        logger.error(json.dumps({"event": "DASHBOARD_STATS_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "DASHBOARD_STATS_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao obter métricas do dashboard")
 
     return success_response(200, "Métricas do dashboard", {

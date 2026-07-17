@@ -127,7 +127,8 @@ def mint(claims: dict, secret: str, alg="HS256", with_exp=True):
 
 def setup(call, secret: str) -> dict:
     """Duas orgs (A=demo, B=signup) + caso/cliente/parte/documento na org A + tokens forjados."""
-    st, b = call("POST", "/auth/login", body={"email": "demo@contratovisto.com", "password": "DemoLocal#2026"})
+    st, b = call("POST", "/auth/login", body={"email": "demo@contratovisto.com",
+                                              "password": os.environ.get("DEMO_PASSWORD", "")})
     tokA = d(b).get("access_token")
     if not tokA:
         raise SystemExit(f"login demo falhou (st={st}) — dev-server no ar e org demo semeada? {b[:120]!r}")

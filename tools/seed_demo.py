@@ -6,8 +6,9 @@ Uso (a partir da raiz do backend, com o Postgres de dev na 5433):
     .venv\\Scripts\\python.exe -m tools.seed_demo
 
 O que faz (tudo idempotente):
-  1. Garante a ORG, o USUÁRIO demo (login demo@contratovisto.com / DemoLocal#2026) e
-     um PRICING_CONFIG com parcelamento — recriando-os se faltarem. Isso cobre o caso
+  1. Garante a ORG, o USUÁRIO demo (login demo@contratovisto.com, senha vinda de
+     DEMO_PASSWORD no .env local) e um PRICING_CONFIG com parcelamento — recriando-os
+     se faltarem. Isso cobre o caso
      de a suíte COMPLETA do pytest ter truncado users/pricing_configs.
   2. Cria 1 cliente + 1 caso PELO WIZARD (create_request) — com pedido, preço e plano
      de parcelamento, então o caso é PAGÁVEL (a tela /cases/{id}/pagamento funciona).
@@ -21,6 +22,7 @@ caso aponta para um usuário real (``created_by`` não tem FK, mas o login preci
 usuário com esse id para o contexto bater com o do seed).
 """
 import json
+import os
 import random
 import sys
 from pathlib import Path
@@ -40,7 +42,14 @@ DEMO_USER = "fb7f5bb8-224e-441f-a4fd-f4f3a0cb6d39"
 DEMO_ORG = "9cb5e294-4891-4578-be38-fab31114c559"
 DEMO_ROLE = "admin"
 DEMO_EMAIL = "demo@contratovisto.com"
-DEMO_PASSWORD = "DemoLocal#2026"
+# A senha NÃO é versionada: vem obrigatoriamente do ambiente (.env local, gitignorado).
+# Ausente => aborta no topo de main() antes de qualquer escrita (nenhuma senha literal aqui).
+DEMO_PASSWORD = os.environ.get("DEMO_PASSWORD")
+
+# Allowlist de ambientes de DEV (mesmo critério de src/utils/safety.py::_NON_PROD_ENVS).
+# Qualquer outro stage (prod, staging, homolog, qa, ...) é tratado como produtivo.
+_DEV_ENVS = {"", "local", "dev", "development", "test", "testing"}
+_LOCAL_DB_HOSTS = {"localhost", "127.0.0.1"}
 
 # Parcelamento demo: à vista (Pix/Boleto/Débito) + cartão de crédito em até 6x com juros leves.
 _DEMO_INSTALLMENT = {
@@ -106,11 +115,15 @@ def ensure_org_user_pricing() -> None:
             (DEMO_ORG, "Organização Demo"))
     # 2) usuário — public.users é global (sem RLS) -> simple_tx; senha via bcrypt
     with simple_tx() as cur:
+        # ON CONFLICT DO UPDATE (não DO NOTHING): re-rodar com uma DEMO_PASSWORD nova aplica
+        # de fato a nova senha. Com DO NOTHING, a senha antiga permaneceria e a mensagem final
+        # anunciaria uma senha que não foi gravada (enganoso).
         cur.execute(
             "INSERT INTO public.users"
             " (id, email, password_hash, name, role, status, organization_id)"
             " VALUES (%s, %s, %s, %s, 'admin', 'active', %s)"
-            " ON CONFLICT (id) DO NOTHING",
+            " ON CONFLICT (id) DO UPDATE SET password_hash = EXCLUDED.password_hash,"
+            "   status = 'active'",
             (DEMO_USER, DEMO_EMAIL, hash_password(DEMO_PASSWORD), "Demo Admin", DEMO_ORG))
     # 3) pricing_config com parcelamento — RLS + trigger de auditoria (app.user_id
     #    já setado pelo tenant_tx). Só cria se ainda não existir (não sobrescreve).
@@ -127,7 +140,29 @@ def ensure_org_user_pricing() -> None:
     print("[seed] org/usuário/pricing demo garantidos")
 
 
+def _abortar_se_destino_nao_for_local() -> None:
+    """Trava fail-closed: só permite semear se o destino for o banco LOCAL de dev.
+
+    Sem isto, rodar o seed apontando por engano para um banco compartilhado/produção
+    criaria um admin com senha conhecida. Espelha o critério de ambiente de
+    src/utils/safety.py (allowlist de dev) e exige host de banco local."""
+    db_host = os.getenv("DB_HOST", "localhost")
+    environment = os.getenv("ENVIRONMENT", "local").lower()
+    if db_host not in _LOCAL_DB_HOSTS or environment not in _DEV_ENVS:
+        sys.exit(
+            f"seed_demo é só para banco LOCAL de desenvolvimento "
+            f"(DB_HOST={db_host}, ENVIRONMENT={environment}) — abortado para não "
+            f"criar admin com senha conhecida fora de dev")
+
+
 def main() -> None:
+    # TRAVA DE DESTINO (fail-closed) ANTES de qualquer escrita: aborta se o alvo não
+    # for o banco local de dev, ou se a senha demo não foi definida no ambiente.
+    _abortar_se_destino_nao_for_local()
+    if not DEMO_PASSWORD:
+        sys.exit(
+            "DEMO_PASSWORD não definido — defina DEMO_PASSWORD no seu .env local "
+            "(já gitignorado) antes de rodar o seed; nenhuma senha é versionada aqui")
     ensure_org_user_pricing()
 
     cnpj = gen_valid_cnpj()
@@ -168,7 +203,8 @@ def main() -> None:
         cur.execute("SELECT count(*) AS n FROM public.documents")
         d = cur.fetchone()["n"]
     print(f"[seed] OK -- org demo: clients={c} cases={k} documents={d}")
-    print(f"[seed] login: {DEMO_EMAIL} / {DEMO_PASSWORD}")
+    # Não imprime a senha em texto puro (vazaria no stdout/log). Ela é a DEMO_PASSWORD do .env.
+    print(f"[seed] login: {DEMO_EMAIL} / (senha = DEMO_PASSWORD do seu .env local)")
 
 
 if __name__ == "__main__":

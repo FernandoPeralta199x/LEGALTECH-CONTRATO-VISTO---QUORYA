@@ -17,12 +17,14 @@ from src.services.case_lifecycle import (
 )
 from src.services.database import tenant_tx
 from src.services.report_generator import (
+    ReportNotApprovable,
     VALID_RECOMMENDATION,
     generate_report as _generate,
     get_report as _get,
     review_report as _review,
 )
-from src.utils.context import require_user, require_writer
+from src.utils.context import (CallerRevoked, assert_active_writer, require_user,
+                               require_writer)
 from src.utils.helpers import error_response, success_response
 from src.utils.lambda_io import parse_json_body as _parse_body, valid_uuid as _valid_uuid
 from src.utils.safety import enforce_production_safety
@@ -52,7 +54,7 @@ def get_case_report(event, context):
                 return error_response(404, "Caso não encontrado")
             report = _get(cur, org, case_id)
     except Exception as e:
-        logger.error(json.dumps({"event": "REPORT_GET_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "REPORT_GET_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao obter o relatório")
     if not report:
         return error_response(404, "Relatório ainda não gerado")
@@ -70,6 +72,8 @@ def generate_case_report(event, context):
         return error_response(400, "caseId inválido")
     try:
         with tenant_tx(user["user_id"], user["role"], org) as cur:
+            # SEC-01: fecha a janela de revogação (~2h) do token antes de escrever.
+            assert_active_writer(cur, user["user_id"], org)
             # CVS-007: caso inexistente/deletado (404) ou finalizado (409) não regera relatório.
             assert_case_writable(cur, case_id)
             # Gate de pagamento (PAYMENT_GATE=hard): relatório é trabalho pago.
@@ -77,6 +81,8 @@ def generate_case_report(event, context):
             # #3: parecer exige triagem executada (evidências) — não gerar "no vácuo".
             assert_case_triaged(cur, case_id)
             report = _generate(cur, org, case_id, user["user_id"])
+    except CallerRevoked:
+        return error_response(403, "Permissão de escrita revogada")
     except CaseNotVisible:
         return error_response(404, "Caso não encontrado")
     except CaseFinalized:
@@ -87,7 +93,7 @@ def generate_case_report(event, context):
         return error_response(409, "Execute a triagem antes de gerar o relatório (o parecer exige evidências)")
     except Exception as e:
         logger.error(json.dumps({"event": "REPORT_GENERATE_ERROR", "error": type(e).__name__,
-                                 "pgcode": getattr(e, "pgcode", None)}))
+                                 "pgcode": getattr(e, "pgcode", None)}), exc_info=True)
         return error_response(500, "Erro ao gerar o relatório")
     logger.info(json.dumps({"event": "REPORT_GENERATED", "case_id": case_id}))
     return success_response(200, "Relatório gerado", report)
@@ -114,6 +120,8 @@ def review_case_report(event, context):
         return error_response(400, "recommendation inválida")
     try:
         with tenant_tx(user["user_id"], user["role"], org) as cur:
+            # SEC-01: fecha a janela de revogação (~2h) do token antes de escrever.
+            assert_active_writer(cur, user["user_id"], org)
             # CVS-007: não revisar relatório de caso inexistente/deletado (404)
             # nem de caso finalizado (409)
             assert_case_writable(cur, case_id)
@@ -122,12 +130,18 @@ def review_case_report(event, context):
                              recommendation=recommendation)
             if report is None:
                 return error_response(404, "Relatório ainda não gerado")
+    except CallerRevoked:
+        return error_response(403, "Permissão de escrita revogada")
     except CaseNotVisible:
         return error_response(404, "Caso não encontrado")
     except CaseFinalized:
         return error_response(409, "caso finalizado não aceita revisão de relatório")
+    except ReportNotApprovable:
+        return error_response(
+            409, "Parecer simulado (mock) não pode ser aprovado nem concluir o caso;"
+                 " requer parecer de proveniência real")
     except Exception as e:
-        logger.error(json.dumps({"event": "REPORT_REVIEW_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "REPORT_REVIEW_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao revisar o relatório")
     logger.info(json.dumps({"event": "REPORT_REVIEWED", "case_id": case_id, "status": status}))
     return success_response(200, "Relatório revisado", report)

@@ -29,9 +29,50 @@ def clean_clients():
     conn.close()
 
 
-def _event(role="analyst", body=None, path=None, query=None, org_id=SYSTEM_ORG):
+def _seed_user(user_id, role, org):
+    """Semeia public.users com o papel/status atuais — as rotas de escrita reconsultam
+    o papel ATUAL no banco (assert_active_writer, SEC-01), então um user_id sintético
+    não-semeado seria recusado com 403 (janela de revogação)."""
+    conn = _admin_conn()
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO public.users (id, email, password_hash, name, role, status, organization_id)"
+            " VALUES (%s,%s,'x','Test',%s,'active',%s)"
+            " ON CONFLICT (id) DO UPDATE SET role=EXCLUDED.role, status='active'",
+            (user_id, f"u_{user_id}@t.c", role, org))
+    conn.close()
+
+
+def _seed_user_status(user_id, role, status):
+    """Ajusta papel/status de um user já existente (para simular revogação)."""
+    conn = _admin_conn()
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute("UPDATE public.users SET role=%s, status=%s WHERE id=%s",
+                    (role, status, user_id))
+    conn.close()
+
+
+def _event_same(user_id, role, body=None, path=None, org_id=SYSTEM_ORG):
+    """Evento com um user_id FIXO (não semeia) — para exercitar o recheck de revogação
+    depois que o banco já foi alterado por _seed_user_status."""
     return {
-        "requestContext": {"authorizer": {"user_id": str(uuid.uuid4()),
+        "requestContext": {"authorizer": {"user_id": user_id, "email": "u@t.c",
+                                          "role": role, "organization_id": org_id}},
+        "body": json.dumps(body) if body is not None else None,
+        "pathParameters": path or {},
+        "queryStringParameters": {},
+    }
+
+
+def _event(role="analyst", body=None, path=None, query=None, org_id=SYSTEM_ORG):
+    uid = str(uuid.uuid4())
+    # O user do token existe de verdade no banco, com o papel do teste — senão o recheck
+    # de escrita (SEC-01) recusaria antes mesmo de exercitar o comportamento sob teste.
+    _seed_user(uid, role, org_id)
+    return {
+        "requestContext": {"authorizer": {"user_id": uid,
                                           "email": "u@t.c", "role": role, "organization_id": org_id}},
         "body": json.dumps(body) if body is not None else None,
         "pathParameters": path or {},
@@ -93,12 +134,13 @@ def test_viewer_sees_masked_document(clean_clients):
     # analyst vê completo
     full = _data(c.get_client(_event(path={"clientId": cid}), None))
     assert full["document_number"] == "11222333000181" and full["email"] == "contato@acme.com"
-    # viewer: documento mascarado E sem dados de contato/endereço (LGPD)
+    # viewer: documento mascarado (util pii.mask_document — 2 últimos dígitos, formato
+    # CNPJ) E sem dados de contato/endereço (LGPD)
     got = _data(c.get_client(_event(role="viewer", path={"clientId": cid}), None))
-    assert got["document_number"] == "**********0181"
+    assert got["document_number"] == "**.***.***/****-81"
     assert got["email"] is None and got["phone"] is None and got["address"] is None
     listed = _data(c.list_clients(_event(role="viewer"), None))
-    assert listed[0]["document_number"] == "**********0181" and listed[0]["email"] is None
+    assert listed[0]["document_number"] == "**.***.***/****-81" and listed[0]["email"] is None
 
 
 def test_create_invalid_checksum_400(clean_clients):
@@ -173,6 +215,32 @@ def test_soft_delete_removes_from_list(clean_clients):
 def test_viewer_cannot_delete(clean_clients):
     cid = _data(_create())["id"]
     assert c.delete_client(_event(role="viewer", path={"clientId": cid}),
+                           None)["statusCode"] == 403
+
+
+def test_escritor_revogado_no_banco_bloqueado(clean_clients):
+    """SEC-01: fecha a janela de revogação (~2h) do JWT nas rotas de escrita.
+
+    O token continua dizendo `analyst` (papel de escrita válido por ~2h), mas o banco
+    já rebaixou/desativou a conta. As mutações têm de recusar com 403 — antes da
+    correção, o create/update/delete gravava normalmente até o token expirar.
+    """
+    ev = _event(role="analyst")  # cria e semeia um analyst ATIVO
+    uid = ev["requestContext"]["authorizer"]["user_id"]
+    # cria um cliente legítimo enquanto ainda é writer ativo
+    cid = _data(c.create_client({**ev, "body": json.dumps(_VALID)}, None))["id"]
+
+    # (a) rebaixado a viewer no banco, mas o TOKEN ainda diz analyst
+    _seed_user_status(uid, "viewer", "active")
+    assert c.update_client(_event_same(uid, "analyst", body={"legal_name": "Alterado"},
+                                       path={"clientId": cid}), None)["statusCode"] == 403
+    assert c.delete_client(_event_same(uid, "analyst", path={"clientId": cid}),
+                           None)["statusCode"] == 403
+
+    # (b) conta desativada (papel ainda analyst) — usa um create com CNPJ válido para
+    # garantir que o 403 vem do recheck de revogação, e não de um 400 de validação.
+    _seed_user_status(uid, "analyst", "inactive")
+    assert c.create_client(_event_same(uid, "analyst", body=_VALID),
                            None)["statusCode"] == 403
 
 

@@ -55,7 +55,24 @@ def _seed_pricing_override(org, overrides):
     conn.close()
 
 
+def _seed_user(user_id, role, org):
+    """Semeia public.users com o papel/status ATUAIS — as rotas de escrita reconsultam
+    o papel ATUAL no banco (assert_active_writer, SEC-01), então um user_id sintético
+    não-semeado seria recusado com 403 (janela de revogação fechada)."""
+    conn = _admin_conn()
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO public.users (id, email, password_hash, name, role, status, organization_id)"
+            " VALUES (%s,%s,'x','Test',%s,'active',%s) ON CONFLICT (id) DO NOTHING",
+            (user_id, f"u_{user_id}@t.c", role, org))
+    conn.close()
+
+
 def _event(user_id, role="admin", body=None, path=None, org_id=SYSTEM_ORG):
+    # O user do token existe de verdade no banco, com o papel do teste — senão o recheck
+    # de escrita (SEC-01) recusaria antes mesmo de exercitar o comportamento sob teste.
+    _seed_user(user_id, role, org_id)
     return {
         "requestContext": {"authorizer": {"user_id": user_id, "email": "u@t.c",
                                           "role": role, "organization_id": org_id}},
@@ -76,7 +93,7 @@ def _payload(product_type="analise_contratual", **over):
         "title": "Contrato de prestação de serviços",
         "parties": [
             {"name": "Empresa X LTDA", "role": "contratante", "person_type": "company",
-             "document": "12345678000199", "document_type": "cnpj"},
+             "document": "11222333000181", "document_type": "cnpj"},
             {"name": "João da Silva", "role": "contratado", "person_type": "individual"},
         ],
         "document": {"filename": "contrato.pdf", "mime_type": "application/pdf", "size_bytes": 2048},
@@ -90,6 +107,26 @@ def _payload(product_type="analise_contratual", **over):
 def _clean():
     _reset()
     yield
+
+
+def test_b7_documento_de_parte_invalido_rejeitado():
+    # B7: documento de parte com dígito verificador inválido é rejeitado server-side
+    a = str(uuid.uuid4())
+    payload = _payload(parties=[
+        {"name": "Empresa Y", "role": "contratante", "person_type": "company",
+         "document": "12345678000199", "document_type": "cnpj"}])  # CNPJ com DV inválido
+    assert req_h.create_request(_event(a, body=payload), None)["statusCode"] == 400
+
+
+def test_b7_cnpj_alfanumerico_2026_aceito():
+    # B7: CNPJ alfanumérico (RFB 2026), com pontuação, é limpo e aceito
+    a = str(uuid.uuid4())
+    payload = _payload(parties=[
+        {"name": "Empresa Alfa", "role": "contratante", "person_type": "company",
+         "document": "12.ABC.345/01DE-35", "document_type": "cnpj"},
+        {"name": "Fulano", "role": "contratado", "person_type": "individual"}])
+    data = _data(req_h.create_request(_event(a, body=payload), None))
+    assert data["parties_count"] == 2
 
 
 def test_create_request_orquestra_case_partes_doc_triagem_timeline():
@@ -157,6 +194,26 @@ def test_override_de_preco_da_org_aplicado_ao_total():
     a = str(uuid.uuid4())
     data = _data(req_h.create_request(_event(a, body=_payload()), None))
     assert data["total_price_cents"] == 2900 + 9900  # ia_deepseek + override
+
+
+def test_preco_injetado_no_corpo_e_ignorado_prc05():
+    # PRC-05: o handler NUNCA lê preço do corpo — calcula server-side via estimate() e
+    # grava o resultado do cálculo. Um cliente que injete total_price_cents/price_snapshot
+    # deve ter esses campos descartados (extra="ignore"), e o valor cobrado/gravado é
+    # sempre o do servidor. Trava de não-regressão: se um dia adicionarem um campo de
+    # preço ao schema, este teste falha antes de o corpo do cliente virar preço.
+    a = str(uuid.uuid4())
+    p = _payload()
+    p["total_price_cents"] = 1
+    p["price_snapshot"] = {"total_price_cents": 1}
+    data = _data(req_h.create_request(_event(a, body=p), None))
+    assert data["total_price_cents"] == 2900 + 7900  # cálculo do servidor, não o 1 injetado
+
+    conn = _admin_conn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT total_price_cents FROM public.requests WHERE id=%s", (data["request_id"],))
+        assert cur.fetchone()[0] == 2900 + 7900
+    conn.close()
 
 
 def test_pedido_sem_documento_e_opcional():

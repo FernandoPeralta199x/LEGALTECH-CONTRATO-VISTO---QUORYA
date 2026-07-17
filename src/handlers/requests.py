@@ -19,10 +19,12 @@ from src.schemas.request_schemas import RequestCreateSchema
 from src.services.case_lifecycle import CasesLimitReached, assert_cases_within_limit
 from src.services.database import tenant_tx
 from src.services.pricing.config import PRODUCTS
+from src.services.pricing.org_config import read_module_overrides
 from src.services.pricing.estimate import estimate, normalize_selected_modules
 from src.services.storage import storage_service
 from src.services.triage_plan import plan_for_selection
-from src.utils.context import require_user, require_writer
+from src.utils.context import (CallerRevoked, assert_active_writer, require_user,
+                               require_writer)
 from src.utils.helpers import error_response, generate_uuid, success_response
 from src.utils.lambda_io import fmt_validation_error as _fmt, parse_json_body as _parse_body, valid_uuid as _valid_uuid
 from src.utils.safety import enforce_production_safety
@@ -82,8 +84,10 @@ def create_request(event, context):
     # Lista vazia/omitida => só obrigatórios (mesmo resultado do preview).
     try:
         selected = normalize_selected_modules(data.product_type, data.selected_modules)
-    except ValueError as e:
-        return error_response(400, str(e))
+    except ValueError:
+        # Domínio: seleção inválida (ex.: módulo não aplicável ao produto). Mensagem
+        # ESTÁTICA (não ecoa str(e)), alinhada ao padrão dos demais handlers (BE-03).
+        return error_response(400, "Seleção de módulos inválida para o produto")
     request_id = generate_uuid()
     case_id = generate_uuid()
     # Triagem executa APENAS o que foi comprado: infra básica do produto + módulos
@@ -93,15 +97,12 @@ def create_request(event, context):
 
     try:
         with tenant_tx(uid, user["role"], org) as cur:
+            # SEC-01: fecha a janela de revogação (~2h) do token antes de qualquer escrita.
+            assert_active_writer(cur, uid, org)
             # quota de casos da organização (pricing_configs.cases_limit); NULL => ilimitado
             assert_cases_within_limit(cur, org)
-            # overrides de preço da organização (pricing_configs)
-            cur.execute(
-                "SELECT module_overrides FROM public.pricing_configs WHERE organization_id = %s",
-                (org,),
-            )
-            row = cur.fetchone()
-            overrides = row["module_overrides"] if row else None
+            # overrides de preço da organização (pricing_configs) — repo único (be-dry-03)
+            overrides = read_module_overrides(cur, org)
             est = estimate(data.product_type, selected, overrides)
 
             # cliente vinculado (opcional): valida UUID + existência/visibilidade (RLS)
@@ -208,6 +209,8 @@ def create_request(event, context):
                     " VALUES (%s,%s,%s,%s,%s,%s)",
                     (org, case_id, etype, etitle, edesc, eactor),
                 )
+    except CallerRevoked:
+        return error_response(403, "Permissão de escrita revogada")
     except CasesLimitReached:
         return error_response(402, "limite de casos da organização atingido")
     except psycopg2.errors.UniqueViolation:
@@ -215,7 +218,7 @@ def create_request(event, context):
     except Exception as e:
         logger.error(json.dumps({"event": "REQUEST_CREATE_ERROR",
                                  "error": type(e).__name__,
-                                 "pgcode": getattr(e, "pgcode", None)}))
+                                 "pgcode": getattr(e, "pgcode", None)}), exc_info=True)
         return error_response(500, "Erro ao criar pedido")
 
     logger.info(json.dumps({"event": "REQUEST_CREATED",
@@ -278,7 +281,7 @@ def get_request(event, context):
             crow = cur.fetchone()
             case_status = crow["status"] if crow else None
     except Exception as e:
-        logger.error(json.dumps({"event": "REQUEST_GET_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "REQUEST_GET_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao obter pedido")
 
     return success_response(200, "Pedido encontrado", {

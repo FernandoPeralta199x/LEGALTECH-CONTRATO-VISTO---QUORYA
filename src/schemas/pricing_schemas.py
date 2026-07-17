@@ -67,6 +67,11 @@ class PaymentSelectionSchema(BaseModel):
     parcelas: int = Field(ge=1, le=24)
     method: Literal["pix", "boleto", "cartao", "debito"]
     pricing_config_version: int | None = None
+    # PRC-02: total que a tela EXIBIU e o usuário confirmou. Se enviado e divergir do
+    # total recalculado com a config vigente (ex.: o admin alterou os juros entre o
+    # load e o clique), o handler responde 409 pedindo revisão — precondição por VALOR,
+    # não por version (a version muda por qualquer edição de config, inclusive notes).
+    expected_total_cents: int | None = Field(default=None, ge=0)
     idempotency_key: str = Field(min_length=1, max_length=255)
     # Cartão: só o token + hints de exibição. NUNCA número/CVV/validade (extra=forbid rejeita).
     card_token: str | None = Field(default=None, max_length=255)

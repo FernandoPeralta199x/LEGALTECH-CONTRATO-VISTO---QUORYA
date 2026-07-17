@@ -76,6 +76,10 @@ def require_role(*allowed_roles):
     """Decorator: exige que ``event['user']['role']`` esteja em ``allowed_roles``.
 
     Deve ser aplicado ABAIXO de ``@require_user``. Ex.: ``@require_role("admin")``.
+
+    ATENÇÃO: valida o papel do TOKEN (fast-path/defesa em profundidade). Rotas
+    admin/escrita DEVEM reconsultar o estado atual no banco com
+    ``load_active_caller``/``assert_active_admin`` dentro da transação (SEC-01..04/M2).
     """
 
     def decorator(handler_func):
@@ -88,3 +92,53 @@ def require_role(*allowed_roles):
         return wrapper
 
     return decorator
+
+
+class CallerRevoked(Exception):
+    """O caller foi rebaixado/desativado/removido no banco desde a emissão do token.
+
+    O JWT Authorizer valida só assinatura+exp e injeta ``role``/``status``
+    HISTÓRICOS; um usuário com um JWT antigo mantém o papel até o ``exp`` (~2h).
+    As rotas admin/escrita fecham essa janela reconsultando o estado ATUAL no banco
+    e levantando esta exceção — que o handler traduz para 403 (SEC-01..04/M2)."""
+
+
+def load_active_caller(cur, user_id, organization_id) -> str:
+    """Reconsulta ``role``/``status`` ATUAIS do caller no banco (não confia no token).
+
+    Deve rodar na MESMA transação da operação, para fechar a janela de revogação.
+    Levanta ``CallerRevoked`` se o usuário não existe na organização confiável do
+    token ou não está ``active``. Retorna o papel atual (``admin``/``analyst``/``viewer``)."""
+    cur.execute(
+        "SELECT role, status FROM public.users WHERE id = %s AND organization_id = %s",
+        (user_id, organization_id),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise CallerRevoked("usuário não encontrado na organização")
+    if row["status"] != "active":
+        raise CallerRevoked("conta inativa")
+    return row["role"]
+
+
+def assert_active_admin(cur, user_id, organization_id) -> str:
+    """Como ``load_active_caller``, mas exige papel ``admin`` ATUAL no banco."""
+    role = load_active_caller(cur, user_id, organization_id)
+    if role != "admin":
+        raise CallerRevoked("papel administrativo revogado")
+    return role
+
+
+def assert_active_writer(cur, user_id, organization_id) -> str:
+    """Como ``load_active_caller``, mas exige papel de ESCRITA (admin/analyst) ATUAL.
+
+    Fecha a janela de revogação (~2h) do JWT nas rotas de escrita de negócio (SEC-01):
+    ``@require_writer`` valida só o papel HISTÓRICO do token, então um usuário desativado
+    ou rebaixado a ``viewer`` após o login manteria create/update/delete até o ``exp``.
+    Chamada como 1ª instrução DENTRO do ``tenant_tx`` da operação, reconsulta o papel
+    ATUAL no banco (mesma transação) e levanta ``CallerRevoked`` — que o handler traduz
+    para 403. Retorna o papel atual (útil p/ decisões finas, ex.: máscara de PII)."""
+    role = load_active_caller(cur, user_id, organization_id)
+    if role not in WRITE_ROLES:
+        raise CallerRevoked("permissão de escrita revogada")
+    return role

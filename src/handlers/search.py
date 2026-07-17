@@ -50,7 +50,7 @@ def search_clauses(event, context):
             case_visivel = cur.fetchone() is not None
     except Exception as e:
         logger.error(json.dumps({"event": "SEARCH_ERROR", "error": type(e).__name__,
-                                 "pgcode": getattr(e, "pgcode", None)}))
+                                 "pgcode": getattr(e, "pgcode", None)}), exc_info=True)
         return error_response(500, "Erro na busca")
     if not case_visivel:
         return error_response(404, "Caso não encontrado ou sem acesso")
@@ -59,7 +59,7 @@ def search_clauses(event, context):
     try:
         query_embedding = embeddings_service.embed(data.query)
     except Exception as e:
-        logger.error(json.dumps({"event": "SEARCH_EMBED_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "SEARCH_EMBED_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(502, "Falha ao gerar embedding da consulta")
 
     # 3) Busca vetorial (a RLS de documents filtra o JOIN).
@@ -68,7 +68,7 @@ def search_clauses(event, context):
             rows = rag.search_similar(cur, query_embedding, case_id, data.top_k)
     except Exception as e:
         logger.error(json.dumps({"event": "SEARCH_ERROR", "error": type(e).__name__,
-                                 "pgcode": getattr(e, "pgcode", None)}))
+                                 "pgcode": getattr(e, "pgcode", None)}), exc_info=True)
         return error_response(500, "Erro na busca")
 
     results = [{

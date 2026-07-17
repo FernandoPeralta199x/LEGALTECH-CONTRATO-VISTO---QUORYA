@@ -17,7 +17,8 @@ from src.services.case_lifecycle import (
     assert_case_writable,
 )
 from src.services.database import tenant_tx
-from src.utils.context import require_user, require_writer
+from src.utils.context import (CallerRevoked, assert_active_writer, require_user,
+                               require_writer)
 from src.utils.helpers import error_response, success_response
 from src.utils.lambda_io import fmt_validation_error as _fmt, parse_json_body as _parse_body, parse_pagination as _paginate, valid_uuid as _valid_uuid
 from src.utils.safety import enforce_production_safety
@@ -44,6 +45,8 @@ def create_case_result(event, context):
 
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
+            # SEC-01: fecha a janela de revogação (~2h) do token antes de escrever.
+            assert_active_writer(cur, user["user_id"], user["organization_id"])
             # Atômico (sem TOCTOU): só insere se o case for VISÍVEL ao usuário —
             # a RLS de `cases` filtra o EXISTS; 0 linhas inseridas => 404.
             cur.execute(
@@ -69,6 +72,8 @@ def create_case_result(event, context):
                 if cur.fetchone() is None:
                     raise CaseNotVisible()
                 raise CaseFinalized()
+    except CallerRevoked:
+        return error_response(403, "Permissão de escrita revogada")
     except CaseNotVisible:
         return error_response(404, "Caso não encontrado ou sem acesso")
     except CaseFinalized:
@@ -76,7 +81,7 @@ def create_case_result(event, context):
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_RESULT_CREATE_ERROR",
                                  "error": type(e).__name__,
-                                 "pgcode": getattr(e, "pgcode", None)}))
+                                 "pgcode": getattr(e, "pgcode", None)}), exc_info=True)
         return error_response(500, "Erro ao criar resultado")
 
     logger.info(json.dumps({
@@ -107,7 +112,7 @@ def get_case_result(event, context):
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_RESULT_GET_ERROR",
                                  "error": type(e).__name__,
-                                 "pgcode": getattr(e, "pgcode", None)}))
+                                 "pgcode": getattr(e, "pgcode", None)}), exc_info=True)
         return error_response(500, "Erro ao obter resultado")
     if not row:
         return error_response(404, "Resultado não encontrado")
@@ -137,7 +142,7 @@ def list_case_results(event, context):
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_RESULT_LIST_ERROR",
                                  "error": type(e).__name__,
-                                 "pgcode": getattr(e, "pgcode", None)}))
+                                 "pgcode": getattr(e, "pgcode", None)}), exc_info=True)
         return error_response(500, "Erro ao listar resultados")
     return success_response(
         200, f"{len(rows)} resultados encontrados", [_serialize(r) for r in rows]
@@ -175,6 +180,8 @@ def update_case_result(event, context):
 
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
+            # SEC-01: fecha a janela de revogação (~2h) do token antes de escrever.
+            assert_active_writer(cur, user["user_id"], user["organization_id"])
             # CVS-007: bloqueia alteração de resultado de caso finalizado/deletado
             cur.execute("SELECT case_id FROM public.case_results WHERE id = %s", (result_id,))
             r = cur.fetchone()
@@ -186,6 +193,8 @@ def update_case_result(event, context):
                 tuple(values),
             )
             updated = cur.rowcount
+    except CallerRevoked:
+        return error_response(403, "Permissão de escrita revogada")
     except CaseNotVisible:
         return error_response(404, "Resultado não encontrado")
     except CaseFinalized:
@@ -193,7 +202,7 @@ def update_case_result(event, context):
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_RESULT_UPDATE_ERROR",
                                  "error": type(e).__name__,
-                                 "pgcode": getattr(e, "pgcode", None)}))
+                                 "pgcode": getattr(e, "pgcode", None)}), exc_info=True)
         return error_response(500, "Erro ao atualizar resultado")
     if not updated:
         return error_response(404, "Resultado não encontrado")
@@ -209,6 +218,8 @@ def delete_case_result(event, context):
         return error_response(400, "resultId inválido")
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
+            # SEC-01: fecha a janela de revogação (~2h) do token antes de escrever.
+            assert_active_writer(cur, user["user_id"], user["organization_id"])
             # CVS-007: bloqueia exclusão de resultado de caso finalizado/deletado
             cur.execute("SELECT case_id FROM public.case_results WHERE id = %s", (result_id,))
             r = cur.fetchone()
@@ -219,6 +230,8 @@ def delete_case_result(event, context):
                 "DELETE FROM public.case_results WHERE id = %s", (result_id,)
             )
             deleted = cur.rowcount
+    except CallerRevoked:
+        return error_response(403, "Permissão de escrita revogada")
     except CaseNotVisible:
         return error_response(404, "Resultado não encontrado")
     except CaseFinalized:
@@ -226,7 +239,7 @@ def delete_case_result(event, context):
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_RESULT_DELETE_ERROR",
                                  "error": type(e).__name__,
-                                 "pgcode": getattr(e, "pgcode", None)}))
+                                 "pgcode": getattr(e, "pgcode", None)}), exc_info=True)
         return error_response(500, "Erro ao deletar resultado")
     if not deleted:
         return error_response(404, "Resultado não encontrado")
