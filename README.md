@@ -41,7 +41,8 @@ no API Gateway.
   ingestão OCR→chunks→embeddings com **fila SQS/DLQ** (SP1).
 - **Busca (RAG):** embeddings 1536-dim (OpenAI ou mock) + pgvector (cosseno), herda a RLS por org.
 - **Módulo Financeiro (admin-only):** visão geral (`overview`), **vendas** (projeção venda a
-  venda sobre `requests` — reconcilia com os KPIs por construção), **custos de APIs externas**,
+  venda sobre `requests` — reconcilia com os KPIs por construção), **pagamentos** (projeção do
+  `installment_plan`; período por data do pagamento/fluxo de caixa), **custos de APIs externas**,
   **tributos** e **notas fiscais** (registro informativo — o sistema não forja valor de tributo
   nem número de nota), **relatório executivo** imprimível no navegador, serviços/clientes e
   **trilha de auditoria**. Valores em centavos, totais `GENERATED` pelo banco (anti-forja).
@@ -49,8 +50,8 @@ no API Gateway.
   `EMAIL` (SES/log), `EMBEDDINGS` (OpenAI/mock), `OCR`, `PAYMENT`, e cada adapter externo (`*_BACKEND`).
 - **Segurança fail-closed:** `enforce_production_safety` bloqueia o boot fora de dev se houver
   segredo padrão ou backend mock/local (inclui pagamento e OCR).
-- **Qualidade:** **497 funções de teste** de integração contra PostgreSQL 18 (44 arquivos);
-  **25 migrations**; **68 rotas** + JWT Authorizer.
+- **Qualidade:** **511 funções de teste** de integração contra PostgreSQL 18 (44 arquivos);
+  **25 migrations**; **69 rotas** + JWT Authorizer.
 
 ## Arquitetura
 
@@ -128,7 +129,7 @@ flowchart LR
 | Triagem | `GET /cases/{caseId}/triage` · `POST /cases/{caseId}/triage/run` | **JWT** (writer) |
 | Relatório | `GET /cases/{caseId}/report` · `POST /cases/{caseId}/report/generate` · `POST /cases/{caseId}/report/review` | **JWT** (writer) |
 | Dashboard | `GET /dashboard/stats` | **JWT** |
-| Financeiro | `GET /financial/overview` · `GET /financial/sales` · `GET/POST /financial/api-costs` · `GET/POST /financial/taxes` · `GET/POST /financial/fiscal-documents` · `GET /financial/reports/executive` · `GET /financial/services` · `GET /financial/clients` · `GET /financial/audit` | **JWT** (admin) |
+| Financeiro | `GET /financial/overview` · `GET /financial/sales` · `GET /financial/payments` · `GET/POST /financial/api-costs` · `GET/POST /financial/taxes` · `GET/POST /financial/fiscal-documents` · `GET /financial/reports/executive` · `GET /financial/services` · `GET /financial/clients` · `GET /financial/audit` | **JWT** (admin) |
 | Documentos | `POST/GET /documents` · `GET /documents/{docId}` · `GET /documents/{docId}/download-url` · `POST /documents/{docId}/process` · `POST /documents/{docId}/enqueue-processing` | **JWT** |
 | Case-results | `POST/GET /case-results` · `GET/PUT/DELETE /case-results/{resultId}` | **JWT** |
 | Busca (RAG) | `POST /search` | **JWT** |
@@ -152,7 +153,7 @@ contrato_visto_backend/
 ├── migrations/        # 001–025 (RLS por dono → por organização, pipeline, pricing, parcelas,
 │                      #   custos de APIs externas, tributos/notas fiscais, trilha de auditoria,
 │                      #   integridade/unicidade, revogação de sessão, minimização de PII, índices de vendas)
-├── tests/             # 497 funções de teste de integração (pytest + PG18)
+├── tests/             # 511 funções de teste de integração (pytest + PG18)
 ├── tools/             # setup_test_db, pip_audit, apply_migrations (runner idempotente), ...
 ├── docs/              # PROGRESSO, PLANO_MIGRACAO_SERVERLESS, PLANO_FASE7_DEPLOY,
 │                      #   security/fase7-hardening-checklist, dicionario_de_dados, specs/plans
