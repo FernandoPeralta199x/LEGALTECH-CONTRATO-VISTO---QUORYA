@@ -16,7 +16,9 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:18
+        # pgvector (não o postgres:18 puro): o schema base cria a extensão `vector`
+        # (document_embeddings). Mesma imagem do dev local.
+        image: pgvector/pgvector:pg18
         env:
           POSTGRES_USER: dbadmin
           POSTGRES_PASSWORD: dbadmin
