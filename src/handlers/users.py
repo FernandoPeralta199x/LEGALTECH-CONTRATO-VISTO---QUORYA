@@ -117,7 +117,7 @@ def create_user(event, context):
     except Exception as e:
         logger.error(json.dumps({"event": "USER_CREATE_ERROR",
                                  "error": type(e).__name__,
-                                 "pgcode": getattr(e, "pgcode", None)}))
+                                 "pgcode": getattr(e, "pgcode", None)}), exc_info=True)
         return error_response(500, "Erro ao criar usuário")
 
     logger.info(json.dumps({"event": "USER_CREATED", "user_id": user_id, "role": "admin"}))
@@ -146,7 +146,7 @@ def login(event, context):
             user = cur.fetchone()
     except Exception as e:
         logger.error(json.dumps({"event": "AUTH_LOGIN_ERROR",
-                                 "error": type(e).__name__}))
+                                 "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro no login")
 
     # Sempre executa bcrypt (hash dummy se o usuário não existe) p/ tempo uniforme.
@@ -191,7 +191,7 @@ def me(event, context):
             )
             row = cur.fetchone()
     except Exception as e:
-        logger.error(json.dumps({"event": "AUTH_ME_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "AUTH_ME_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao obter usuário atual")
     if not row:
         return error_response(404, "Usuário não encontrado")
@@ -240,7 +240,7 @@ def forgot_password(event, context):
             issued = cur.fetchone() is not None
     except Exception as e:
         logger.error(json.dumps({"event": "PASSWORD_RESET_REQUEST_ERROR",
-                                 "error": type(e).__name__}))
+                                 "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao solicitar reset")
 
     # SEC-08: só envia (e registra a solicitação) quando um NOVO token foi emitido.
@@ -288,7 +288,7 @@ def reset_password(event, context):
                         (reset["user_id"],))
     except Exception as e:
         logger.error(json.dumps({"event": "PASSWORD_RESET_ERROR",
-                                 "error": type(e).__name__}))
+                                 "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao resetar senha")
 
     logger.info(json.dumps({"event": "PASSWORD_RESET_SUCCESS",
@@ -323,7 +323,7 @@ def get_user(event, context):
                                    "user_id": user["user_id"]}))
         return error_response(403, "Acesso negado")
     except Exception as e:
-        logger.error(json.dumps({"event": "USER_GET_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "USER_GET_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao obter usuário")
     if not row:
         return error_response(404, "Usuário não encontrado")
@@ -355,7 +355,7 @@ def list_users(event, context):
                                    "user_id": caller["user_id"]}))
         return error_response(403, "Acesso negado")
     except Exception as e:
-        logger.error(json.dumps({"event": "USER_LIST_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "USER_LIST_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao listar usuários")
     return success_response(200, f"{len(rows)} usuários encontrados",
                             [_serialize(r) for r in rows])
@@ -422,7 +422,7 @@ def update_user(event, context):
     except _LastAdmin:
         return error_response(409, "não é possível rebaixar/desativar o último administrador")
     except Exception as e:
-        logger.error(json.dumps({"event": "USER_UPDATE_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "USER_UPDATE_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao atualizar usuário")
     if not updated:
         return error_response(404, "Usuário não encontrado")
@@ -457,7 +457,7 @@ def delete_user(event, context):
     except _LastAdmin:
         return error_response(409, "não é possível desativar o último administrador")
     except Exception as e:
-        logger.error(json.dumps({"event": "USER_DELETE_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "USER_DELETE_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao deletar usuário")
     if not updated:
         return error_response(404, "Usuário não encontrado")

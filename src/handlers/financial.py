@@ -109,7 +109,7 @@ def get_overview(event, context):
     except CallerRevoked:
         return error_response(403, "Permissão administrativa revogada")
     except Exception as e:
-        logger.error(json.dumps({"event": "FINANCIAL_OVERVIEW_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "FINANCIAL_OVERVIEW_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao obter visão financeira")
 
     return success_response(200, "Visão financeira", {

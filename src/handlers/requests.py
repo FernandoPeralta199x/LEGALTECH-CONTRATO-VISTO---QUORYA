@@ -218,7 +218,7 @@ def create_request(event, context):
     except Exception as e:
         logger.error(json.dumps({"event": "REQUEST_CREATE_ERROR",
                                  "error": type(e).__name__,
-                                 "pgcode": getattr(e, "pgcode", None)}))
+                                 "pgcode": getattr(e, "pgcode", None)}), exc_info=True)
         return error_response(500, "Erro ao criar pedido")
 
     logger.info(json.dumps({"event": "REQUEST_CREATED",
@@ -281,7 +281,7 @@ def get_request(event, context):
             crow = cur.fetchone()
             case_status = crow["status"] if crow else None
     except Exception as e:
-        logger.error(json.dumps({"event": "REQUEST_GET_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "REQUEST_GET_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao obter pedido")
 
     return success_response(200, "Pedido encontrado", {

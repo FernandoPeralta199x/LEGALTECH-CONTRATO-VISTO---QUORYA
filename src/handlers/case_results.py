@@ -81,7 +81,7 @@ def create_case_result(event, context):
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_RESULT_CREATE_ERROR",
                                  "error": type(e).__name__,
-                                 "pgcode": getattr(e, "pgcode", None)}))
+                                 "pgcode": getattr(e, "pgcode", None)}), exc_info=True)
         return error_response(500, "Erro ao criar resultado")
 
     logger.info(json.dumps({
@@ -112,7 +112,7 @@ def get_case_result(event, context):
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_RESULT_GET_ERROR",
                                  "error": type(e).__name__,
-                                 "pgcode": getattr(e, "pgcode", None)}))
+                                 "pgcode": getattr(e, "pgcode", None)}), exc_info=True)
         return error_response(500, "Erro ao obter resultado")
     if not row:
         return error_response(404, "Resultado não encontrado")
@@ -142,7 +142,7 @@ def list_case_results(event, context):
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_RESULT_LIST_ERROR",
                                  "error": type(e).__name__,
-                                 "pgcode": getattr(e, "pgcode", None)}))
+                                 "pgcode": getattr(e, "pgcode", None)}), exc_info=True)
         return error_response(500, "Erro ao listar resultados")
     return success_response(
         200, f"{len(rows)} resultados encontrados", [_serialize(r) for r in rows]
@@ -202,7 +202,7 @@ def update_case_result(event, context):
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_RESULT_UPDATE_ERROR",
                                  "error": type(e).__name__,
-                                 "pgcode": getattr(e, "pgcode", None)}))
+                                 "pgcode": getattr(e, "pgcode", None)}), exc_info=True)
         return error_response(500, "Erro ao atualizar resultado")
     if not updated:
         return error_response(404, "Resultado não encontrado")
@@ -239,7 +239,7 @@ def delete_case_result(event, context):
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_RESULT_DELETE_ERROR",
                                  "error": type(e).__name__,
-                                 "pgcode": getattr(e, "pgcode", None)}))
+                                 "pgcode": getattr(e, "pgcode", None)}), exc_info=True)
         return error_response(500, "Erro ao deletar resultado")
     if not deleted:
         return error_response(404, "Resultado não encontrado")

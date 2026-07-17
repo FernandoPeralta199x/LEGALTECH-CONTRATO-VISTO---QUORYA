@@ -74,7 +74,7 @@ def list_case_parties(event, context):
             )
             rows = cur.fetchall()
     except Exception as e:
-        logger.error(json.dumps({"event": "CASE_PARTIES_LIST_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "CASE_PARTIES_LIST_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao listar partes do caso")
     return success_response(200, f"{len(rows)} partes encontradas",
                             [_serialize_party(r) for r in rows])
@@ -139,7 +139,7 @@ def create_case_party(event, context):
     except CaseFinalized:
         return error_response(409, "caso finalizado não aceita novas partes")
     except Exception as e:
-        logger.error(json.dumps({"event": "CASE_PARTY_CREATE_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "CASE_PARTY_CREATE_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao criar parte")
     return success_response(201, "Parte criada com sucesso", _serialize_party(row))
 
@@ -204,6 +204,6 @@ def update_case_party(event, context):
     except CaseFinalized:
         return error_response(409, "caso finalizado não aceita alteração de partes")
     except Exception as e:
-        logger.error(json.dumps({"event": "CASE_PARTY_UPDATE_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "CASE_PARTY_UPDATE_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao atualizar parte")
     return success_response(200, "Parte atualizada com sucesso", _serialize_party(row))

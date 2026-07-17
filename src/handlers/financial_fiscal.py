@@ -85,7 +85,7 @@ def list_taxes(event, context):
     except CallerRevoked:
         return error_response(403, "Permissão administrativa revogada")
     except Exception as e:
-        logger.error(json.dumps({"event": "TAXES_LIST_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "TAXES_LIST_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao listar tributos")
     return success_response(200, "Tributos", {
         "period": period,
@@ -129,7 +129,7 @@ def create_tax(event, context):
         logger.info(json.dumps({"event": "TAXES_INTEGRITY", "error": type(e).__name__}))
         return error_response(400, "Vínculo (venda/caso/cliente) inválido para esta organização")
     except Exception as e:
-        logger.error(json.dumps({"event": "TAXES_CREATE_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "TAXES_CREATE_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao registrar tributo")
     return success_response(201, "Tributo registrado", row)
 
@@ -164,7 +164,7 @@ def list_fiscal_documents(event, context):
     except CallerRevoked:
         return error_response(403, "Permissão administrativa revogada")
     except Exception as e:
-        logger.error(json.dumps({"event": "FISCAL_LIST_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "FISCAL_LIST_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao listar notas fiscais")
     return success_response(200, "Notas fiscais", {
         "period": period,
@@ -218,6 +218,6 @@ def create_fiscal_document(event, context):
         logger.info(json.dumps({"event": "FISCAL_INTEGRITY", "error": type(e).__name__}))
         return error_response(400, "Vínculo (venda/caso/cliente) inválido para esta organização")
     except Exception as e:
-        logger.error(json.dumps({"event": "FISCAL_CREATE_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "FISCAL_CREATE_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao registrar nota fiscal")
     return success_response(201, "Nota fiscal registrada", row)

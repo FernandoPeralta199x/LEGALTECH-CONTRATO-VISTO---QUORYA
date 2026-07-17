@@ -125,7 +125,7 @@ def create_case(event, context):
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_CREATE_ERROR",
                                  "error": type(e).__name__,
-                                 "pgcode": getattr(e, "pgcode", None)}))
+                                 "pgcode": getattr(e, "pgcode", None)}), exc_info=True)
         return error_response(500, "Erro ao criar caso")
 
     logger.info(json.dumps({
@@ -155,7 +155,7 @@ def get_case(event, context):
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_GET_ERROR",
                                  "error": type(e).__name__,
-                                 "pgcode": getattr(e, "pgcode", None)}))
+                                 "pgcode": getattr(e, "pgcode", None)}), exc_info=True)
         return error_response(500, "Erro ao obter caso")
     return success_response(200, "Caso encontrado", {**_serialize(row), **detail})
 
@@ -400,7 +400,7 @@ def get_case_aggregate(event, context):
             installment_options, config_version = _installment_options_for(cur, org, request_total)
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_AGGREGATE_ERROR", "error": type(e).__name__,
-                                 "pgcode": getattr(e, "pgcode", None)}))
+                                 "pgcode": getattr(e, "pgcode", None)}), exc_info=True)
         return error_response(500, "Erro ao obter o detalhe do caso")
 
     return success_response(200, "Detalhe do caso", {
@@ -458,7 +458,7 @@ def list_cases(event, context):
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_LIST_ERROR",
                                  "error": type(e).__name__,
-                                 "pgcode": getattr(e, "pgcode", None)}))
+                                 "pgcode": getattr(e, "pgcode", None)}), exc_info=True)
         return error_response(500, "Erro ao listar casos")
     total_pages = (total + page_size - 1) // page_size if page_size else 1
     # Página operacional (shape BackendCaseListPage) -> frontend usa mapOperationalCase,
@@ -535,7 +535,7 @@ def update_case(event, context):
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_UPDATE_ERROR",
                                  "error": type(e).__name__,
-                                 "pgcode": getattr(e, "pgcode", None)}))
+                                 "pgcode": getattr(e, "pgcode", None)}), exc_info=True)
         return error_response(500, "Erro ao atualizar caso")
     logger.info(json.dumps({"event": "CASE_UPDATED", "case_id": case_id}))
     return success_response(200, "Caso atualizado com sucesso", _serialize(row))
@@ -562,7 +562,7 @@ def delete_case(event, context):
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_DELETE_ERROR",
                                  "error": type(e).__name__,
-                                 "pgcode": getattr(e, "pgcode", None)}))
+                                 "pgcode": getattr(e, "pgcode", None)}), exc_info=True)
         return error_response(500, "Erro ao deletar caso")
     if not deleted:
         return error_response(404, "Caso não encontrado")

@@ -63,7 +63,7 @@ def list_api_costs(event, context):
     except CallerRevoked:
         return error_response(403, "Permissão administrativa revogada")
     except Exception as e:
-        logger.error(json.dumps({"event": "API_COSTS_LIST_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "API_COSTS_LIST_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao listar custos de API")
 
     return success_response(200, "Custos de API", {
@@ -129,7 +129,7 @@ def create_api_cost(event, context):
         logger.info(json.dumps({"event": "API_COSTS_INTEGRITY", "error": type(e).__name__}))
         return error_response(400, "Vínculo (venda/caso/cliente) inválido para esta organização")
     except Exception as e:
-        logger.error(json.dumps({"event": "API_COSTS_CREATE_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "API_COSTS_CREATE_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao registrar custo de API")
 
     return success_response(201, "Custo de API registrado", row)

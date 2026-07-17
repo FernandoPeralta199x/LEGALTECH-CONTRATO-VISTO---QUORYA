@@ -54,7 +54,7 @@ def get_case_report(event, context):
                 return error_response(404, "Caso não encontrado")
             report = _get(cur, org, case_id)
     except Exception as e:
-        logger.error(json.dumps({"event": "REPORT_GET_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "REPORT_GET_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao obter o relatório")
     if not report:
         return error_response(404, "Relatório ainda não gerado")
@@ -93,7 +93,7 @@ def generate_case_report(event, context):
         return error_response(409, "Execute a triagem antes de gerar o relatório (o parecer exige evidências)")
     except Exception as e:
         logger.error(json.dumps({"event": "REPORT_GENERATE_ERROR", "error": type(e).__name__,
-                                 "pgcode": getattr(e, "pgcode", None)}))
+                                 "pgcode": getattr(e, "pgcode", None)}), exc_info=True)
         return error_response(500, "Erro ao gerar o relatório")
     logger.info(json.dumps({"event": "REPORT_GENERATED", "case_id": case_id}))
     return success_response(200, "Relatório gerado", report)
@@ -141,7 +141,7 @@ def review_case_report(event, context):
             409, "Parecer simulado (mock) não pode ser aprovado nem concluir o caso;"
                  " requer parecer de proveniência real")
     except Exception as e:
-        logger.error(json.dumps({"event": "REPORT_REVIEW_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "REPORT_REVIEW_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao revisar o relatório")
     logger.info(json.dumps({"event": "REPORT_REVIEWED", "case_id": case_id, "status": status}))
     return success_response(200, "Relatório revisado", report)

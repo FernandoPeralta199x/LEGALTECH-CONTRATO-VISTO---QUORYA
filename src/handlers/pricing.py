@@ -62,7 +62,7 @@ def get_pricing(event, context):
             overrides = _org_module_overrides(cur, user["organization_id"])
         catalog = build_catalog(overrides)
     except Exception as e:
-        logger.error(json.dumps({"event": "PRICING_CATALOG_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "PRICING_CATALOG_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao obter catálogo de pricing")
     return success_response(200, "Catálogo de pricing", catalog)
 
@@ -101,7 +101,7 @@ def estimate_pricing(event, context):
         est["pricing_config_version"] = iver
         est["payment_mode"] = os.getenv("PAYMENT_MODE", "mock")
     except Exception as e:
-        logger.error(json.dumps({"event": "PRICING_ESTIMATE_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "PRICING_ESTIMATE_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao estimar pricing")
     return success_response(200, "Estimativa de pricing", est)
 
@@ -148,7 +148,7 @@ def get_pricing_config(event, context):
                 " FROM public.pricing_configs WHERE organization_id = %s", (org,))
             row = cur.fetchone()
     except Exception as e:
-        logger.error(json.dumps({"event": "PRICING_CONFIG_GET_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "PRICING_CONFIG_GET_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao obter config de pricing")
     return success_response(200, "Config de pricing", _config_payload(row, org))
 
@@ -254,7 +254,7 @@ def update_pricing_config(event, context):
         logger.warning(json.dumps({"event": "AUTHZ_REVOKED", "action": "update_pricing_config"}))
         return error_response(403, "Permissão administrativa revogada")
     except Exception as e:
-        logger.error(json.dumps({"event": "PRICING_CONFIG_PUT_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "PRICING_CONFIG_PUT_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao atualizar config de pricing")
 
     logger.info(json.dumps({"event": "PRICING_CONFIG_UPDATED", "version": row["version"]}))
@@ -270,7 +270,7 @@ def check_cases_limit(event, context):
         with tenant_tx(user["user_id"], user["role"], org) as cur:
             cases_limit, active = cases_limit_status(cur, org)  # be-dry-04: reusa o canônico
     except Exception as e:
-        logger.error(json.dumps({"event": "PRICING_LIMIT_CHECK_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "PRICING_LIMIT_CHECK_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao verificar limite de casos")
     allowed = cases_limit is None or active < cases_limit
     return success_response(200, "Verificação de limite de casos", {

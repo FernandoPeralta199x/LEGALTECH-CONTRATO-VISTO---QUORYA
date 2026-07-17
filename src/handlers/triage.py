@@ -65,7 +65,7 @@ def list_triage(event, context):
             )
             rows = cur.fetchall()
     except Exception as e:
-        logger.error(json.dumps({"event": "TRIAGE_LIST_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "TRIAGE_LIST_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao listar o plano de triagem")
     return success_response(200, f"{len(rows)} módulos de triagem", [_serialize_module(r) for r in rows])
 
@@ -100,7 +100,7 @@ def run_triage(event, context):
         return error_response(402, "Pagamento pendente: conclua o pagamento antes de rodar a triagem")
     except Exception as e:
         logger.error(json.dumps({"event": "TRIAGE_RUN_ERROR", "error": type(e).__name__,
-                                 "pgcode": getattr(e, "pgcode", None)}))
+                                 "pgcode": getattr(e, "pgcode", None)}), exc_info=True)
         return error_response(500, "Erro ao executar a triagem")
     logger.info(json.dumps({"event": "TRIAGE_EXECUTED", "case_id": case_id,
                             "modules": result["modules_executed"]}))

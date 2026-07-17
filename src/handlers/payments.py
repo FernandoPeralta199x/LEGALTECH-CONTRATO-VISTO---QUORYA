@@ -167,7 +167,7 @@ def create_case_payment(event, context):
         logger.warning(json.dumps({"event": "AUTHZ_REVOKED", "action": "create_case_payment"}))
         return error_response(403, "Permissão de escrita revogada")
     except Exception as e:
-        logger.error(json.dumps({"event": "CASE_PAYMENT_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "CASE_PAYMENT_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao registrar pagamento")
 
     return success_response(201, "Pagamento registrado",

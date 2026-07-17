@@ -61,7 +61,7 @@ def create_client(event, context):
     except Exception as e:
         logger.error(json.dumps({"event": "CLIENT_CREATE_ERROR",
                                  "error": type(e).__name__,
-                                 "pgcode": getattr(e, "pgcode", None)}))
+                                 "pgcode": getattr(e, "pgcode", None)}), exc_info=True)
         return error_response(500, "Erro ao criar cliente")
 
     logger.info(json.dumps({"event": "CLIENT_CREATED", "client_id": str(row["id"])}))
@@ -79,7 +79,7 @@ def get_client(event, context):
             cur.execute(_SELECT_COLS + " WHERE id = %s", (client_id,))
             row = cur.fetchone()
     except Exception as e:
-        logger.error(json.dumps({"event": "CLIENT_GET_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "CLIENT_GET_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao obter cliente")
     if not row:
         return error_response(404, "Cliente não encontrado")
@@ -112,7 +112,7 @@ def list_clients(event, context):
             )
             rows = cur.fetchall()
     except Exception as e:
-        logger.error(json.dumps({"event": "CLIENT_LIST_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "CLIENT_LIST_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao listar clientes")
     total_pages = (total + page_size - 1) // page_size if page_size else 1
     return success_response(200, f"{total} clientes encontrados", {
@@ -172,7 +172,7 @@ def update_client(event, context):
     except CallerRevoked:
         return error_response(403, "Permissão de escrita revogada")
     except Exception as e:
-        logger.error(json.dumps({"event": "CLIENT_UPDATE_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "CLIENT_UPDATE_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao atualizar cliente")
     logger.info(json.dumps({"event": "CLIENT_UPDATED", "client_id": client_id}))
     return success_response(200, "Cliente atualizado com sucesso", _serialize(row, role))
@@ -198,7 +198,7 @@ def delete_client(event, context):
     except CallerRevoked:
         return error_response(403, "Permissão de escrita revogada")
     except Exception as e:
-        logger.error(json.dumps({"event": "CLIENT_DELETE_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "CLIENT_DELETE_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao deletar cliente")
     if not updated:
         return error_response(404, "Cliente não encontrado")
