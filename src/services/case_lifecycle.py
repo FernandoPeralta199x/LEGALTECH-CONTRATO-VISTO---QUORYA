@@ -8,9 +8,18 @@ Usar sempre com o cursor da ``tenant_tx`` corrente (respeita a RLS por org).
 """
 import os
 
+from src.utils.safety import is_production
+
 _FINALIZED_STATUSES = ("completed", "closed")
-# Pagamento aceito para liberar trabalho pago (triagem/relatório).
-_PAID_STATUSES = ("simulated", "paid")
+# Pagamento REAL que libera trabalho pago (triagem/relatório) em produção.
+_PAID_STATUSES = ("paid",)
+# Em dev/test, o pagamento MOCK ('simulated', do PaymentProvider mock) também libera,
+# para exercitar o fluxo pós-pagamento (gate hard) sem um gateway real. Em produção,
+# uma linha 'simulated' só pode ser RESÍDUO (dados migrados de dev) — e não deve
+# destravar trabalho pago que gasta APIs reais. Defesa em profundidade, mesmo espírito
+# do PRC-01/A2 (o mock nunca tem efeito de dinheiro real fora de dev). O boot produtivo
+# já exige provider real (enforce_production_safety), então isto é a segunda camada.
+_PAID_STATUSES_DEV = ("simulated", "paid")
 
 
 class CaseNotVisible(Exception):
@@ -57,8 +66,9 @@ def assert_case_writable(cur, case_id) -> None:
 
 def assert_case_paid(cur, case_id) -> None:
     """Gate de pagamento: quando ``PAYMENT_GATE=hard``, o caso só libera trabalho pago
-    (triagem/relatório) se o pedido estiver pago (``payment_status`` em
-    ``simulated``/``paid``). Fora do modo ``hard`` é no-op — mantém o MVP local e a
+    (triagem/relatório) se o pedido estiver pago. Em PRODUÇÃO, apenas ``paid`` (dinheiro
+    real); em dev/test, ``simulated``/``paid`` (o mock também libera, para testar o
+    fluxo sem gateway real). Fora do modo ``hard`` é no-op — mantém o MVP local e a
     suíte de testes fluindo sem exigir pagamento. Chamar dentro da ``tenant_tx``.
 
     Antes de ligar ``hard`` na AWS, ver spec §8."""
@@ -68,7 +78,8 @@ def assert_case_paid(cur, case_id) -> None:
                 (str(case_id),))
     row = cur.fetchone()
     status = (row["payment_status"] if row else None) or "pending"
-    if status not in _PAID_STATUSES:
+    accepted = _PAID_STATUSES if is_production() else _PAID_STATUSES_DEV
+    if status not in accepted:
         raise CasePaymentRequired()
 
 
