@@ -87,9 +87,12 @@ def generate_report(cur, org, case_id, user_id) -> dict:
     cur.execute("SELECT module_key, provider FROM public.triage_modules"
                 " WHERE case_id = %s ORDER BY created_at, id", (case_id,))
     modules = cur.fetchall()
-    cur.execute("SELECT provider, summary, risk_signals, confidence"
+    cur.execute("SELECT provider, summary, risk_signals, confidence, status"
                 " FROM public.provider_results WHERE case_id = %s", (case_id,))
     results = cur.fetchall()
+    # TRIAGE-02: módulos que FALHARAM (status='error') contam em results mas não
+    # emitem sinais — sem isto, uma triagem parcial produziria recomendação otimista.
+    failed = [r["provider"] for r in results if r.get("status") == "error"]
 
     findings = [r["summary"] for r in results if r["summary"]]
     signals: list[str] = []
@@ -108,9 +111,22 @@ def generate_report(cur, org, case_id, user_id) -> dict:
     confs = [r["confidence"] for r in results if r["confidence"] is not None]
     confidence = round(sum(confs) / len(confs), 2) if confs else None
     risk = classify_risk(signals)
-    # sem evidências -> revisão humana obrigatória; senão deriva do nível de risco
-    recommendation = "human_review_required" if not results else _REC_CODE[risk]
-    missing = [] if results else ["Triagem ainda não executada — execute a triagem antes de gerar o relatório."]
+    # TRIAGE-02: espelha o piso do runner (triage_runner.run_case_triage) — um módulo
+    # em falha não pode resultar em risco 'low' no parecer nem no badge do caso, senão
+    # cases.risk_level e o texto do summary regridiriam para 'low' apesar da recomendação
+    # de revisão humana (o canal otimista que esta correção fecha).
+    if failed and risk == "low":
+        risk = "medium"
+    # sem evidências OU com módulo em falha -> revisão humana obrigatória (TRIAGE-02);
+    # senão deriva do nível de risco.
+    recommendation = "human_review_required" if (not results or failed) else _REC_CODE[risk]
+    if not results:
+        missing = ["Triagem ainda não executada — execute a triagem antes de gerar o relatório."]
+    elif failed:
+        missing = [f"Triagem incompleta: {len(failed)} módulo(s) falharam "
+                   f"({', '.join(sorted(set(failed)))}) — exige revisão humana antes de concluir."]
+    else:
+        missing = []
     summary = (f"Parecer consolidado a partir de {len(modules)} módulos de triagem"
                f" ({len(results)} resultados). Nível de risco estimado: {risk}."
                f" {_REC_TEXT[recommendation]}")

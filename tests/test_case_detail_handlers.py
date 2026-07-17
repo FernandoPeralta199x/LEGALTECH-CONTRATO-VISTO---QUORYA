@@ -298,6 +298,115 @@ def test_run_triage_falha_de_provider_marca_error(case_id, monkeypatch):
     conn.close()
 
 
+def test_triage01_provider_none_nao_local_vira_error(case_id, monkeypatch):
+    """TRIAGE-01: query_provider retorna None para provider NÃO-local (wiring ausente/typo).
+    Antes virava 'done'/ok=True (no-op silencioso); agora deve ser 'error' (fail-closed)."""
+    from src.services import triage_runner as tr
+    monkeypatch.setattr(tr, "query_provider", lambda provider, ctx=None: None)
+    a = str(uuid.uuid4())
+    result = _data(tr_h.run_triage(_event(a, path={"caseId": case_id}), None))
+    assert result["modules_failed"] >= 1
+    conn = _admin_conn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT DISTINCT status FROM public.provider_results WHERE case_id=%s", (case_id,))
+        assert "error" in [r[0] for r in cur.fetchall()]
+    conn.close()
+
+
+def test_triage03_falha_nao_reporta_risco_baixo(case_id, monkeypatch):
+    """TRIAGE-03: triagem com falhas não pode virar risk_level='low' por ausência de
+    sinais — 'sem sinal por resultado limpo' != 'sem sinal porque não executou'."""
+    from src.adapters.base import AdapterResult
+    from src.services import triage_runner as tr
+    monkeypatch.setattr(tr, "query_provider",
+                        lambda provider, ctx=None: AdapterResult(success=False, error="down", source="real"))
+    a = str(uuid.uuid4())
+    result = _data(tr_h.run_triage(_event(a, path={"caseId": case_id}), None))
+    assert result["modules_failed"] >= 1
+    assert result["risk_level"] != "low"
+    conn = _admin_conn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT risk_level FROM public.cases WHERE id=%s", (case_id,))
+        assert cur.fetchone()[0] != "low"
+    conn.close()
+
+
+def test_triage02_relatorio_com_falha_exige_revisao(case_id, monkeypatch):
+    """TRIAGE-02: relatório gerado sobre triagem PARCIAL (um módulo em falha, os demais
+    concluídos) -> human_review_required e a lacuna listada em missing_information — não
+    recomenda 'prosseguir' com base só nos módulos bem-sucedidos."""
+    from src.adapters.base import AdapterResult
+    from src.services import triage_runner as tr
+
+    calls = {"n": 0}
+
+    def _parcial(provider, ctx=None):
+        calls["n"] += 1
+        if calls["n"] == 1:  # só o 1º módulo falha; os demais concluem (há módulos 'done')
+            return AdapterResult(success=False, error="down", source="real")
+        return AdapterResult(success=True, data={"module_key": provider, "ok": True}, source="mock")
+
+    monkeypatch.setattr(tr, "query_provider", _parcial)
+    a = str(uuid.uuid4())
+    tr_h.run_triage(_event(a, path={"caseId": case_id}), None)
+    rep = _data(rep_h.generate_case_report(_event(a, path={"caseId": case_id}), None))
+    assert rep["recommendation"] == "human_review_required"
+    assert rep.get("missing_information"), "deve listar a triagem incompleta"
+
+
+def test_triage02_risco_nao_regride_para_low(case_id, monkeypatch):
+    """TRIAGE-02: generate_report reavalia o risco e SOBRESCREVE cases.risk_level. Sobre uma
+    triagem PARCIAL (um módulo em falha, os demais 'done' sem sinais), o piso low->medium do
+    runner NÃO pode regredir — sem ele, o badge do caso e o texto do parecer voltariam a 'low'
+    apesar da recomendação de revisão humana."""
+    from src.adapters.base import AdapterResult
+    from src.services import triage_runner as tr
+
+    calls = {"n": 0}
+
+    def _parcial(provider, ctx=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return AdapterResult(success=False, error="down", source="real")
+        return AdapterResult(success=True, data={"module_key": provider, "ok": True}, source="mock")
+
+    monkeypatch.setattr(tr, "query_provider", _parcial)
+    a = str(uuid.uuid4())
+    tr_h.run_triage(_event(a, path={"caseId": case_id}), None)
+    rep = _data(rep_h.generate_case_report(_event(a, path={"caseId": case_id}), None))
+    assert "estimado: low" not in rep.get("summary", "")   # o parecer não afirma risco baixo
+    conn = _admin_conn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT risk_level FROM public.cases WHERE id=%s", (case_id,))
+        assert cur.fetchone()[0] == "medium"               # piso mantido, não regrediu a 'low'
+    conn.close()
+
+
+def test_triage03_excecao_de_adapter_vira_error_nao_500(case_id, monkeypatch):
+    """TRIAGE-03 (Fase 7): uma EXCEÇÃO do provider real (timeout/NotImplementedError) vira erro
+    DESTE módulo — a triagem não retorna 500 (rollback total dos demais) e a mensagem persistida
+    carrega só o TIPO da exceção, nunca o corpo (que pode ecoar PII)."""
+    from src.services import triage_runner as tr
+
+    def _boom(provider, ctx=None):
+        raise TimeoutError("bureau devolveu 123.456.789-00 no corpo")   # corpo não pode vazar
+
+    monkeypatch.setattr(tr, "query_provider", _boom)
+    a = str(uuid.uuid4())
+    result = _data(tr_h.run_triage(_event(a, path={"caseId": case_id}), None))   # não 500
+    assert result["modules_failed"] >= 1
+    assert result["risk_level"] != "low"
+    conn = _admin_conn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT DISTINCT status FROM public.provider_results WHERE case_id=%s", (case_id,))
+        assert [r[0] for r in cur.fetchall()] == ["error"]
+        cur.execute("SELECT error_message FROM public.provider_results WHERE case_id=%s LIMIT 1", (case_id,))
+        msg = cur.fetchone()[0] or ""
+        assert "TimeoutError" in msg               # tipo presente (honesto)
+        assert "123.456.789-00" not in msg         # corpo/PII NÃO vaza
+    conn.close()
+
+
 def test_run_triage_viewer_403(case_id):
     v = str(uuid.uuid4())
     assert tr_h.run_triage(

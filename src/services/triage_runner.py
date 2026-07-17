@@ -13,7 +13,7 @@ import hashlib
 
 from psycopg2.extras import Json
 
-from src.adapters.registry import query_provider
+from src.adapters.registry import canonical_provider_key, query_provider
 from src.utils.pii import mask_document, mask_email, mask_phone
 
 # M13/LGPD (CVS-006): chaves cuja evidência pode carregar PII e que devem ser
@@ -178,8 +178,9 @@ def _interpret(provider: str, module_key: str, evidence):
     return ([], 0.7, "Módulo executado sem sinais de risco.")
 
 
-def _run_module(cur, org, case_id, user_id, module) -> list[str]:
-    """Executa um módulo: cache de evidência + provider_results + atualiza o módulo."""
+def _run_module(cur, org, case_id, user_id, module) -> tuple[list[str], str]:
+    """Executa um módulo: cache de evidência + provider_results + atualiza o módulo.
+    Retorna (sinais_de_risco, status) — status ∈ {'done','error'} (TRIAGE-03)."""
     provider = module["provider"]
     module_key = module["module_key"]
     module_id = module["id"]
@@ -200,16 +201,39 @@ def _run_module(cur, org, case_id, user_id, module) -> list[str]:
     #     chamada externa paga/rate-limited numa reexecução (idempotência real;
     #     provavelmente exige rastrear source_mode no cache).
     ctx = {"case_id": str(case_id), "module_key": module_key}
-    adapter_result = query_provider(provider, ctx)
+    try:
+        adapter_result = query_provider(provider, ctx)
+        adapter_exc = None
+    except Exception as exc:  # noqa: BLE001
+        # TRIAGE-03: na Fase 7 um provider REAL pode estourar (timeout/rede/
+        # NotImplementedError). A exceção vira erro DESTE módulo (fail-closed granular),
+        # não derruba a triagem inteira via rollback — os demais módulos seguem.
+        adapter_result = None
+        adapter_exc = exc
 
     # A3: TRÊS estados distintos (antes "sem adapter" e "adapter falhou" eram
     # colapsados no mesmo 'done'/source_mode='mock'/ok=True, mascarando falha real).
     error_message = None
-    if adapter_result is None:
-        # provider local (validação de partes): não há adapter externo.
+    if adapter_exc is not None:
+        # Só o TIPO da exceção na mensagem persistida: o corpo pode ecoar o documento
+        # (PII/LGPD, ver nota acima). O 'ok=False' impede evidência forjada.
+        normalized = {"module_key": module_key, "ok": False}
+        source_mode = "real"
+        status = "error"
+        error_message = f"provider '{provider}' falhou ({type(adapter_exc).__name__})"
+    elif adapter_result is None and canonical_provider_key(provider) == "local":
+        # provider local LEGÍTIMO (validação de partes): não há adapter externo.
         normalized = {"module_key": module_key, "ok": True}
         source_mode = "local"
         status = "done"
+    elif adapter_result is None:
+        # TRIAGE-01: provider DESCONHECIDO/typo (sem binding e não-local) NÃO é um
+        # sucesso local — fail-closed: registra erro em vez de forjar 'done'/ok=True,
+        # senão um wiring ausente vira módulo concluído sem evidência.
+        normalized = {"module_key": module_key, "ok": False}
+        source_mode = "local"
+        status = "error"
+        error_message = f"provider '{provider}' sem binding (wiring ausente/typo)"
     elif adapter_result.success:
         normalized = adapter_result.data
         source_mode = adapter_result.source  # "mock" | "real"
@@ -260,7 +284,7 @@ def _run_module(cur, org, case_id, user_id, module) -> list[str]:
         " started_at = COALESCE(started_at, now()), finished_at = now(),"
         " attempts = attempts + 1, summary = %s, error_message = %s, updated_at = now()"
         " WHERE id = %s", (status, summary, error_message, module_id))
-    return signals
+    return signals, status
 
 
 def run_case_triage(cur, org, case_id, user_id) -> dict:
@@ -270,17 +294,29 @@ def run_case_triage(cur, org, case_id, user_id) -> dict:
         " WHERE case_id = %s ORDER BY created_at, id", (case_id,))
     modules = cur.fetchall()
     all_signals: list[str] = []
+    error_count = 0
     for m in modules:
-        all_signals.extend(_run_module(cur, org, case_id, user_id, m))
+        sig, st = _run_module(cur, org, case_id, user_id, m)
+        all_signals.extend(sig)
+        if st == "error":
+            error_count += 1
 
     risk = classify_risk(all_signals)
+    # TRIAGE-03: uma triagem com módulos que FALHARAM não pode ser reportada como
+    # 'low' por ausência de sinais — "sem sinal por resultado limpo" != "sem sinal
+    # porque não executou". Falha eleva o piso do risco para não subestimar.
+    if error_count and risk == "low":
+        risk = "medium"
+    desc = ("Módulos de triagem processados (mock)." if not error_count
+            else f"Triagem processada com {error_count} de {len(modules)} módulo(s) em falha "
+                 "— resultado incompleto, requer atenção.")
     cur.execute(
         "UPDATE public.cases SET status='triage_completed', progress=60,"
         " risk_level=%s WHERE id = %s", (risk, case_id))
     cur.execute(
         "INSERT INTO public.timeline_events"
         " (organization_id, case_id, event_type, title, description, actor)"
-        " VALUES (%s,%s,'triage_executed','Triagem executada',"
-        " 'Módulos de triagem processados (mock).','system')", (org, case_id))
-    return {"modules_executed": len(modules), "risk_level": risk,
-            "risk_signals": all_signals}
+        " VALUES (%s,%s,'triage_executed','Triagem executada',%s,'system')",
+        (org, case_id, desc))
+    return {"modules_executed": len(modules), "modules_failed": error_count,
+            "risk_level": risk, "risk_signals": all_signals}
