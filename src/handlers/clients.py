@@ -14,8 +14,10 @@ from pydantic import ValidationError
 
 from src.schemas.client_schemas import ClientCreateSchema, ClientUpdateSchema
 from src.services.database import tenant_tx
-from src.utils.context import require_user, require_writer
+from src.utils.context import (CallerRevoked, assert_active_writer, require_user,
+                               require_writer)
 from src.utils.helpers import error_response, success_response
+from src.utils.pii import mask_document
 from src.utils.lambda_io import fmt_validation_error as _fmt, parse_json_body as _parse_body, parse_pagination as _paginate, valid_uuid as _valid_uuid
 from src.utils.safety import enforce_production_safety
 
@@ -37,6 +39,8 @@ def create_client(event, context):
 
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
+            # SEC-01: fecha a janela de revogação (~2h) do token; usa o papel ATUAL do banco.
+            role = assert_active_writer(cur, user["user_id"], user["organization_id"])
             cur.execute(
                 "INSERT INTO public.clients"
                 " (organization_id, legal_name, document_type, document_number, email, phone,"
@@ -50,16 +54,18 @@ def create_client(event, context):
                  data.address_city, data.address_state, data.address_zip, data.rg),
             )
             row = cur.fetchone()
+    except CallerRevoked:
+        return error_response(403, "Permissão de escrita revogada")
     except psycopg2.errors.UniqueViolation:
         return error_response(409, "document_number já cadastrado")
     except Exception as e:
         logger.error(json.dumps({"event": "CLIENT_CREATE_ERROR",
                                  "error": type(e).__name__,
-                                 "pgcode": getattr(e, "pgcode", None)}))
+                                 "pgcode": getattr(e, "pgcode", None)}), exc_info=True)
         return error_response(500, "Erro ao criar cliente")
 
     logger.info(json.dumps({"event": "CLIENT_CREATED", "client_id": str(row["id"])}))
-    return success_response(201, "Cliente criado com sucesso", _serialize(row, user["role"]))
+    return success_response(201, "Cliente criado com sucesso", _serialize(row, role))
 
 
 @require_user
@@ -73,7 +79,7 @@ def get_client(event, context):
             cur.execute(_SELECT_COLS + " WHERE id = %s", (client_id,))
             row = cur.fetchone()
     except Exception as e:
-        logger.error(json.dumps({"event": "CLIENT_GET_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "CLIENT_GET_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao obter cliente")
     if not row:
         return error_response(404, "Cliente não encontrado")
@@ -106,7 +112,7 @@ def list_clients(event, context):
             )
             rows = cur.fetchall()
     except Exception as e:
-        logger.error(json.dumps({"event": "CLIENT_LIST_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "CLIENT_LIST_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao listar clientes")
     total_pages = (total + page_size - 1) // page_size if page_size else 1
     return success_response(200, f"{total} clientes encontrados", {
@@ -153,6 +159,8 @@ def update_client(event, context):
 
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
+            # SEC-01: fecha a janela de revogação (~2h) do token; usa o papel ATUAL do banco.
+            role = assert_active_writer(cur, user["user_id"], user["organization_id"])
             cur.execute(
                 f"UPDATE public.clients SET {', '.join(fields)} WHERE id = %s",
                 tuple(values),
@@ -161,11 +169,13 @@ def update_client(event, context):
                 return error_response(404, "Cliente não encontrado")
             cur.execute(_SELECT_COLS + " WHERE id = %s", (client_id,))
             row = cur.fetchone()
+    except CallerRevoked:
+        return error_response(403, "Permissão de escrita revogada")
     except Exception as e:
-        logger.error(json.dumps({"event": "CLIENT_UPDATE_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "CLIENT_UPDATE_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao atualizar cliente")
     logger.info(json.dumps({"event": "CLIENT_UPDATED", "client_id": client_id}))
-    return success_response(200, "Cliente atualizado com sucesso", _serialize(row, user["role"]))
+    return success_response(200, "Cliente atualizado com sucesso", _serialize(row, role))
 
 
 @require_user
@@ -177,14 +187,18 @@ def delete_client(event, context):
         return error_response(400, "clientId inválido")
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
+            # SEC-01: fecha a janela de revogação (~2h) do token antes de desativar.
+            assert_active_writer(cur, user["user_id"], user["organization_id"])
             cur.execute(
                 "UPDATE public.clients SET status = 'inactive', is_active = false,"
                 " updated_at = NOW() WHERE id = %s",
                 (client_id,),
             )
             updated = cur.rowcount
+    except CallerRevoked:
+        return error_response(403, "Permissão de escrita revogada")
     except Exception as e:
-        logger.error(json.dumps({"event": "CLIENT_DELETE_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "CLIENT_DELETE_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao deletar cliente")
     if not updated:
         return error_response(404, "Cliente não encontrado")
@@ -195,19 +209,27 @@ def delete_client(event, context):
 _SELECT_COLS = (
     "SELECT id, legal_name, document_type, document_number, email, phone,"
     " address_street, address_city, address_state, address_zip, rg, status,"
-    " created_at, updated_at"
+    " created_at, updated_at,"
+    # nº de casos que referenciam o cliente (mesma org via RLS) — antes o front
+    # fixava 0 e a UI ficava morta (fe-be-dto-05); análogo ao parties_count em cases.py
+    " (SELECT count(*) FROM public.cases c"
+    "  WHERE c.client_id = public.clients.id AND c.deleted_at IS NULL) AS cases_count"
     " FROM public.clients"
 )
 
 
-def _mask_document(num: str) -> str:
-    """Mascara o documento mantendo só os 4 últimos dígitos (PII p/ viewer)."""
-    if not num or len(num) <= 4:
-        return num
-    return "*" * (len(num) - 4) + num[-4:]
+def _mask_document(num):
+    """Mascara CPF/CNPJ pela util compartilhada (``pii.mask_document`` — 2 últimos
+    dígitos, mesma regra de partes/relatórios). Antes havia uma reimplementação
+    local com 4 dígitos, divergente e menos privada (be-dry-05)."""
+    return mask_document(num)
 
 
-def _serialize(row, role="admin") -> dict:
+def _serialize(row, role) -> dict:
+    # SEC-08: `role` é obrigatório (sem default). É a função que decide a máscara de
+    # PII (viewer vê documento mascarado + e-mail/telefone/endereço/RG nulos); um
+    # default "admin" tornaria o ESQUECIMENTO do argumento um vazamento silencioso de
+    # PII. Sem default, o esquecimento vira TypeError no teste, não incidente em prod.
     document = row["document_number"]
     email = row.get("email")
     phone = row.get("phone")
@@ -237,6 +259,7 @@ def _serialize(row, role="admin") -> dict:
         "address": address,
         "rg": rg,
         "metadata": {},
+        "cases_count": row.get("cases_count") or 0,  # fe-be-dto-05
         "status": row["status"],
         "created_at": str(row["created_at"]) if row.get("created_at") else None,
         "updated_at": str(row["updated_at"]) if row.get("updated_at") else None,

@@ -15,7 +15,8 @@ from src.services.case_lifecycle import (
     assert_case_writable,
 )
 from src.services.database import tenant_tx
-from src.utils.context import require_user, require_writer
+from src.utils.context import (CallerRevoked, assert_active_writer, require_user,
+                               require_writer)
 from src.utils.helpers import error_response, success_response
 from src.utils.lambda_io import parse_json_body as _parse_body, valid_uuid as _valid_uuid
 from src.utils.pii import mask_document, mask_email, mask_phone
@@ -73,7 +74,7 @@ def list_case_parties(event, context):
             )
             rows = cur.fetchall()
     except Exception as e:
-        logger.error(json.dumps({"event": "CASE_PARTIES_LIST_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "CASE_PARTIES_LIST_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao listar partes do caso")
     return success_response(200, f"{len(rows)} partes encontradas",
                             [_serialize_party(r) for r in rows])
@@ -116,6 +117,8 @@ def create_case_party(event, context):
             metadata[k] = v
     try:
         with tenant_tx(user["user_id"], user["role"], org) as cur:
+            # SEC-01: fecha a janela de revogação (~2h) do token antes de escrever.
+            assert_active_writer(cur, user["user_id"], org)
             # CVS-007: 404 se inexistente/deletado; 409 se finalizado
             assert_case_writable(cur, case_id)
             cur.execute(
@@ -129,12 +132,14 @@ def create_case_party(event, context):
                 " (organization_id, case_id, event_type, title, description, actor)"
                 " VALUES (%s,%s,'party_added','Parte adicionada','Parte registrada no caso.','user')",
                 (org, case_id))
+    except CallerRevoked:
+        return error_response(403, "Permissão de escrita revogada")
     except CaseNotVisible:
         return error_response(404, "Caso não encontrado")
     except CaseFinalized:
         return error_response(409, "caso finalizado não aceita novas partes")
     except Exception as e:
-        logger.error(json.dumps({"event": "CASE_PARTY_CREATE_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "CASE_PARTY_CREATE_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao criar parte")
     return success_response(201, "Parte criada com sucesso", _serialize_party(row))
 
@@ -155,6 +160,8 @@ def update_case_party(event, context):
         return err
     try:
         with tenant_tx(user["user_id"], user["role"], org) as cur:
+            # SEC-01: fecha a janela de revogação (~2h) do token antes de escrever.
+            assert_active_writer(cur, user["user_id"], org)
             # CVS-007: 404 se caso inexistente/deletado; 409 se finalizado
             assert_case_writable(cur, case_id)
             cur.execute(
@@ -190,11 +197,13 @@ def update_case_party(event, context):
                 f"UPDATE public.case_parties SET {', '.join(fields)}"
                 " WHERE id = %s AND case_id = %s" + _RETURN_COLS, tuple(values))
             row = cur.fetchone()
+    except CallerRevoked:
+        return error_response(403, "Permissão de escrita revogada")
     except CaseNotVisible:
         return error_response(404, "Caso não encontrado")
     except CaseFinalized:
         return error_response(409, "caso finalizado não aceita alteração de partes")
     except Exception as e:
-        logger.error(json.dumps({"event": "CASE_PARTY_UPDATE_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "CASE_PARTY_UPDATE_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao atualizar parte")
     return success_response(200, "Parte atualizada com sucesso", _serialize_party(row))

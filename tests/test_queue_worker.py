@@ -39,7 +39,24 @@ def _reset():
     conn.close()
 
 
+def _seed_writer(user_id, role, org=SYSTEM_ORG):
+    """Semeia o user do token no banco com o papel dado. As rotas de escrita reconsultam
+    o papel ATUAL (assert_active_writer, SEC-01), então um user_id não-semeado seria 403.
+    ON CONFLICT DO NOTHING: não pisa num user já semeado com o mesmo id."""
+    conn = _admin_conn()
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO public.users (id, email, password_hash, name, role, status, organization_id)"
+            " VALUES (%s,%s,'x','Test',%s,'active',%s) ON CONFLICT (id) DO NOTHING",
+            (user_id, f"u_{user_id}@t.c", role, org))
+    conn.close()
+
+
 def _event(user_id, role="admin", path=None, org_id=SYSTEM_ORG, body=None):
+    # O user do token existe no banco com o papel do teste (senão o recheck de escrita
+    # do SEC-01 recusaria antes de exercitar o comportamento sob teste).
+    _seed_writer(user_id, role, org_id)
     return {
         "requestContext": {"authorizer": {"user_id": user_id, "email": "u@t.c",
                                           "role": role, "organization_id": org_id}},
@@ -59,7 +76,7 @@ def _wizard_payload():
         "product_type": "analise_contratual",
         "title": "Contrato p/ fila",
         "parties": [{"name": "Empresa Z LTDA", "role": "contratante",
-                     "person_type": "company", "document": "12345678000199"}],
+                     "person_type": "company", "document": "11222333000181"}],
         "document": {"filename": "contrato.pdf", "size_bytes": 2048},
         "selected_modules": ["ia_deepseek"],
     }

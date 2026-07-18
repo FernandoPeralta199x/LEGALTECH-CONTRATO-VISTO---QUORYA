@@ -49,7 +49,7 @@ def list_timeline(event, context):
             )
             rows = cur.fetchall()
     except Exception as e:
-        logger.error(json.dumps({"event": "TIMELINE_LIST_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "TIMELINE_LIST_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao listar a timeline do caso")
     return success_response(200, f"{len(rows)} eventos encontrados",
                             [_serialize_event(r) for r in rows])

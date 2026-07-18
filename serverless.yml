@@ -297,6 +297,134 @@ functions:
           cors: true
           authorizer: ${self:custom.jwtAuthorizer}
 
+  # TIER 1 - Financeiro (visão geral agregada por organização, a partir de requests)
+  getFinancialOverview:
+    handler: src/handlers/financial.get_overview
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: financial/overview
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  # TIER 1 - Financeiro / Gastos com APIs (custos de APIs externas por organização)
+  getFinancialApiCosts:
+    handler: src/handlers/financial_api_costs.list_api_costs
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: financial/api-costs
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  createFinancialApiCost:
+    handler: src/handlers/financial_api_costs.create_api_cost
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: financial/api-costs
+          method: post
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  # TIER 1 - Financeiro / Tributos e Notas (controle interno, spec 12)
+  getFinancialTaxes:
+    handler: src/handlers/financial_fiscal.list_taxes
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: financial/taxes
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  createFinancialTax:
+    handler: src/handlers/financial_fiscal.create_tax
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: financial/taxes
+          method: post
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  getFinancialFiscalDocuments:
+    handler: src/handlers/financial_fiscal.list_fiscal_documents
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: financial/fiscal-documents
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  createFinancialFiscalDocument:
+    handler: src/handlers/financial_fiscal.create_fiscal_document
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: financial/fiscal-documents
+          method: post
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  # TIER 1 - Financeiro / Relatório Executivo (consolidação Fases 3-5, Fase 6)
+  getFinancialExecutiveReport:
+    handler: src/handlers/financial_reports.get_executive_report
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: financial/reports/executive
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  # TIER 1 - Financeiro / Serviços (agregação read-only de requests por product_type)
+  getFinancialServices:
+    handler: src/handlers/financial_services.list_services
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: financial/services
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  # TIER 1 - Financeiro / Clientes (receita por cliente via requests→cases→clients)
+  getFinancialClients:
+    handler: src/handlers/financial_clients.list_clients_revenue
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: financial/clients
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  # TIER 1 - Financeiro / Auditoria (leitura read-only de audit.audit_log, admin-only)
+  getFinancialAudit:
+    handler: src/handlers/financial_audit.list_audit
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: financial/audit
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
   # TIER 1 - Pricing (catálogo + estimativa + config por organização)
   getPricing:
     handler: src/handlers/pricing.get_pricing
@@ -466,6 +594,8 @@ functions:
           method: post
           cors: true
 
+  # login: mesmo handler para o path legado (/users/login) e o alias esperado pelo
+  # frontend (/auth/login) — UMA função, dois eventos http (be-dup-01: evita Lambda duplicada).
   login:
     handler: src/handlers/users.login
     timeout: 10
@@ -475,30 +605,13 @@ functions:
           path: users/login
           method: post
           cors: true
-
-  # Aliases de auth esperados pelo frontend (/api/v1/auth/*)
-  authLogin:
-    handler: src/handlers/users.login
-    timeout: 10
-    memorySize: 256
-    events:
       - http:
           path: auth/login
           method: post
           cors: true
 
-  authMe:
-    handler: src/handlers/users.me
-    timeout: 10
-    memorySize: 256
-    events:
-      - http:
-          path: auth/me
-          method: get
-          cors: true
-          authorizer: ${self:custom.jwtAuthorizer}
-
-  # alias /me esperado pelo frontend (validateDevTokenWithBackend)
+  # me: aliases /me (validateDevTokenWithBackend) e /auth/me esperados pelo frontend —
+  # UMA função, dois eventos http (be-dup-01).
   me:
     handler: src/handlers/users.me
     timeout: 10
@@ -506,6 +619,11 @@ functions:
     events:
       - http:
           path: me
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+      - http:
+          path: auth/me
           method: get
           cors: true
           authorizer: ${self:custom.jwtAuthorizer}

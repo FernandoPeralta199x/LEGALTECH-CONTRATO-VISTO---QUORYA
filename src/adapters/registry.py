@@ -15,8 +15,11 @@ retorna ``None`` e o runner usa um payload local.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Callable
+
+logger = logging.getLogger(__name__)
 
 from src.adapters.ai_analysis import create_ai_analysis_adapter
 from src.adapters.base import AdapterResult
@@ -121,6 +124,13 @@ def query_provider(provider: str, ctx: dict | None = None) -> AdapterResult | No
     ainda não implementado) — falha explícita é intencional em modo real."""
     binding = resolve_binding(provider)
     if binding is None:
+        # 'local'/'parties_validation' NÃO têm adapter externo (None esperado). Um
+        # provider fora desse conjunto que também resolve para None é um wiring
+        # AUSENTE/errado (typo de provider) que vira no-op silencioso — logue (M1).
+        if canonical_provider_key(provider) != "local":
+            logger.warning(
+                "query_provider: provider '%s' sem binding — tratado como no-op "
+                "local; verifique triage_modules.provider / _ALIASES", provider)
         return None
     adapter = binding.build()
     return binding.probe(adapter, ctx or {})

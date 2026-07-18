@@ -41,11 +41,13 @@ class UserLoginSchema(BaseModel):
 
 
 class UserSignupSchema(BaseModel):
-    """Cadastro público — sem `role` (o handler força `viewer`)."""
+    """Cadastro público — sem `role` (o handler cria o 1º usuário da org como `admin`)."""
     model_config = ConfigDict(extra="forbid")
 
     email: EmailStr
-    password: str = Field(..., min_length=PASSWORD_MIN_LENGTH, max_length=18)
+    # max 72: bcrypt opera sobre <=72 bytes; o cap real de força é em _check_password_strength.
+    # Antes estava 18 (bloqueava passphrases; inconsistente com login=128 e o cap de bcrypt) — be-sec-04.
+    password: str = Field(..., min_length=PASSWORD_MIN_LENGTH, max_length=72)
     name: str = Field(..., min_length=2, max_length=255)
 
     @field_validator("password")
@@ -74,7 +76,8 @@ class ResetPasswordSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     token: str = Field(..., min_length=20)
-    password: str = Field(..., min_length=8, max_length=18)
+    # alinhado à política de signup (min 12, max 72 bytes via _check_password_strength) — be-sec-04
+    password: str = Field(..., min_length=PASSWORD_MIN_LENGTH, max_length=72)
 
     @field_validator("password")
     @classmethod

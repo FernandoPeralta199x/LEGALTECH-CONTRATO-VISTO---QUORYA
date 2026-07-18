@@ -62,10 +62,15 @@ def valid_uuid(value):
 
 
 def fmt_validation_error(err: ValidationError) -> str:
-    """Mensagem curta e segura a partir de um ``ValidationError`` do Pydantic."""
-    return ", ".join(
-        f"{(e['loc'][0] if e['loc'] else '?')}: {e['msg']}" for e in err.errors()
-    )
+    """Mensagem curta e segura a partir de um ``ValidationError`` do Pydantic.
+    Erros de validador de MODELO (``loc`` vazio) rotulam o campo como ``corpo`` em
+    vez de ``?``; ``loc`` com múltiplos níveis é unido por ponto (ex.: address.state).
+    """
+    def _field(e) -> str:
+        loc = e.get("loc") or ()
+        return ".".join(str(part) for part in loc) if loc else "corpo"
+
+    return ", ".join(f"{_field(e)}: {e['msg']}" for e in err.errors())
 
 
 def parse_pagination(params, default_size=50, max_size=100):
