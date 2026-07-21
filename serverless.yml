@@ -814,7 +814,7 @@ custom:
     resultTtlInSeconds: 0
   pythonRequirements:
     dockerizePip: true 
-    slim: true
+    slim: false #true
     useStaticCache: true
     useDownloadCache: true
     cacheLocation: '.serverless/.cache'
@@ -822,7 +822,7 @@ custom:
     slimPatterns:
       - '**/*.egg-info*'
       - '**/__pycache__*'
-      - '**/*.dist-info*'
+        #- '**/*.dist-info*'
       - '**/tests/**'
 
 package:
@@ -830,6 +830,7 @@ package:
   patterns:
     - '!node_modules/**'
     - '!venv/**'
+    - '!venv_cv/**'
     - '!.venv/**'
     - '!.git/**'
     - '!tests/**'
