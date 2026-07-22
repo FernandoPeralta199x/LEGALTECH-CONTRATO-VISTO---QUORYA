@@ -359,6 +359,20 @@ def test_request_client_id_inexistente_retorna_400():
     assert resp["statusCode"] == 400
 
 
+def test_request_cliente_inativo_retorna_409():
+    # API-01: o wizard (create_request) rejeita cliente INATIVO com o mesmo 409 do
+    # create_case direto — antes o wizard só validava existência e aceitava inativo.
+    a = str(uuid.uuid4())
+    client_id = _seed_client(SYSTEM_ORG)
+    conn = _admin_conn(); conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute("UPDATE public.clients SET status='inactive' WHERE id=%s", (client_id,))
+    conn.close()
+    resp = req_h.create_request(_event(a, body=_payload(client_id=client_id)), None)
+    assert resp["statusCode"] == 409, resp
+    assert "inativo" in json.loads(resp["body"])["error"]
+
+
 def test_request_client_id_malformado_retorna_400():
     a = str(uuid.uuid4())
     resp = req_h.create_request(_event(a, body=_payload(client_id="nao-e-uuid")), None)

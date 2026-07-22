@@ -44,6 +44,13 @@ _REQUIRED_REAL_BACKENDS = (
 _NON_PROD_ENVS = {"", "local", "dev", "development", "test", "testing"}
 
 
+def is_production() -> bool:
+    """``True`` se o ambiente (``ENVIRONMENT``) é produtivo. Fonte única do
+    discriminador dev/prod — usa a MESMA allowlist de ``enforce_production_safety``.
+    Fail-safe: qualquer stage fora da allowlist de dev é tratado como produtivo."""
+    return os.getenv("ENVIRONMENT", "local").lower() not in _NON_PROD_ENVS
+
+
 def _is_weak_secret(secret: str) -> bool:
     """Segredo curto ou de baixa variedade de caracteres (ex.: ``"x"*40``)."""
     return len(secret) < _MIN_SECRET_LEN or len(set(secret)) < _MIN_SECRET_DISTINCT
@@ -57,7 +64,7 @@ def enforce_production_safety():
     qualquer ambiente que não esteja na allowlist de dev é considerado produtivo.
     """
     environment = os.getenv("ENVIRONMENT", "local").lower()
-    if environment in _NON_PROD_ENVS:
+    if not is_production():
         return
 
     violations = []

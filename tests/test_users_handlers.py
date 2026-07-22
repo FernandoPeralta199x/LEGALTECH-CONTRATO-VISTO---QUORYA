@@ -306,6 +306,31 @@ def test_forgot_then_reset_flow(clean_users, monkeypatch):
     assert u.reset_password(_pub({"token": token, "password": "Outra1234"}), None)["statusCode"] == 400
 
 
+def test_auth02_reset_revoga_tokens_anteriores(clean_users):
+    """AUTH-02: password_changed_at revoga tokens emitidos ANTES do reset. list_users
+    reconsulta o caller (assert_active_admin -> load_active_caller): um token cujo iat é
+    anterior à troca de senha vira 403; um posterior segue válido; sem iat (token
+    pré-deploy, sem o claim) NÃO revoga (retrocompatível)."""
+    uid = _seed_user("adm@x.c", "SenhaForte#2026", role="admin", status="active")
+    conn = _admin_conn()
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute("UPDATE public.users SET password_changed_at = NOW() WHERE id = %s", (uid,))
+        cur.execute("SELECT floor(extract(epoch FROM password_changed_at))::bigint"
+                    " FROM public.users WHERE id = %s", (uid,))
+        pca = int(cur.fetchone()[0])
+    conn.close()
+
+    def _ev(iat):
+        ev = _event(uid, role="admin")
+        ev["requestContext"]["authorizer"]["iat"] = iat
+        return ev
+
+    assert u.list_users(_ev(pca - 10), None)["statusCode"] == 403   # iat anterior => revogado
+    assert u.list_users(_ev(pca + 10), None)["statusCode"] == 200   # iat posterior => ok
+    assert u.list_users(_event(uid, role="admin"), None)["statusCode"] == 200  # sem iat => ok
+
+
 def test_forgot_keeps_single_token_per_user(clean_users, monkeypatch):
     # B6: dois forgot seguidos não podem deixar 2 tokens válidos (UNIQUE user_id + upsert)
     uid = _seed_user("a@b.c", "SenhaForte#2026")

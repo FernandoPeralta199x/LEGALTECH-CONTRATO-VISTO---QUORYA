@@ -1,0 +1,68 @@
+# DEP-07: pipeline versionado do backend (pytest de integração + pip-audit).
+# O runner é externo (GitHub Actions). Notas para quem operar o CI:
+#  - JWT_SECRET_KEY e demais segredos vão em GitHub Secrets, nunca no repo.
+#  - A suíte é de INTEGRAÇÃO (PG18 + RLS real, ver docs/ADR-002). Aqui o banco de teste é
+#    montado do zero: schema base (docs/schema_referencia.sql) -> migrations -> grants do
+#    cv_app -> orgs-base. O fluxo LOCAL (tools/setup_test_db.py) clona o schema do dev.
+name: CI
+
+on:
+  push:
+    branches: [main, "feat/**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        # pgvector (não o postgres:18 puro): o schema base cria a extensão `vector`
+        # (document_embeddings). Mesma imagem do dev local.
+        image: pgvector/pgvector:pg18
+        env:
+          POSTGRES_USER: dbadmin
+          POSTGRES_PASSWORD: dbadmin
+          POSTGRES_DB: contrato_visto_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 10s
+          --health-timeout 5s --health-retries 5
+    env:
+      DB_HOST: localhost
+      DB_PORT: "5432"
+      DB_NAME: contrato_visto_test
+      TEST_DB_NAME: contrato_visto_test
+      DEV_DB_NAME: contrato_visto
+      DB_USER: cv_app          # o app conecta como role NÃO-owner → a RLS FORCE vale de verdade
+      DB_PASS: cv_app
+      DB_ADMIN_USER: dbadmin
+      DB_ADMIN_PASS: dbadmin
+      ENVIRONMENT: test
+      PAYMENT_GATE: soft
+      JWT_SECRET_KEY: ${{ secrets.CI_JWT_SECRET_KEY || 'ci-only-secret-nao-usar-em-producao-1234' }}
+      # PG* simplifica os psql de setup abaixo (admin = dbadmin).
+      PGHOST: localhost
+      PGUSER: dbadmin
+      PGPASSWORD: dbadmin
+      PGDATABASE: contrato_visto_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      # Monta o banco de teste do zero (o fluxo local clona o dev; aqui reconstruímos):
+      # role cv_app -> schema base -> migrations -> grants do cv_app -> orgs-base.
+      - name: cria role cv_app (não-owner; a RLS FORCE vale de verdade)
+        run: psql -v ON_ERROR_STOP=1 -c "CREATE ROLE cv_app LOGIN PASSWORD 'cv_app';"
+      - name: aplica o schema base (docs/schema_referencia.sql)
+        run: psql -v ON_ERROR_STOP=1 -f docs/schema_referencia.sql
+      - name: aplica as migrations em ordem
+        run: for f in migrations/*.sql; do echo "-> $f"; psql -v ON_ERROR_STOP=1 -f "$f"; done
+      - name: grants do cv_app (tabelas base) + seed das orgs-base
+        run: |
+          psql -v ON_ERROR_STOP=1 -c "GRANT USAGE ON SCHEMA public TO cv_app; GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO cv_app; GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO cv_app; GRANT USAGE ON SCHEMA audit TO cv_app; GRANT SELECT ON ALL TABLES IN SCHEMA audit TO cv_app;"
+          psql -v ON_ERROR_STOP=1 -c "INSERT INTO public.organizations (id, name) VALUES ('00000000-0000-0000-0000-000000000001','System') ON CONFLICT (id) DO NOTHING; INSERT INTO public.organizations (id, name) VALUES ('00000000-0000-0000-0000-0000000000ff','Other') ON CONFLICT (id) DO NOTHING;"
+      - run: python -m pytest -q -p no:randomly
+      - run: python -m tools.pip_audit --local --progress-spinner off
+      - run: python -m pip check

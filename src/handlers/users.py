@@ -77,10 +77,14 @@ def _is_last_active_admin(cur, target_id, organization_id) -> bool:
     t = cur.fetchone()
     if not t or t["role"] != "admin" or t["status"] != "active":
         return False
-    cur.execute("SELECT count(*) AS n FROM public.users"
-                " WHERE role='admin' AND status='active' AND organization_id = %s",
+    # AUTH-05: trava as linhas dos admins ativos da org (FOR UPDATE) ANTES de contar,
+    # serializando mutações concorrentes. Sem o lock, duas requisições rebaixando/
+    # desativando admins DIFERENTES leem count=2 cada, nenhuma barra, e a org fica sem
+    # admin. Com o lock, a 2ª transação espera a 1ª commitar e re-lê o count atualizado.
+    cur.execute("SELECT id FROM public.users"
+                " WHERE role='admin' AND status='active' AND organization_id = %s FOR UPDATE",
                 (organization_id,))
-    return cur.fetchone()["n"] <= 1
+    return len(cur.fetchall()) <= 1
 
 
 # ── rotas públicas ───────────────────────────────────────────────────────────
@@ -278,8 +282,11 @@ def reset_password(event, context):
             reset = cur.fetchone()
             if not reset:
                 return error_response(400, "Link de reset inválido ou expirado")
+            # AUTH-02: password_changed_at revoga tokens emitidos ANTES do reset
+            # (load_active_caller rejeita iat < password_changed_at).
             cur.execute(
-                "UPDATE public.users SET password_hash = %s, updated_at = NOW()"
+                "UPDATE public.users"
+                " SET password_hash = %s, password_changed_at = NOW(), updated_at = NOW()"
                 " WHERE id = %s",
                 (hash_password(data.password), reset["user_id"]),
             )

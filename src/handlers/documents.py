@@ -134,6 +134,11 @@ def process_document(event, context):
         with tenant_tx(user["user_id"], user["role"], org) as cur:
             # SEC-01: fecha a janela de revogação (~2h) do token antes de escrever.
             assert_active_writer(cur, user["user_id"], org)
+            # PROC-02: serializa reprocessamentos CONCORRENTES do mesmo documento (o
+            # MESMO advisory lock do worker). Sem ele, dois force-reprocess num doc SEM
+            # chunks inserem os dois conjuntos (o DELETE de ingest_document só trava
+            # linhas já existentes), duplicando chunks/embeddings.
+            cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (str(doc_id),))
             res = ingest_document(cur, org, doc_id)
     except CallerRevoked:
         return error_response(403, "Permissão de escrita revogada")
