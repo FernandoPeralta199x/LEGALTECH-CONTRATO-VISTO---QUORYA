@@ -40,12 +40,18 @@ no API Gateway.
 - **Documentos:** upload/download por **URL S3 pré-assinada** (o arquivo não passa pela Lambda);
   ingestão OCR→chunks→embeddings com **fila SQS/DLQ** (SP1).
 - **Busca (RAG):** embeddings 1536-dim (OpenAI ou mock) + pgvector (cosseno), herda a RLS por org.
+- **Módulo Financeiro (admin-only):** visão geral (`overview`), **vendas** (projeção venda a
+  venda sobre `requests` — reconcilia com os KPIs por construção), **pagamentos** (projeção do
+  `installment_plan`; período por data do pagamento/fluxo de caixa), **custos de APIs externas**,
+  **tributos** e **notas fiscais** (registro informativo — o sistema não forja valor de tributo
+  nem número de nota), **relatório executivo** imprimível no navegador, serviços/clientes e
+  **trilha de auditoria**. Valores em centavos, totais `GENERATED` pelo banco (anti-forja).
 - **Backends abstratos** (real ou mock/local) selecionáveis por ambiente: `STORAGE` (S3/local),
   `EMAIL` (SES/log), `EMBEDDINGS` (OpenAI/mock), `OCR`, `PAYMENT`, e cada adapter externo (`*_BACKEND`).
 - **Segurança fail-closed:** `enforce_production_safety` bloqueia o boot fora de dev se houver
   segredo padrão ou backend mock/local (inclui pagamento e OCR).
-- **Qualidade:** **268 funções de teste** de integração contra PostgreSQL 18 (25 arquivos);
-  **17 migrations**; **55 rotas** + JWT Authorizer.
+- **Qualidade:** **511 funções de teste** de integração contra PostgreSQL 18 (44 arquivos);
+  **25 migrations**; **69 rotas** + JWT Authorizer.
 
 ## Arquitetura
 
@@ -123,6 +129,7 @@ flowchart LR
 | Triagem | `GET /cases/{caseId}/triage` · `POST /cases/{caseId}/triage/run` | **JWT** (writer) |
 | Relatório | `GET /cases/{caseId}/report` · `POST /cases/{caseId}/report/generate` · `POST /cases/{caseId}/report/review` | **JWT** (writer) |
 | Dashboard | `GET /dashboard/stats` | **JWT** |
+| Financeiro | `GET /financial/overview` · `GET /financial/sales` · `GET /financial/payments` · `GET/POST /financial/api-costs` · `GET/POST /financial/taxes` · `GET/POST /financial/fiscal-documents` · `GET /financial/reports/executive` · `GET /financial/services` · `GET /financial/clients` · `GET /financial/audit` | **JWT** (admin) |
 | Documentos | `POST/GET /documents` · `GET /documents/{docId}` · `GET /documents/{docId}/download-url` · `POST /documents/{docId}/process` · `POST /documents/{docId}/enqueue-processing` | **JWT** |
 | Case-results | `POST/GET /case-results` · `GET/PUT/DELETE /case-results/{resultId}` | **JWT** |
 | Busca (RAG) | `POST /search` | **JWT** |
@@ -143,11 +150,14 @@ contrato_visto_backend/
 │   ├── services/      # database, email, embeddings, rag, storage, case_lifecycle,
 │   │                  #   triage_runner, report_generator, pricing/ (estimate + installments)
 │   └── utils/         # auth, context, helpers, lambda_io, safety
-├── migrations/        # 001–017 (RLS por dono → por organização, pipeline, pricing, parcelas)
-├── tests/             # 268 funções de teste de integração (pytest + PG18)
+├── migrations/        # 001–025 (RLS por dono → por organização, pipeline, pricing, parcelas,
+│                      #   custos de APIs externas, tributos/notas fiscais, trilha de auditoria,
+│                      #   integridade/unicidade, revogação de sessão, minimização de PII, índices de vendas)
+├── tests/             # 511 funções de teste de integração (pytest + PG18)
+├── tools/             # setup_test_db, pip_audit, apply_migrations (runner idempotente), ...
 ├── docs/              # PROGRESSO, PLANO_MIGRACAO_SERVERLESS, PLANO_FASE7_DEPLOY,
 │                      #   security/fase7-hardening-checklist, dicionario_de_dados, specs/plans
-├── serverless.yml     # 55 rotas + authorizer + IAM + SSM por stage
+├── serverless.yml     # 67 rotas + authorizer + IAM + SSM por stage
 ├── requirements.txt   # runtime (psycopg2, boto3, openai, pydantic, PyJWT, bcrypt, ...)
 ├── requirements-dev.txt
 └── conftest.py
@@ -165,10 +175,13 @@ contrato_visto_backend/
   envia apenas o token + hints; o schema é `extra="forbid"`; `to_public()` aplica allowlist ao
   que é persistido. Reserva atômica anti-dupla-cobrança + idempotência com hash do token.
 - **PII (LGPD):** `document_number`/`rg` mascarados e contato/endereço ocultos para `viewer`;
-  logs nunca expõem PII (email/CPF/token) nem `str(e)` — só `type(e).__name__`; auditoria de
-  mutação registra o recurso.
+  logs nunca expõem PII (email/CPF/token) nem `str(e)` — só `type(e).__name__`; a **trilha de
+  auditoria minimiza PII** — CPF/CNPJ, RG, e-mail e telefone são **redigidos** de
+  `audit.audit_log` (a trilha prova *o que/quem/quando* mudou, sem hospedar o dado do titular).
 - **Auth:** JWT HS256 com `exp` exigido; reset token guardado como **hash** e de uso único
-  (atômico); `bcrypt` (≤72 bytes validados); sem segredo padrão.
+  (atômico); `bcrypt` (≤72 bytes validados); sem segredo padrão. **O reset de senha revoga
+  sessões anteriores:** `users.password_changed_at` invalida tokens cujo `iat` seja anterior à
+  troca (checado em `load_active_caller`, nas rotas que reconsultam o caller).
 - **Proteções de negócio:** cliente inativo não recebe casos; caso finalizado não aceita escrita
   (`assert_case_writable`, atômico); **anti-lockout** do último admin; triagem/relatório exigem
   pagamento quando `PAYMENT_GATE=hard`.
@@ -187,8 +200,8 @@ docker run -d --name cv-pg18 -e POSTGRES_DB=contrato_visto `
   -e POSTGRES_USER=dbadmin -e POSTGRES_PASSWORD=localdev_cv `
   -p 5433:5432 pgvector/pgvector:pg18
 
-# 2) Restaurar schema + criar role de app NÃO-owner (cv_app) + aplicar migrations 001..017
-#    (ver docs/PROGRESSO.md — seção "Como RETOMAR o ambiente")
+# 2) Restaurar schema + criar role de app NÃO-owner (cv_app) + aplicar migrations 001..024
+#    (idempotente: python -m tools.apply_migrations; ver docs/PROGRESSO.md — "Como RETOMAR")
 
 # 3) venv + dependências de teste
 python -m venv .venv
@@ -222,6 +235,18 @@ python -m venv .venv
 | `015_clients_rg.sql` | campo `rg` em `clients` |
 | `016_org_created_indexes.sql` | índices compostos `(organization_id, created_at DESC)` |
 | `017_installments.sql` | `installment_config` + `payment` em `requests` |
+| `018_external_api_costs.sql` | ledger de custos de APIs externas (total `GENERATED` pelo banco, anti-forja) |
+| `019_taxes_fiscal_documents.sql` | provisões de tributos + notas fiscais (registro; o sistema não gera número) |
+| `020_audit_log_select_policy.sql` | policy de leitura **admin-only** da trilha `audit.audit_log` |
+| `021_audit_requests_clients.sql` | auditoria resiliente de vendas (`requests`) e clientes (`log_audit_org`) |
+| `022_integrity_fk_setnull_unique.sql` | unicidade de NF robusta a NULL (`NULLS NOT DISTINCT`) + `ON DELETE SET NULL` **por-coluna** nas FKs org-scoped (preserva `organization_id`) |
+| `023_users_password_changed_at.sql` | `password_changed_at` — revoga tokens emitidos antes do reset de senha (AUTH-02) |
+| `024_audit_pii_redaction.sql` | minimização de PII na trilha — redige CPF/CNPJ, RG, e-mail e telefone (LGPD) |
+| `025_requests_created_index_sales.sql` | índices de performance da aba Vendas (`requests(org, created_at DESC)` + `fiscal_documents(org, request_id)`) |
+
+> **Runner idempotente** (`tools/apply_migrations.py`): registra o que foi aplicado em
+> `public.schema_migrations` e pula o já-aplicado (reaplicar deixa de estourar); `--baseline`
+> adota um banco já migrado sem re-executar.
 
 ## Deploy (Fase 7) — planejado
 
@@ -241,7 +266,8 @@ em **`docs/security/fase7-hardening-checklist.md`**. Resumo:
 - **Adapters externos reais:** hoje operam em **mock** (o esqueleto Real + factory está pronto);
   as integrações reais (Serasa/Escavador/Procon/TargetData/CNJ) + OCR real (Textract) + gateway
   de pagamento real são wiring da Fase 7 (chaves via SSM).
-- Endurecimentos de produção pendentes (ver checklist): revogação de sessão (token versioning),
+- Endurecimentos de produção pendentes (ver checklist): revogação de sessão nas rotas de
+  **leitura** (o reset de senha já revoga nas rotas de escrita/admin — ver *Segurança & RLS*),
   rate limiting/WAF, CORS por origem, confirmação de upload (`HeadObject`) + cleanup S3 no delete,
   keyset pagination, auditoria persistente de acesso a PII.
 - Worker assíncrono da **triagem** via fila — hoje a triagem roda **síncrona**; apenas a ingestão

@@ -382,6 +382,32 @@ def test_sec10_reembolso_bloqueia_triagem_e_relatorio(seed_case_and_config, monk
     assert tri_h.run_triage(_event(admin, path={"caseId": case_id}), None)["statusCode"] == 200
 
 
+# ── _PAID_STATUSES env-sensível: 'simulated' (mock) não libera em produção ────
+
+def test_gate_prod_simulated_nao_libera(seed_case_and_config, monkeypatch):
+    # Em PRODUÇÃO, uma linha 'simulated' (resíduo de dados migrados de dev) NÃO pode
+    # destravar trabalho pago — só 'paid' (dinheiro real). Defesa em profundidade
+    # (mesmo espírito do PRC-01/A2: mock nunca tem efeito de dinheiro real fora de dev).
+    case_id, admin = seed_case_and_config
+    monkeypatch.setenv("PAYMENT_GATE", "hard")
+    monkeypatch.setenv("ENVIRONMENT", "prod")
+    _set_payment_status(case_id, "simulated")
+    assert tri_h.run_triage(_event(admin, path={"caseId": case_id}), None)["statusCode"] == 402
+    # contraprova: pagamento REAL libera
+    _set_payment_status(case_id, "paid")
+    assert tri_h.run_triage(_event(admin, path={"caseId": case_id}), None)["statusCode"] == 200
+
+
+def test_gate_dev_simulated_ainda_libera(seed_case_and_config, monkeypatch):
+    # Não-regressão: em dev/test (ENVIRONMENT local), 'simulated' AINDA libera o gate
+    # hard — o mock precisa exercitar o fluxo pós-pagamento sem um gateway real.
+    case_id, admin = seed_case_and_config
+    monkeypatch.setenv("PAYMENT_GATE", "hard")
+    monkeypatch.setenv("ENVIRONMENT", "local")
+    _set_payment_status(case_id, "simulated")
+    assert tri_h.run_triage(_event(admin, path={"caseId": case_id}), None)["statusCode"] == 200
+
+
 # ── M4: rollback/finalize escopados à própria reserva (anti-clobber) ──────────
 
 def test_m4_rollback_nao_reverte_reserva_de_concorrente(seed_case_and_config):

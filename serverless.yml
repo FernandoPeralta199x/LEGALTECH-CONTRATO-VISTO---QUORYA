@@ -309,6 +309,30 @@ functions:
           cors: true
           authorizer: ${self:custom.jwtAuthorizer}
 
+  # TIER 1 - Financeiro / Vendas (projeção linha-a-linha das vendas = requests)
+  getFinancialSales:
+    handler: src/handlers/financial_sales.list_sales
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: financial/sales
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  # TIER 1 - Financeiro / Pagamentos (projeção dos pagamentos = requests.installment_plan)
+  getFinancialPayments:
+    handler: src/handlers/financial_payments.list_payments
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: financial/payments
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
   # TIER 1 - Financeiro / Gastos com APIs (custos de APIs externas por organização)
   getFinancialApiCosts:
     handler: src/handlers/financial_api_costs.list_api_costs

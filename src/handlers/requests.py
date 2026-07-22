@@ -110,12 +110,18 @@ def create_request(event, context):
             if data.client_id and not client_id:
                 return error_response(400, "client_id inválido")
             if client_id:
+                # API-01: valida EXISTÊNCIA e STATUS (não só existência), para o wizard
+                # rejeitar cliente inativo com o MESMO 409 do create_case direto —
+                # antes o wizard aceitava um cliente inativo que a criação direta barrava.
                 cur.execute(
-                    "SELECT 1 FROM public.clients WHERE id = %s",
+                    "SELECT status FROM public.clients WHERE id = %s",
                     (client_id,),
                 )
-                if cur.fetchone() is None:
+                crow = cur.fetchone()
+                if crow is None:
                     return error_response(400, "client_id não encontrado")
+                if crow["status"] != "active":
+                    return error_response(409, "cliente inativo não aceita novos casos")
 
             code = _next_request_code(cur, org)
 

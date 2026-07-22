@@ -1,0 +1,16 @@
+# DOCS-04: normalização de fim de linha — evita churn LF/CRLF
+# (desenvolvimento em Windows, CI em Linux). Não renormaliza o índice
+# retroativamente; vale para checkouts/commits futuros.
+* text=auto eol=lf
+
+# Scripts específicos de Windows mantêm CRLF, se/quando existirem.
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binários: nunca normalizar.
+*.png  binary
+*.jpg  binary
+*.pdf  binary
+*.gz   binary
+*.dump binary

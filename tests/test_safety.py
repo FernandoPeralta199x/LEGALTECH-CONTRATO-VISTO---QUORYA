@@ -4,7 +4,25 @@ enforce_production_safety lê os.getenv em runtime, então basta ajustar o ambie
 """
 import pytest
 
-from src.utils.safety import enforce_production_safety
+from src.utils.safety import enforce_production_safety, is_production
+
+
+@pytest.mark.parametrize("env", ["", "local", "dev", "development", "test", "testing"])
+def test_is_production_false_em_dev(monkeypatch, env):
+    monkeypatch.setenv("ENVIRONMENT", env)
+    assert is_production() is False
+
+
+@pytest.mark.parametrize("env", ["production", "prod", "prd", "staging", "qa", "homolog", "sandbox"])
+def test_is_production_true_fora_da_allowlist(monkeypatch, env):
+    # fail-safe: qualquer stage fora da allowlist de dev é produtivo
+    monkeypatch.setenv("ENVIRONMENT", env)
+    assert is_production() is True
+
+
+def test_is_production_default_local(monkeypatch):
+    monkeypatch.delenv("ENVIRONMENT", raising=False)
+    assert is_production() is False  # default "local"
 
 
 def test_local_does_not_enforce(monkeypatch):

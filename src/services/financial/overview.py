@@ -14,8 +14,10 @@ from src.services.financial.buckets import CANCELED, PENDING, RECEIVED, SIMULATE
 from src.services.financial.fiscal_documents import compute_fiscal_documents
 from src.services.financial.taxes import compute_taxes
 
-# PRC-01: `simulated` (pagamento mock) NÃO conta como recebido em produção — só em dev.
-# É sempre reportado à parte em `simulated_cents` (linha honesta "sem cobrança real").
+# PRC-01: `simulated` (pagamento mock) NUNCA conta como recebido, em NENHUM ambiente
+# (RECEIVED = ["paid"], ver buckets.py). É sempre reportado à parte em `simulated_cents`
+# (linha honesta "sem cobrança real"). [Nota: o gate de TRABALHO em case_lifecycle é
+# env-sensível — lá `simulated` libera em dev; aqui, receita, nunca é recebido.]
 _SQL = """
     SELECT
       count(*)                                  AS count_all,
@@ -68,7 +70,7 @@ def compute_overview(cur, start, end) -> dict:
         "received_cents": int(r["received_cents"]),
         "pending_cents": int(r["pending_cents"]),
         "canceled_cents": int(r["canceled_cents"]),
-        # PRC-01: pagamentos mock (simulated) reportados à parte — em prod não entram no recebido.
+        # PRC-01: pagamentos mock (simulated) reportados à parte — nunca entram no recebido.
         "simulated_cents": int(r["simulated_cents"]),
         "refunded_cents": int(r["refunded_cents"]),
         "ticket_cents": ticket,

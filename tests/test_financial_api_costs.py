@@ -78,6 +78,37 @@ def _clean():
     yield
 
 
+def test_db02_delete_pai_nao_aborta_e_zera_so_o_vinculo():
+    """DB-02/03: deletar um request-pai com um external_api_cost filho vinculado NÃO
+    aborta. Antes, ON DELETE SET NULL (sem lista de colunas) tentava zerar também
+    organization_id (NOT NULL) → o DELETE do pai abortava. Agora zera SÓ request_id e
+    preserva organization_id. (Inserts diretos como dbadmin, que bypassa a RLS.)"""
+    conn = admin_conn()  # transação (autocommit=False) p/ o set_config LOCAL valer
+    req_id, cost_id, uid = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    with conn.cursor() as cur:
+        # O SET NULL no filho dispara o trigger 'duro' (log_audit), que exige app.user_id.
+        cur.execute("SELECT set_config('app.user_id', %s, true)", (uid,))
+        cur.execute("SELECT set_config('app.organization_id', %s, true)", (SYSTEM_ORG,))
+        cur.execute(
+            "INSERT INTO public.requests (id, organization_id, created_by, code,"
+            " product_type, product_label, title, status, source_mode)"
+            " VALUES (%s,%s,%s,'REQ-DB02','contrato','Contrato','t','draft','api')",
+            (req_id, SYSTEM_ORG, uid))
+        cur.execute(
+            "INSERT INTO public.external_api_costs (id, organization_id, provider,"
+            " operation, request_id, unit_cost_cents, created_by)"
+            " VALUES (%s,%s,'serasa','consulta_cpf',%s,1500,%s)",
+            (cost_id, SYSTEM_ORG, req_id, uid))
+        cur.execute("DELETE FROM public.requests WHERE id = %s", (req_id,))  # não deve abortar
+        cur.execute("SELECT organization_id, request_id FROM public.external_api_costs"
+                    " WHERE id = %s", (cost_id,))
+        org, rid = cur.fetchone()
+    conn.commit()
+    conn.close()
+    assert str(org) == SYSTEM_ORG   # organization_id preservado (NOT NULL intacto)
+    assert rid is None              # só o vínculo (request_id) foi zerado
+
+
 def test_api_costs_vazio():
     a = _admin()
     data = _data(ac_h.list_api_costs(_event(a), None))
