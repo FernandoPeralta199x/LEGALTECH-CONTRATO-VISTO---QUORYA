@@ -77,11 +77,21 @@ def apply_migrations(baseline=False, dry_run=False):
     touched = []
     try:
         with conn.cursor() as cur:
-            # Serializa execuções concorrentes (session lock; solto ao fechar a conexão).
-            cur.execute("SELECT pg_advisory_lock(%s)", (_LOCK_KEY,))
-            cur.execute(_CONTROL_DDL)
-            cur.execute("SELECT filename FROM public.schema_migrations")
-            done = {r[0] for r in cur.fetchall()}
+            if dry_run:
+                # Dry-run é estritamente somente leitura. Se a tabela de controle
+                # ainda não existe, todas as migrations são consideradas pendentes.
+                cur.execute("SELECT to_regclass('public.schema_migrations')")
+                if cur.fetchone()[0] is None:
+                    done = set()
+                else:
+                    cur.execute("SELECT filename FROM public.schema_migrations")
+                    done = {r[0] for r in cur.fetchall()}
+            else:
+                # Serializa execuções concorrentes (session lock; solto ao fechar a conexão).
+                cur.execute("SELECT pg_advisory_lock(%s)", (_LOCK_KEY,))
+                cur.execute(_CONTROL_DDL)
+                cur.execute("SELECT filename FROM public.schema_migrations")
+                done = {r[0] for r in cur.fetchall()}
 
         for path in _sql_files():
             name = path.name
