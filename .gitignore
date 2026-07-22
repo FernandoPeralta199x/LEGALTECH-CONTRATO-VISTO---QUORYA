@@ -1,8 +1,10 @@
 venv
+venv_cv
 .venv
 env
 .env
 .serverless/
+package-log.txt
 node_modules/
 .python-version
 *.bak

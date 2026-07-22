@@ -837,8 +837,13 @@ custom:
     identitySource: method.request.header.Authorization
     resultTtlInSeconds: 0
   pythonRequirements:
-    dockerizePip: true 
+    dockerizePip: true
+    # Reduz o pacote sem executar `strip` nos binários nativos (ex.: psycopg2),
+    # evitando artefatos ELF inválidos no runtime da Lambda.
     slim: true
+    strip: false
+    # Preserva *.dist-info: bibliotecas podem consultar metadados em runtime.
+    slimPatternsAppendDefaults: false
     useStaticCache: true
     useDownloadCache: true
     cacheLocation: '.serverless/.cache'
@@ -846,7 +851,7 @@ custom:
     slimPatterns:
       - '**/*.egg-info*'
       - '**/__pycache__*'
-      - '**/*.dist-info*'
+      - '**/*.py[c|o]'
       - '**/tests/**'
 
 package:
@@ -854,6 +859,7 @@ package:
   patterns:
     - '!node_modules/**'
     - '!venv/**'
+    - '!venv_cv/**'
     - '!.venv/**'
     - '!.git/**'
     - '!tests/**'
