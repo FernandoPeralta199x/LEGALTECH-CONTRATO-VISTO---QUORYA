@@ -284,21 +284,32 @@ def test_webhook_paid_sem_projecao_alerta(seed, caplog):
     assert any("PIX_PAID_NOT_PROJECTED" in r.getMessage() for r in caplog.records)
 
 
-def test_create_colisao_no_indice_traduz_uniqueviolation_em_409(seed):
-    # A4: cobre o `except UniqueViolation` (rede anti-dupla-cobrança). Injeta uma cobrança PENDING
-    # para o MESMO request sob OUTRA org (pix_charges sem RLS; o índice único parcial é por
-    # request_id, org-agnóstico). A checagem de cobrança-ativa da TX1 (escopada pela org do
-    # chamador) NÃO a vê, o handler segue até o INSERT, que colide no índice -> 409.
+def test_create_colisao_no_indice_traduz_uniqueviolation_em_409(seed, monkeypatch):
+    # A4: cobre o `except UniqueViolation` (rede anti-dupla-cobrança) sem violar a FK composta
+    # de tenant. O provider simula a corrida: outra transação insere uma cobrança válida para o
+    # mesmo pedido DEPOIS da TX1 e ANTES do INSERT do handler, que então colide no índice -> 409.
     case_id, admin = seed
     request_id = _request_id_do_caso(case_id)
-    conn = _admin_conn(); conn.autocommit = True
-    with conn.cursor() as cur:
-        cur.execute(
-            "INSERT INTO public.pix_charges (request_id, organization_id, provider, payment_id,"
-            " status, amount_cents, currency)"
-            " VALUES (%s,%s,'mock',%s,'PENDING_PAYMENT',100,'BRL')",
-            (request_id, str(uuid.uuid4()), "mock_pix_outro_" + uuid.uuid4().hex[:8]))
-    conn.close()
+    provider = create_pix_provider()
+    original_create = provider.create_dynamic_charge
+
+    def _create_with_race(order):
+        charge = original_create(order)
+        conn = _admin_conn(); conn.autocommit = True
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO public.pix_charges (request_id, organization_id, provider,"
+                    " payment_id, status, amount_cents, currency)"
+                    " VALUES (%s,%s,'mock',%s,'PENDING_PAYMENT',%s,'BRL')",
+                    (request_id, SYSTEM_ORG, "mock_pix_race_" + uuid.uuid4().hex[:8],
+                     order.amount_cents))
+        finally:
+            conn.close()
+        return charge
+
+    monkeypatch.setattr(provider, "create_dynamic_charge", _create_with_race)
+    monkeypatch.setattr(pix_h, "create_pix_provider", lambda: provider)
     resp = _create(case_id, admin, key="corrida")
     assert resp["statusCode"] == 409  # UniqueViolation traduzida em 409
 
