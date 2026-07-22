@@ -31,7 +31,9 @@ no API Gateway.
   (Decimal/Price, sem juros até X + juros compostos exatos) e `installment_config` por organização.
 - **Pagamento:** `POST /cases/{caseId}/payment` com **seam de pagamento** (Mock + Real
   placeholder + factory por env) pronto para gateway real; cartão via **token** (PAN/CVV
-  nunca chegam ao backend); reserva atômica anti-dupla-cobrança + idempotência.
+  nunca chegam ao backend); reserva atômica anti-dupla-cobrança + idempotência. O módulo Pix
+  *prepare/mock* cria cobrança dinâmica, valida webhook assinado, deduplica eventos e confirma
+  valor/moeda antes de projetar o pagamento no pedido.
 - **Gate de pagamento:** `PAYMENT_GATE=hard` bloqueia triagem/relatório sem pagamento (402).
 - **Triagem:** executa os módulos via **registry de adapters externos** (Serasa/Escavador/
   Procon/TargetData/CNJ/IA/OCR — Mock + Real placeholder + factory por env), com cache de
@@ -50,8 +52,8 @@ no API Gateway.
   `EMAIL` (SES/log), `EMBEDDINGS` (OpenAI/mock), `OCR`, `PAYMENT`, e cada adapter externo (`*_BACKEND`).
 - **Segurança fail-closed:** `enforce_production_safety` bloqueia o boot fora de dev se houver
   segredo padrão ou backend mock/local (inclui pagamento e OCR).
-- **Qualidade:** **511 funções de teste** de integração contra PostgreSQL 18 (44 arquivos);
-  **25 migrations**; **69 rotas** + JWT Authorizer.
+- **Qualidade:** **551 funções de teste** (**647 casos coletados**) contra PostgreSQL 18;
+  **27 migrations**; **73 rotas** + JWT Authorizer.
 
 ## Arquitetura
 
@@ -126,6 +128,7 @@ flowchart LR
 | Timeline | `GET /cases/{caseId}/timeline` | **JWT** |
 | Pricing | `GET /pricing` (catálogo) · `POST /pricing/estimate` · `GET/PUT /pricing/config` · `POST /pricing/config/limit-check` | **JWT** |
 | Pagamento | `POST /cases/{caseId}/payment` (parcelas + cartão via token) | **JWT** (writer) |
+| Pix (*prepare/mock*) | `POST /cases/{caseId}/pix-charge` · `GET /cases/{caseId}/pix-charge/status` · `POST /cases/{caseId}/pix-charge/simulate` (somente mock) · `POST /webhooks/pix/{provider}` | **JWT** nas rotas do caso; webhook público autenticado por assinatura |
 | Triagem | `GET /cases/{caseId}/triage` · `POST /cases/{caseId}/triage/run` | **JWT** (writer) |
 | Relatório | `GET /cases/{caseId}/report` · `POST /cases/{caseId}/report/generate` · `POST /cases/{caseId}/report/review` | **JWT** (writer) |
 | Dashboard | `GET /dashboard/stats` | **JWT** |
@@ -157,7 +160,7 @@ contrato_visto_backend/
 ├── tools/             # setup_test_db, pip_audit, apply_migrations (runner idempotente), ...
 ├── docs/              # PROGRESSO, PLANO_MIGRACAO_SERVERLESS, PLANO_FASE7_DEPLOY,
 │                      #   security/fase7-hardening-checklist, dicionario_de_dados, specs/plans
-├── serverless.yml     # 67 rotas + authorizer + IAM + SSM por stage
+├── serverless.yml     # 73 rotas + authorizer + IAM + SSM por stage
 ├── requirements.txt   # runtime (psycopg2, boto3, openai, pydantic, PyJWT, bcrypt, ...)
 ├── requirements-dev.txt
 └── conftest.py
@@ -243,6 +246,8 @@ python -m venv .venv
 | `023_users_password_changed_at.sql` | `password_changed_at` — revoga tokens emitidos antes do reset de senha (AUTH-02) |
 | `024_audit_pii_redaction.sql` | minimização de PII na trilha — redige CPF/CNPJ, RG, e-mail e telefone (LGPD) |
 | `025_requests_created_index_sales.sql` | índices de performance da aba Vendas (`requests(org, created_at DESC)` + `fiscal_documents(org, request_id)`) |
+| `026_pix_charges.sql` | cobranças Pix, máquina de estados, idempotência e vínculo composto por organização/pedido |
+| `027_pix_webhook_events.sql` | deduplicação de webhooks Pix por provedor e evento |
 
 > **Runner idempotente** (`tools/apply_migrations.py`): registra o que foi aplicado em
 > `public.schema_migrations` e pula o já-aplicado (reaplicar deixa de estourar); `--baseline`

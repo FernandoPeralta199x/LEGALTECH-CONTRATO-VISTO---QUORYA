@@ -6,7 +6,8 @@ logger = logging.getLogger()
 
 # Valores padrão/inseguros que NÃO podem ir para staging/produção.
 _INSECURE_SECRETS = {"", "sua-chave-secreta", "sua-chave-secreta-aqui",
-                     "troque-este-segredo-local"}  # placeholder do .env.example
+                     "troque-este-segredo-local",
+                     "dev-pix-mock-secret"}  # placeholders do .env.example + segredo do mock Pix
 
 # Entropia mínima do JWT_SECRET_KEY em produção. HS256 é simétrico: um segredo
 # curto ou repetitivo (ex.: "x"*40) é força-brutável offline e permite forjar
@@ -93,6 +94,18 @@ def enforce_production_safety():
         violations.append("PAYMENT_PROVIDER/PAYMENT_MODE=mock em ambiente produtivo")
     elif not os.getenv("PAYMENT_API_KEY"):
         violations.append("PAYMENT_API_KEY ausente para gateway real (sandbox/live)")
+    # Pix: a factory create_pix_provider() chaveia por PIX_PROVIDER (default "mock") e o webhook
+    # público é autenticado por PIX_WEBHOOK_SECRET. Sem estas travas, prod poderia cair
+    # silenciosamente no MockPixProvider (segredo público) => marcar pago sem pagar. Fail-closed:
+    if os.getenv("PIX_PROVIDER", "mock") == "mock":
+        violations.append("PIX_PROVIDER=mock (ou ausente) em ambiente produtivo")
+    pix_secret = os.getenv("PIX_WEBHOOK_SECRET")
+    if not pix_secret or pix_secret in _INSECURE_SECRETS:
+        violations.append("PIX_WEBHOOK_SECRET ausente ou com valor padrão inseguro")
+    elif _is_weak_secret(pix_secret):
+        violations.append(
+            f"PIX_WEBHOOK_SECRET fraco em ambiente produtivo (exige >= {_MIN_SECRET_LEN} "
+            f"chars e >= {_MIN_SECRET_DISTINCT} caracteres distintos)")
 
     # SEC-11/SEC-12: o gate de pagamento (triagem/relatório exigem pedido pago) é
     # NO-OP quando PAYMENT_GATE != 'hard'. Fora de dev, esquecê-lo libera operação

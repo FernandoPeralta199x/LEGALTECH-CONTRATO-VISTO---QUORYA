@@ -119,6 +119,9 @@ def test_production_passes_with_strong_secret(monkeypatch):
     monkeypatch.setenv("PAYMENT_PROVIDER", "pagarme")
     monkeypatch.setenv("PAYMENT_MODE", "live")
     monkeypatch.setenv("PAYMENT_API_KEY", "chave-de-gateway-real")
+    # Pix: provider real (!= mock) + segredo de webhook forte configurados
+    monkeypatch.setenv("PIX_PROVIDER", "asaas")
+    monkeypatch.setenv("PIX_WEBHOOK_SECRET", "segredo-pix-forte-de-verdade-0123456789")
     monkeypatch.setenv("PAYMENT_GATE", "hard")  # SEC-11/12: gate exigido fora de dev
     enforce_production_safety()  # não levanta com tudo configurado para produção
 
@@ -137,6 +140,8 @@ def _prod_env(monkeypatch, **over):
             "SERASA_BACKEND": "real", "PROCON_BACKEND": "real", "ESCAVADOR_BACKEND": "real",
             "CNJ_BACKEND": "real", "TARGETDATA_BACKEND": "real",
             "PAYMENT_PROVIDER": "pagarme", "PAYMENT_MODE": "live", "PAYMENT_API_KEY": "k",
+            "PIX_PROVIDER": "asaas",
+            "PIX_WEBHOOK_SECRET": "pix-forte-com-variedade-0123456789abcdef",
             "PAYMENT_GATE": "hard"}
     base.update(over)
     for k, v in base.items():

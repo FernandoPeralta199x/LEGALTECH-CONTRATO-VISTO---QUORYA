@@ -251,6 +251,53 @@ functions:
           cors: true
           authorizer: ${self:custom.jwtAuthorizer}
 
+  # Pix (prepare): cobrança dinâmica -> PENDING_PAYMENT; confirmação SÓ por webhook assinado.
+  createPixCharge:
+    handler: src/handlers/pix.create_pix_charge
+    timeout: 15
+    memorySize: 256
+    events:
+      - http:
+          path: cases/{caseId}/pix-charge
+          method: post
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  pixStatus:
+    handler: src/handlers/pix.get_pix_status
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: cases/{caseId}/pix-charge/status
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  # Webhook público: SEM JWT — autenticação por ASSINATURA (HMAC) verificada no handler.
+  pixWebhook:
+    handler: src/handlers/pix.pix_webhook
+    timeout: 15
+    memorySize: 256
+    events:
+      - http:
+          path: webhooks/pix/{provider}
+          method: post
+          cors: true
+
+  # DEV-ONLY (PAYMENT_MODE=mock): dispara um webhook assinado do mock para exercitar o
+  # caminho real. O handler retorna 404 fora do modo mock; não expor em produção.
+  simulatePixPaid:
+    handler: src/handlers/pix.simulate_pix_paid
+    timeout: 15
+    memorySize: 256
+    events:
+      - http:
+          path: cases/{caseId}/pix-charge/simulate
+          method: post
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
   # SP3 - relatório/parecer do caso (gerar, revisar, obter)
   getCaseReport:
     handler: src/handlers/reports.get_case_report
