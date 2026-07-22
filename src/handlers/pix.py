@@ -262,7 +262,7 @@ def pix_webhook(event, context):
         with tenant_tx(str(org), "admin", str(org)) as cur:
             cur.execute(
                 "INSERT INTO public.pix_webhook_events (event_id, provider, payment_id, status)"
-                " VALUES (%s,%s,%s,%s) ON CONFLICT (event_id) DO NOTHING",
+                " VALUES (%s,%s,%s,%s) ON CONFLICT (provider, event_id) DO NOTHING",
                 (ev.event_id, provider_name, ev.payment_id, ev.status))
             if cur.rowcount == 0:
                 deduped = True

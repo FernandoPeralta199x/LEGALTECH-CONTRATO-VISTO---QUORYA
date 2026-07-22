@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
@@ -123,7 +124,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="E2E smoke test contra a API viva do dev-server.")
     ap.add_argument("--base", default="http://127.0.0.1:8000")
     ap.add_argument("--email", default="demo@contratovisto.com")
-    ap.add_argument("--password", default="DemoLocal#2026")
+    # Senha do env (mesma DEMO_PASSWORD do seeder), sem literal no git. Passe --password
+    # ou defina DEMO_PASSWORD no .env local.
+    ap.add_argument("--password", default=os.environ.get("DEMO_PASSWORD", ""))
     args = ap.parse_args()
     return run(args.base, args.email, args.password)
 

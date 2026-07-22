@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Protocol, runtime_checkable
 
 from src.services.pix.states import PENDING_PAYMENT
-from src.utils.safety import is_productive_environment
+from src.utils.safety import is_production
 
 # TTL padrão do QR dinâmico (o provider real pode sobrescrever via order.expires_in_seconds).
 DEFAULT_PIX_TTL_SECONDS = 15 * 60
@@ -176,7 +176,7 @@ def create_pix_provider(provider: str | None = None, mode: str | None = None,
     if provider == "mock" or mode == "mock":
         # Fail-closed (defesa em profundidade além de enforce_production_safety): o mock assina
         # o webhook com um segredo público e NUNCA pode autenticar pagamentos em produção.
-        if is_productive_environment():
+        if is_production():
             raise RuntimeError(
                 "MockPixProvider bloqueado em ambiente produtivo: configure PIX_PROVIDER real "
                 "e PIX_WEBHOOK_SECRET (Pix mock jamais roda em produção).")

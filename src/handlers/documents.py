@@ -13,18 +13,20 @@ import uuid
 
 from pydantic import ValidationError
 
-from src.schemas.document_schemas import DocumentUploadSchema
+from src.schemas.document_schemas import DocumentUploadSchema, safe_display_filename
 from src.schemas.queue_schemas import DocumentProcessingJob, EnqueueDocumentProcessingResult
 from src.services.database import tenant_tx
 from src.services.document_ingestion import DocumentNotFound, OcrFailed, ingest_document
 from src.services.document_worker import process_job
 from src.services.queue import create_queue_client
 from src.services.storage import storage_service
-from src.utils.context import WRITE_ROLES, require_user, require_writer
+from src.utils.context import (CallerRevoked, WRITE_ROLES, assert_active_writer,
+                               require_user, require_writer)
 from src.utils.doc_status import DOC_STATUS_MAP as _DOC_STATUS_MAP, DOC_STATUS_REV as _DOC_STATUS_REV
 from src.utils.helpers import error_response, success_response
 from src.utils.mime import mime_for
-from src.utils.lambda_io import fmt_validation_error as _fmt, parse_json_body as _parse_body, valid_uuid as _valid_uuid
+from src.utils.lambda_io import (fmt_validation_error as _fmt, parse_json_body as _parse_body,
+                                 parse_pagination, valid_uuid as _valid_uuid)
 from src.utils.safety import enforce_production_safety
 
 enforce_production_safety()
@@ -66,6 +68,8 @@ def upload_document(event, context):
 
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
+            # SEC-01: fecha a janela de revogação (~2h) do token antes de escrever.
+            assert_active_writer(cur, user["user_id"], user["organization_id"])
             # Atômico: só insere se o case for VISÍVEL ao usuário (RLS de cases).
             cur.execute(
                 "INSERT INTO public.documents"
@@ -90,6 +94,8 @@ def upload_document(event, context):
                 if cur.fetchone() is None:
                     raise _CaseNotVisible()
                 raise _CaseFinalized()
+    except CallerRevoked:
+        return error_response(403, "Permissão de escrita revogada")
     except _CaseNotVisible:
         return error_response(404, "Caso não encontrado ou sem acesso")
     except _CaseFinalized:
@@ -126,7 +132,16 @@ def process_document(event, context):
         return error_response(400, "docId inválido")
     try:
         with tenant_tx(user["user_id"], user["role"], org) as cur:
+            # SEC-01: fecha a janela de revogação (~2h) do token antes de escrever.
+            assert_active_writer(cur, user["user_id"], org)
+            # PROC-02: serializa reprocessamentos CONCORRENTES do mesmo documento (o
+            # MESMO advisory lock do worker). Sem ele, dois force-reprocess num doc SEM
+            # chunks inserem os dois conjuntos (o DELETE de ingest_document só trava
+            # linhas já existentes), duplicando chunks/embeddings.
+            cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (str(doc_id),))
             res = ingest_document(cur, org, doc_id)
+    except CallerRevoked:
+        return error_response(403, "Permissão de escrita revogada")
     except DocumentNotFound:
         return error_response(404, "Documento não encontrado")
     except OcrFailed:
@@ -165,6 +180,8 @@ def enqueue_processing(event, context):
         return error_response(400, "docId inválido")
     try:
         with tenant_tx(user["user_id"], user["role"], org) as cur:
+            # SEC-01: fecha a janela de revogação (~2h) do token antes de escrever.
+            assert_active_writer(cur, user["user_id"], org)
             cur.execute("SELECT id, case_id FROM public.documents WHERE id = %s" + _ACTIVE_CASE,
                         (doc_id,))
             doc = cur.fetchone()
@@ -180,6 +197,8 @@ def enqueue_processing(event, context):
                 process_job(cur, org, job)
             result = EnqueueDocumentProcessingResult(
                 job_id=job.job_id, queue_backend=client.backend, document_id=doc_id)
+    except CallerRevoked:
+        return error_response(403, "Permissão de escrita revogada")
     except Exception as e:
         logger.error(json.dumps({"event": "DOCUMENT_ENQUEUE_ERROR", "error": type(e).__name__,
                                  "pgcode": getattr(e, "pgcode", None)}))
@@ -240,8 +259,14 @@ def update_document(event, context):
         return err
     sets, vals = [], []
     if "filename" in body and body["filename"]:
+        # Sanitiza o rename com a MESMA regra do upload: basename sem caracteres de
+        # controle, senão um CR/LF viraria header splitting em Content-Disposition (BE-01).
+        try:
+            file_name = safe_display_filename(body["filename"])
+        except (ValueError, TypeError):
+            return error_response(400, "filename inválido")
         sets.append("file_name = %s")
-        vals.append(body["filename"])
+        vals.append(file_name)
     if "status" in body and body["status"]:
         if body["status"] not in _DOC_STATUS_REV:
             return error_response(400, "status inválido (use: pending_upload, processed, failed)")
@@ -252,11 +277,15 @@ def update_document(event, context):
     vals.append(doc_id)
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
+            # SEC-01: fecha a janela de revogação (~2h) do token antes de escrever.
+            assert_active_writer(cur, user["user_id"], user["organization_id"])
             cur.execute(
                 f"UPDATE public.documents SET {', '.join(sets)} WHERE id = %s" + _ACTIVE_CASE +
                 " RETURNING id, case_id, file_name, file_type, file_size_bytes, file_hash,"
                 " ocr_status, uploaded_by, created_at", tuple(vals))
             row = cur.fetchone()
+    except CallerRevoked:
+        return error_response(403, "Permissão de escrita revogada")
     except Exception as e:
         logger.error(json.dumps({"event": "DOCUMENT_UPDATE_ERROR", "error": type(e).__name__,
                                  "pgcode": getattr(e, "pgcode", None)}))
@@ -280,9 +309,14 @@ def get_document_download_url(event, context):
         return error_response(400, "docId inválido")
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
+            # SEC-01: writer-only fecha a janela de revogação (~2h) — um analyst desativado
+            # não deve obter URL do documento CRU (com PII) até o token expirar.
+            assert_active_writer(cur, user["user_id"], user["organization_id"])
             cur.execute("SELECT s3_path FROM public.documents WHERE id = %s" + _ACTIVE_CASE,
                         (doc_id,))
             row = cur.fetchone()
+    except CallerRevoked:
+        return error_response(403, "Permissão de escrita revogada")
     except Exception as e:
         logger.error(json.dumps({"event": "DOCUMENT_DOWNLOAD_URL_ERROR",
                                  "error": type(e).__name__}))
@@ -330,20 +364,34 @@ def list_documents(event, context):
         # dos demais uploads do caso (wizard/OCR). Mesmo padrão do filtro de status.
         args.append(params["classification"])
         conditions.append("document_classification = %s")
+    # C3-04: devolve envelope {items,total,...} (antes era array cru sem total). O default
+    # 500 preserva o comportamento anterior (o FE ainda não pagina esta lista) — a melhora
+    # é expor `total`, para o FE saber se há mais e não achar que a lista é completa.
+    pg, err = parse_pagination(params, default_size=500, max_size=500)
+    if err:
+        return err
+    page, page_size, offset = pg
+    where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
     sql = ("SELECT id, case_id, file_name, file_type, file_size_bytes, file_hash,"
-           " ocr_status, document_classification, uploaded_by, created_at FROM public.documents")
-    if conditions:
-        sql += " WHERE " + " AND ".join(conditions)
-    sql += " ORDER BY created_at DESC LIMIT 500"
-    args = tuple(args)
+           " ocr_status, document_classification, uploaded_by, created_at FROM public.documents"
+           + where + " ORDER BY created_at DESC LIMIT %s OFFSET %s")
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
-            cur.execute(sql, args)
+            cur.execute(f"SELECT count(*) AS n FROM public.documents{where}", tuple(args))
+            total = int(cur.fetchone()["n"])
+            cur.execute(sql, tuple(args + [page_size, offset]))
             rows = cur.fetchall()
     except Exception as e:
-        logger.error(json.dumps({"event": "DOCUMENT_LIST_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "DOCUMENT_LIST_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao listar documentos")
-    return success_response(200, f"{len(rows)} documentos", [_serialize_v2(r) for r in rows])
+    total_pages = (total + page_size - 1) // page_size if page_size else 1
+    return success_response(200, f"{total} documentos", {
+        "items": [_serialize_v2(r) for r in rows],
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "total_pages": total_pages,
+    })
 
 
 def _serialize_v2(row) -> dict:

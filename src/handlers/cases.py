@@ -18,7 +18,8 @@ from src.services.database import tenant_tx
 from src.services.pricing.installments import compute_installment_options
 from src.services.pricing.org_config import read_installment_config
 from src.handlers.requests import _next_request_code
-from src.utils.context import require_user, require_writer
+from src.utils.context import (CallerRevoked, assert_active_writer, require_user,
+                               require_writer)
 from src.utils.doc_status import to_v2_status
 from src.utils.mime import mime_for
 from src.services.case_lifecycle import CasesLimitReached, assert_cases_within_limit
@@ -89,6 +90,8 @@ def create_case(event, context):
 
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
+            # SEC-01: fecha a janela de revogação (~2h) do token antes de qualquer escrita.
+            assert_active_writer(cur, user["user_id"], user["organization_id"])
             # Cliente deve existir (evita FK→500) e estar ATIVO (não criar caso
             # para cliente desativado).
             cur.execute("SELECT status FROM public.clients WHERE id = %s", (client_id,))
@@ -111,6 +114,8 @@ def create_case(event, context):
                  title, product, code),
             )
             row = cur.fetchone()
+    except CallerRevoked:
+        return error_response(403, "Permissão de escrita revogada")
     except _ClientNotFound:
         return error_response(400, "client_id inexistente")
     except _ClientInactive:
@@ -120,7 +125,7 @@ def create_case(event, context):
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_CREATE_ERROR",
                                  "error": type(e).__name__,
-                                 "pgcode": getattr(e, "pgcode", None)}))
+                                 "pgcode": getattr(e, "pgcode", None)}), exc_info=True)
         return error_response(500, "Erro ao criar caso")
 
     logger.info(json.dumps({
@@ -150,7 +155,7 @@ def get_case(event, context):
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_GET_ERROR",
                                  "error": type(e).__name__,
-                                 "pgcode": getattr(e, "pgcode", None)}))
+                                 "pgcode": getattr(e, "pgcode", None)}), exc_info=True)
         return error_response(500, "Erro ao obter caso")
     return success_response(200, "Caso encontrado", {**_serialize(row), **detail})
 
@@ -395,7 +400,7 @@ def get_case_aggregate(event, context):
             installment_options, config_version = _installment_options_for(cur, org, request_total)
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_AGGREGATE_ERROR", "error": type(e).__name__,
-                                 "pgcode": getattr(e, "pgcode", None)}))
+                                 "pgcode": getattr(e, "pgcode", None)}), exc_info=True)
         return error_response(500, "Erro ao obter o detalhe do caso")
 
     return success_response(200, "Detalhe do caso", {
@@ -453,7 +458,7 @@ def list_cases(event, context):
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_LIST_ERROR",
                                  "error": type(e).__name__,
-                                 "pgcode": getattr(e, "pgcode", None)}))
+                                 "pgcode": getattr(e, "pgcode", None)}), exc_info=True)
         return error_response(500, "Erro ao listar casos")
     total_pages = (total + page_size - 1) // page_size if page_size else 1
     # Página operacional (shape BackendCaseListPage) -> frontend usa mapOperationalCase,
@@ -506,6 +511,8 @@ def update_case(event, context):
 
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
+            # SEC-01: fecha a janela de revogação (~2h) do token antes de qualquer escrita.
+            assert_active_writer(cur, user["user_id"], user["organization_id"])
             # #6: assigned_to deve ser um usuário ATIVO da MESMA organização — não um
             # UUID qualquer/de outra org (achado do pentest 2026-07-09).
             if data.assigned_to is not None:
@@ -523,10 +530,12 @@ def update_case(event, context):
             cur.execute(
                 f"SELECT {_CASE_COLS} FROM public.cases WHERE id = %s", (case_id,))
             row = cur.fetchone()
+    except CallerRevoked:
+        return error_response(403, "Permissão de escrita revogada")
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_UPDATE_ERROR",
                                  "error": type(e).__name__,
-                                 "pgcode": getattr(e, "pgcode", None)}))
+                                 "pgcode": getattr(e, "pgcode", None)}), exc_info=True)
         return error_response(500, "Erro ao atualizar caso")
     logger.info(json.dumps({"event": "CASE_UPDATED", "case_id": case_id}))
     return success_response(200, "Caso atualizado com sucesso", _serialize(row))
@@ -541,15 +550,19 @@ def delete_case(event, context):
         return error_response(400, "caseId inválido")
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
+            # SEC-01: fecha a janela de revogação (~2h) do token antes de arquivar.
+            assert_active_writer(cur, user["user_id"], user["organization_id"])
             # soft-delete: a UI promete arquivar (recuperável), não apaga de fato
             cur.execute("UPDATE public.cases SET deleted_at = now()"
                         " WHERE id = %s AND deleted_at IS NULL RETURNING deleted_at", (case_id,))
             row = cur.fetchone()
             deleted = cur.rowcount
+    except CallerRevoked:
+        return error_response(403, "Permissão de escrita revogada")
     except Exception as e:
         logger.error(json.dumps({"event": "CASE_DELETE_ERROR",
                                  "error": type(e).__name__,
-                                 "pgcode": getattr(e, "pgcode", None)}))
+                                 "pgcode": getattr(e, "pgcode", None)}), exc_info=True)
         return error_response(500, "Erro ao deletar caso")
     if not deleted:
         return error_response(404, "Caso não encontrado")

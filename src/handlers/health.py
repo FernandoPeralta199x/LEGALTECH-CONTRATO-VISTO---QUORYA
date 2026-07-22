@@ -21,7 +21,7 @@ def health_check(event, context):
             cur.fetchone()
         conn.rollback()  # mantém a conexão ociosa, sem transação aberta
     except Exception as e:
-        logger.error(json.dumps({"event": "HEALTH_CHECK_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "HEALTH_CHECK_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(503, "Serviço indisponível")
     logger.info(json.dumps({"event": "HEALTH_CHECK_SUCCESS"}))
     return success_response(200, "API e banco de dados operacionais", {"status": "ok"})

@@ -159,17 +159,21 @@ def test_me_unauthenticated_401(clean_users):
 
 # ── RBAC: get / list ───────────────────────────────────────────────────────
 def test_get_user_self_and_admin(clean_users):
-    uid = _seed_user("a@b.c", "SenhaForte#2026")
-    other = str(uuid.uuid4())
-    assert u.get_user(_event(uid, path={"userId": uid}), None)["statusCode"] == 200
-    assert u.get_user(_event(other, path={"userId": uid}), None)["statusCode"] == 403
-    assert u.get_user(_event(other, role="admin", path={"userId": uid}), None)["statusCode"] == 200
+    # callers reais no banco (o recheck exige usuário existente e ativo — SEC-04)
+    uid = _seed_user("a@b.c", "SenhaForte#2026")            # viewer alvo
+    viewer2 = _seed_user("v2@b.c", "SenhaForte#2026", role="viewer")
+    admin = _seed_user("adm@b.c", "SenhaForte#2026", role="admin")
+    assert u.get_user(_event(uid, path={"userId": uid}), None)["statusCode"] == 200          # self
+    assert u.get_user(_event(viewer2, path={"userId": uid}), None)["statusCode"] == 403       # viewer lê outro
+    assert u.get_user(_event(admin, role="admin", path={"userId": uid}), None)["statusCode"] == 200
 
 
 def test_list_users_admin_only(clean_users):
     _seed_user("a@b.c", "SenhaForte#2026")
-    assert u.list_users(_event(str(uuid.uuid4()), role="viewer"), None)["statusCode"] == 403
-    assert u.list_users(_event(str(uuid.uuid4()), role="admin"), None)["statusCode"] == 200
+    viewer = _seed_user("v@b.c", "SenhaForte#2026", role="viewer")
+    admin = _seed_user("adm@b.c", "SenhaForte#2026", role="admin")
+    assert u.list_users(_event(viewer, role="viewer"), None)["statusCode"] == 403
+    assert u.list_users(_event(admin, role="admin"), None)["statusCode"] == 200
 
 
 def test_list_users_only_same_org(clean_users):
@@ -197,7 +201,7 @@ def test_non_admin_cannot_change_role(clean_users):
 
 def test_admin_can_change_role(clean_users):
     uid = _seed_user("a@b.c", "SenhaForte#2026", role="viewer")
-    admin = str(uuid.uuid4())
+    admin = _seed_user("adm@b.c", "SenhaForte#2026", role="admin")  # caller admin real
     resp = u.update_user(_event(admin, role="admin", path={"userId": uid},
                                 body={"role": "analyst"}), None)
     assert resp["statusCode"] == 200
@@ -215,7 +219,8 @@ def test_cannot_demote_last_admin(clean_users):
 
 def test_cannot_delete_last_admin(clean_users):
     admin = _seed_user("admin@b.c", "SenhaForte#2026", role="admin")
-    resp = u.delete_user(_event(str(uuid.uuid4()), role="admin", path={"userId": admin}), None)
+    # o próprio (único) admin tenta se desativar -> bloqueado (caller real e ativo)
+    resp = u.delete_user(_event(admin, role="admin", path={"userId": admin}), None)
     assert resp["statusCode"] == 409
 
 
@@ -229,13 +234,54 @@ def test_can_demote_admin_when_another_exists(clean_users):
 
 
 def test_delete_user_is_soft_and_admin_only(clean_users):
-    uid = _seed_user("a@b.c", "SenhaForte#2026")
-    assert u.delete_user(_event(str(uuid.uuid4()), role="viewer", path={"userId": uid}),
+    uid = _seed_user("a@b.c", "SenhaForte#2026")                    # viewer alvo
+    viewer = _seed_user("v@b.c", "SenhaForte#2026", role="viewer")
+    admin = _seed_user("adm@b.c", "SenhaForte#2026", role="admin")
+    assert u.delete_user(_event(viewer, role="viewer", path={"userId": uid}),
                          None)["statusCode"] == 403
-    assert u.delete_user(_event(str(uuid.uuid4()), role="admin", path={"userId": uid}),
+    assert u.delete_user(_event(admin, role="admin", path={"userId": uid}),
                          None)["statusCode"] == 200
     # após soft delete (inactive), login falha
     assert u.login(_pub({"email": "a@b.c", "password": "SenhaForte#2026"}), None)["statusCode"] == 401
+
+
+# ── SEC-01..04 / M2: revogação por request (token antigo não vale mais) ──────
+def test_sec01_admin_rebaixado_no_banco_nao_lista(clean_users):
+    admin = _seed_user("adm@b.c", "SenhaForte#2026", role="admin")
+    _set_user(admin, role="viewer")  # rebaixado no banco; JWT antigo ainda diz admin
+    assert u.list_users(_event(admin, role="admin"), None)["statusCode"] == 403
+
+
+def test_sec01_admin_desativado_no_banco_nao_lista(clean_users):
+    admin = _seed_user("adm@b.c", "SenhaForte#2026", role="admin")
+    _set_user(admin, status="inactive")
+    assert u.list_users(_event(admin, role="admin"), None)["statusCode"] == 403
+
+
+def test_sec02_admin_rebaixado_nao_restaura_proprio_papel(clean_users):
+    uid = _seed_user("adm@b.c", "SenhaForte#2026", role="admin")
+    _set_user(uid, role="viewer")  # rebaixado; tenta se re-promover com JWT antigo
+    resp = u.update_user(_event(uid, role="admin", path={"userId": uid},
+                                body={"name": "Ainda Eu", "role": "admin"}), None)
+    assert resp["statusCode"] == 200      # o name até atualiza...
+    assert _row_role(uid) == "viewer"     # ...mas a auto-elevação é ignorada (papel do banco)
+
+
+def test_sec03_admin_desativado_nao_deleta_outro(clean_users):
+    admin = _seed_user("adm@b.c", "SenhaForte#2026", role="admin")
+    alvo = _seed_user("v@b.c", "SenhaForte#2026", role="viewer")
+    _set_user(admin, status="inactive")
+    assert u.delete_user(_event(admin, role="admin", path={"userId": alvo}),
+                         None)["statusCode"] == 403
+    assert _row_status(alvo) == "active"  # não desativou o alvo
+
+
+def test_sec04_admin_desativado_nao_le_terceiro(clean_users):
+    admin = _seed_user("adm@b.c", "SenhaForte#2026", role="admin")
+    alvo = _seed_user("v@b.c", "SenhaForte#2026", role="viewer")
+    _set_user(admin, status="inactive")
+    assert u.get_user(_event(admin, role="admin", path={"userId": alvo}),
+                      None)["statusCode"] == 403
 
 
 # ── forgot / reset ─────────────────────────────────────────────────────────
@@ -260,6 +306,31 @@ def test_forgot_then_reset_flow(clean_users, monkeypatch):
     assert u.reset_password(_pub({"token": token, "password": "Outra1234"}), None)["statusCode"] == 400
 
 
+def test_auth02_reset_revoga_tokens_anteriores(clean_users):
+    """AUTH-02: password_changed_at revoga tokens emitidos ANTES do reset. list_users
+    reconsulta o caller (assert_active_admin -> load_active_caller): um token cujo iat é
+    anterior à troca de senha vira 403; um posterior segue válido; sem iat (token
+    pré-deploy, sem o claim) NÃO revoga (retrocompatível)."""
+    uid = _seed_user("adm@x.c", "SenhaForte#2026", role="admin", status="active")
+    conn = _admin_conn()
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute("UPDATE public.users SET password_changed_at = NOW() WHERE id = %s", (uid,))
+        cur.execute("SELECT floor(extract(epoch FROM password_changed_at))::bigint"
+                    " FROM public.users WHERE id = %s", (uid,))
+        pca = int(cur.fetchone()[0])
+    conn.close()
+
+    def _ev(iat):
+        ev = _event(uid, role="admin")
+        ev["requestContext"]["authorizer"]["iat"] = iat
+        return ev
+
+    assert u.list_users(_ev(pca - 10), None)["statusCode"] == 403   # iat anterior => revogado
+    assert u.list_users(_ev(pca + 10), None)["statusCode"] == 200   # iat posterior => ok
+    assert u.list_users(_event(uid, role="admin"), None)["statusCode"] == 200  # sem iat => ok
+
+
 def test_forgot_keeps_single_token_per_user(clean_users, monkeypatch):
     # B6: dois forgot seguidos não podem deixar 2 tokens válidos (UNIQUE user_id + upsert)
     uid = _seed_user("a@b.c", "SenhaForte#2026")
@@ -272,6 +343,25 @@ def test_forgot_keeps_single_token_per_user(clean_users, monkeypatch):
         n = cur.fetchone()[0]
     conn.close()
     assert n == 1  # apenas 1 token por usuário
+
+
+def test_sec08_forgot_cooldown_nao_reenvia_nem_troca_token(clean_users, monkeypatch):
+    # SEC-08: 2º forgot dentro do cooldown mantém resposta genérica, mas NÃO reenvia
+    # e-mail nem troca o token vigente (anti-spam / anti-invalidação contínua).
+    _seed_user("a@b.c", "SenhaForte#2026")
+    calls = {"n": 0}
+
+    def _send(to_email, reset_token, user_name=None):
+        calls["n"] += 1
+        return True
+
+    monkeypatch.setattr(u.email_service, "send_reset_password_email", _send)
+    assert u.forgot_password(_pub({"email": "a@b.c"}), None)["statusCode"] == 200
+    token1 = _fetch_reset_token("a@b.c")
+    # segundo forgot imediato (dentro do cooldown)
+    assert u.forgot_password(_pub({"email": "a@b.c"}), None)["statusCode"] == 200
+    assert calls["n"] == 1                        # e-mail enviado só na 1ª vez
+    assert _fetch_reset_token("a@b.c") == token1  # token vigente preservado
 
 
 def test_reset_token_stored_hashed(clean_users, monkeypatch):
@@ -310,6 +400,31 @@ def _row_role(uid):
         role = cur.fetchone()[0]
     conn.close()
     return role
+
+
+def _row_status(uid):
+    conn = _admin_conn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT status FROM public.users WHERE id = %s", (uid,))
+        status = cur.fetchone()[0]
+    conn.close()
+    return status
+
+
+def _set_user(uid, role=None, status=None):
+    """Muda role/status direto no banco (simula revogação após emissão do JWT)."""
+    sets, vals = [], []
+    if role is not None:
+        sets.append("role = %s")
+        vals.append(role)
+    if status is not None:
+        sets.append("status = %s")
+        vals.append(status)
+    conn = _admin_conn()
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(f"UPDATE public.users SET {', '.join(sets)} WHERE id = %s", (*vals, uid))
+    conn.close()
 
 
 def _fetch_reset_token(email):

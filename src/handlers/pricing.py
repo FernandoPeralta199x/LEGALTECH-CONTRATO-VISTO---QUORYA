@@ -31,7 +31,8 @@ from src.services.pricing.estimate import (
 from src.services.pricing.installments import InstallmentConfig, compute_installment_options
 from src.services.pricing.org_config import read_installment_config, read_module_overrides
 from src.services.case_lifecycle import cases_limit_status
-from src.utils.context import require_role, require_user
+from src.utils.context import (CallerRevoked, assert_active_admin, require_role,
+                               require_user)
 from src.utils.helpers import error_response, success_response
 from src.utils.lambda_io import fmt_validation_error as _fmt, parse_json_body as _parse_body
 from src.utils.safety import enforce_production_safety
@@ -61,7 +62,7 @@ def get_pricing(event, context):
             overrides = _org_module_overrides(cur, user["organization_id"])
         catalog = build_catalog(overrides)
     except Exception as e:
-        logger.error(json.dumps({"event": "PRICING_CATALOG_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "PRICING_CATALOG_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao obter catálogo de pricing")
     return success_response(200, "Catálogo de pricing", catalog)
 
@@ -85,8 +86,10 @@ def estimate_pricing(event, context):
     # CVS-008: normaliza (força obrigatórios) para o preview bater com o cobrado
     try:
         selected = normalize_selected_modules(data.product, data.modules)
-    except ValueError as e:
-        return error_response(400, str(e))
+    except ValueError:
+        # Domínio: seleção inválida. Mensagem ESTÁTICA (não ecoa str(e)), alinhada
+        # ao padrão dos demais handlers (BE-03).
+        return error_response(400, "Seleção de módulos inválida para o produto")
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:
             overrides = _org_module_overrides(cur, user["organization_id"])
@@ -98,7 +101,7 @@ def estimate_pricing(event, context):
         est["pricing_config_version"] = iver
         est["payment_mode"] = os.getenv("PAYMENT_MODE", "mock")
     except Exception as e:
-        logger.error(json.dumps({"event": "PRICING_ESTIMATE_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "PRICING_ESTIMATE_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao estimar pricing")
     return success_response(200, "Estimativa de pricing", est)
 
@@ -145,7 +148,7 @@ def get_pricing_config(event, context):
                 " FROM public.pricing_configs WHERE organization_id = %s", (org,))
             row = cur.fetchone()
     except Exception as e:
-        logger.error(json.dumps({"event": "PRICING_CONFIG_GET_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "PRICING_CONFIG_GET_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao obter config de pricing")
     return success_response(200, "Config de pricing", _config_payload(row, org))
 
@@ -168,11 +171,15 @@ def update_pricing_config(event, context):
     changed = data.model_fields_set
     if not changed:
         return error_response(400, "Nenhum campo para atualizar")
-    # valida códigos dos overrides contra o catálogo
+    # product_overrides é VESTIGIAL: por design o preço do PRODUTO deriva da soma dos módulos
+    # required (catalog.py/estimate.py só aplicam module_overrides; não há read_product_overrides).
+    # Aceitar um override de produto criaria uma config "morta" (200 + no-op silencioso) que
+    # engana o admin — a Config exibiria um preço que o wizard/estimate/cobrança nunca aplicam.
+    # Rejeitamos explicitamente em vez de persistir algo sem efeito (o FE nunca envia este campo).
     if data.product_overrides:
-        bad = [c for c in data.product_overrides if c not in PRODUCTS]
-        if bad:
-            return error_response(400, f"produtos inválidos: {', '.join(bad)}")
+        return error_response(
+            400, "Override de preço por produto não é suportado: edite os Preços de Módulos "
+                 "(o preço do produto é a soma dos módulos obrigatórios).")
     if data.module_overrides:
         bad = [c for c in data.module_overrides if c not in MODULES]
         if bad:
@@ -188,10 +195,18 @@ def update_pricing_config(event, context):
 
     try:
         with tenant_tx(uid, user["role"], org) as cur:
+            # SEC-02: @require_role só lê o papel HISTÓRICO do token (~2h de validade). Um admin
+            # rebaixado/desativado seguiria reescrevendo o preço da org até o exp. Reconsulta o
+            # papel ATUAL no banco, na MESMA transação do UPDATE, antes de qualquer escrita.
+            assert_active_admin(cur, uid, org)
+            # M5: FOR UPDATE trava a linha da org e serializa admins concorrentes
+            # (containers Lambda distintos = conexões distintas), impedindo o lost
+            # update de version + o last-writer-wins nos demais campos. Preserva a RLS
+            # por org (a policy já restringe a linha; o lock é sobre a própria linha).
             cur.execute(
                 "SELECT cases_limit, product_overrides, module_overrides, installment_config,"
                 " notes, version"
-                " FROM public.pricing_configs WHERE organization_id = %s", (org,))
+                " FROM public.pricing_configs WHERE organization_id = %s FOR UPDATE", (org,))
             cur_row = cur.fetchone()
             cur_cases = cur_row["cases_limit"] if cur_row else None
             cur_prod = cur_row["product_overrides"] if cur_row else {}
@@ -234,8 +249,12 @@ def update_pricing_config(event, context):
                 (org, new_cases, Json(new_prod), Json(new_mod), Json(new_inst), new_notes,
                  uid, new_ver))
             row = cur.fetchone()
+    except CallerRevoked:
+        # Precede o `except Exception` — senão a revogação viraria 500 em vez de 403.
+        logger.warning(json.dumps({"event": "AUTHZ_REVOKED", "action": "update_pricing_config"}))
+        return error_response(403, "Permissão administrativa revogada")
     except Exception as e:
-        logger.error(json.dumps({"event": "PRICING_CONFIG_PUT_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "PRICING_CONFIG_PUT_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao atualizar config de pricing")
 
     logger.info(json.dumps({"event": "PRICING_CONFIG_UPDATED", "version": row["version"]}))
@@ -251,7 +270,7 @@ def check_cases_limit(event, context):
         with tenant_tx(user["user_id"], user["role"], org) as cur:
             cases_limit, active = cases_limit_status(cur, org)  # be-dry-04: reusa o canônico
     except Exception as e:
-        logger.error(json.dumps({"event": "PRICING_LIMIT_CHECK_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "PRICING_LIMIT_CHECK_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao verificar limite de casos")
     allowed = cases_limit is None or active < cases_limit
     return success_response(200, "Verificação de limite de casos", {

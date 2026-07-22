@@ -145,14 +145,14 @@ def test_ttl_default_15min():
 
 # ─────────────────────── fail-closed em produção (A1) ───────────────────────
 
-def test_is_productive_environment(monkeypatch):
+def test_is_production(monkeypatch):
     from src.utils import safety
     for env in ("", "local", "dev", "development", "test", "testing"):
         monkeypatch.setenv("ENVIRONMENT", env)
-        assert safety.is_productive_environment() is False
+        assert safety.is_production() is False
     for env in ("prod", "production", "staging", "homolog", "qa", "sandbox"):
         monkeypatch.setenv("ENVIRONMENT", env)
-        assert safety.is_productive_environment() is True
+        assert safety.is_production() is True
 
 
 def test_factory_bloqueia_mock_em_producao(monkeypatch):
@@ -181,15 +181,18 @@ def test_enforce_production_safety_exige_pix_provider_e_secret(monkeypatch):
     from src.utils import safety
     # Ambiente produtivo com TODAS as outras travas satisfeitas — só o Pix inseguro.
     monkeypatch.setenv("ENVIRONMENT", "production")
-    monkeypatch.setenv("JWT_SECRET_KEY", "j" * 40)
+    monkeypatch.setenv("JWT_SECRET_KEY", "jwt-forte-com-variedade-0123456789abcdef")
     monkeypatch.setenv("AI_ANALYSIS_BACKEND", "real")
     monkeypatch.setenv("EMAIL_BACKEND", "ses")
     monkeypatch.setenv("STORAGE_BACKEND", "s3")
-    monkeypatch.setenv("EMBEDDINGS_BACKEND", "real")
+    monkeypatch.setenv("EMBEDDINGS_BACKEND", "openai")
     monkeypatch.setenv("OCR_BACKEND", "real")
+    for bureau in ("SERASA", "PROCON", "ESCAVADOR", "CNJ", "TARGETDATA"):
+        monkeypatch.setenv(f"{bureau}_BACKEND", "real")
     monkeypatch.setenv("PAYMENT_PROVIDER", "asaas")
     monkeypatch.setenv("PAYMENT_MODE", "live")
     monkeypatch.setenv("PAYMENT_API_KEY", "k")
+    monkeypatch.setenv("PAYMENT_GATE", "hard")
     monkeypatch.delenv("PIX_PROVIDER", raising=False)        # mock => viola
     monkeypatch.delenv("PIX_WEBHOOK_SECRET", raising=False)  # ausente => viola
     with pytest.raises(RuntimeError) as ei:
@@ -206,5 +209,5 @@ def test_enforce_production_safety_exige_pix_provider_e_secret(monkeypatch):
     with pytest.raises(RuntimeError):
         safety.enforce_production_safety()
     # Config Pix segura (provider real + segredo forte) => NÃO levanta.
-    monkeypatch.setenv("PIX_WEBHOOK_SECRET", "s" * 40)
+    monkeypatch.setenv("PIX_WEBHOOK_SECRET", "pix-forte-com-variedade-0123456789abcdef")
     safety.enforce_production_safety()

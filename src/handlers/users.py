@@ -27,7 +27,13 @@ from src.schemas.user_schemas import (
 from src.services.database import signup_tx, simple_tx
 from src.services.email import email_service
 from src.utils.auth import TOKEN_TTL_SECONDS, create_access_token
-from src.utils.context import require_role, require_user
+from src.utils.context import (
+    CallerRevoked,
+    assert_active_admin,
+    load_active_caller,
+    require_role,
+    require_user,
+)
 from src.utils.helpers import error_response, generate_uuid, success_response
 from src.utils.lambda_io import fmt_validation_error as _fmt, parse_json_body as _parse_body, parse_pagination as _paginate, valid_uuid as _valid_uuid
 from src.utils.safety import enforce_production_safety
@@ -71,10 +77,14 @@ def _is_last_active_admin(cur, target_id, organization_id) -> bool:
     t = cur.fetchone()
     if not t or t["role"] != "admin" or t["status"] != "active":
         return False
-    cur.execute("SELECT count(*) AS n FROM public.users"
-                " WHERE role='admin' AND status='active' AND organization_id = %s",
+    # AUTH-05: trava as linhas dos admins ativos da org (FOR UPDATE) ANTES de contar,
+    # serializando mutações concorrentes. Sem o lock, duas requisições rebaixando/
+    # desativando admins DIFERENTES leem count=2 cada, nenhuma barra, e a org fica sem
+    # admin. Com o lock, a 2ª transação espera a 1ª commitar e re-lê o count atualizado.
+    cur.execute("SELECT id FROM public.users"
+                " WHERE role='admin' AND status='active' AND organization_id = %s FOR UPDATE",
                 (organization_id,))
-    return cur.fetchone()["n"] <= 1
+    return len(cur.fetchall()) <= 1
 
 
 # ── rotas públicas ───────────────────────────────────────────────────────────
@@ -111,7 +121,7 @@ def create_user(event, context):
     except Exception as e:
         logger.error(json.dumps({"event": "USER_CREATE_ERROR",
                                  "error": type(e).__name__,
-                                 "pgcode": getattr(e, "pgcode", None)}))
+                                 "pgcode": getattr(e, "pgcode", None)}), exc_info=True)
         return error_response(500, "Erro ao criar usuário")
 
     logger.info(json.dumps({"event": "USER_CREATED", "user_id": user_id, "role": "admin"}))
@@ -140,7 +150,7 @@ def login(event, context):
             user = cur.fetchone()
     except Exception as e:
         logger.error(json.dumps({"event": "AUTH_LOGIN_ERROR",
-                                 "error": type(e).__name__}))
+                                 "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro no login")
 
     # Sempre executa bcrypt (hash dummy se o usuário não existe) p/ tempo uniforme.
@@ -185,7 +195,7 @@ def me(event, context):
             )
             row = cur.fetchone()
     except Exception as e:
-        logger.error(json.dumps({"event": "AUTH_ME_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "AUTH_ME_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao obter usuário atual")
     if not row:
         return error_response(404, "Usuário não encontrado")
@@ -218,23 +228,36 @@ def forgot_password(event, context):
             reset_token = secrets.token_urlsafe(32)  # vai em claro SÓ no e-mail
             # upsert atômico: 1 token por usuário (UNIQUE user_id); evita corrida de
             # múltiplos tokens válidos. Guarda apenas o HASH do token.
+            # SEC-08: COOLDOWN atômico — o DO UPDATE só troca o token/reenvia se o
+            # anterior for mais velho que o cooldown (reusa created_at existente, sem
+            # schema novo). RETURNING indica se um novo token foi emitido; dentro do
+            # cooldown, nada é retornado e o token vigente é preservado (anti-spam).
             cur.execute(
                 "INSERT INTO public.password_resets (user_id, token, expires_at)"
                 " VALUES (%s, %s, NOW() + INTERVAL '1 hour')"
                 " ON CONFLICT (user_id) DO UPDATE SET token = EXCLUDED.token,"
-                " expires_at = EXCLUDED.expires_at, created_at = NOW()",
+                " expires_at = EXCLUDED.expires_at, created_at = NOW()"
+                " WHERE public.password_resets.created_at < NOW() - INTERVAL '60 seconds'"
+                " RETURNING user_id",
                 (user["id"], _token_hash(reset_token)),
             )
+            issued = cur.fetchone() is not None
     except Exception as e:
         logger.error(json.dumps({"event": "PASSWORD_RESET_REQUEST_ERROR",
-                                 "error": type(e).__name__}))
+                                 "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao solicitar reset")
 
-    sent = email_service.send_reset_password_email(data.email, reset_token, user["name"])
-    if not sent:  # falha de envio não muda a resposta (anti-enumeração), mas é logada
-        logger.error(json.dumps({"event": "PASSWORD_RESET_EMAIL_FAILED",
-                                 "user_id": str(user["id"])}))
-    logger.info(json.dumps({"event": "PASSWORD_RESET_REQUESTED", "user_id": str(user["id"])}))
+    # SEC-08: só envia (e registra a solicitação) quando um NOVO token foi emitido.
+    # Dentro do cooldown, mantém o token vigente e NÃO reenvia. A resposta é SEMPRE
+    # genérica (anti-enumeração), tenha havido emissão ou não.
+    if issued:
+        sent = email_service.send_reset_password_email(data.email, reset_token, user["name"])
+        if not sent:  # falha de envio não muda a resposta, mas é logada
+            logger.error(json.dumps({"event": "PASSWORD_RESET_EMAIL_FAILED",
+                                     "user_id": str(user["id"])}))
+        logger.info(json.dumps({"event": "PASSWORD_RESET_REQUESTED", "user_id": str(user["id"])}))
+    else:
+        logger.info(json.dumps({"event": "PASSWORD_RESET_THROTTLED", "user_id": str(user["id"])}))
     return generic
 
 
@@ -259,8 +282,11 @@ def reset_password(event, context):
             reset = cur.fetchone()
             if not reset:
                 return error_response(400, "Link de reset inválido ou expirado")
+            # AUTH-02: password_changed_at revoga tokens emitidos ANTES do reset
+            # (load_active_caller rejeita iat < password_changed_at).
             cur.execute(
-                "UPDATE public.users SET password_hash = %s, updated_at = NOW()"
+                "UPDATE public.users"
+                " SET password_hash = %s, password_changed_at = NOW(), updated_at = NOW()"
                 " WHERE id = %s",
                 (hash_password(data.password), reset["user_id"]),
             )
@@ -269,7 +295,7 @@ def reset_password(event, context):
                         (reset["user_id"],))
     except Exception as e:
         logger.error(json.dumps({"event": "PASSWORD_RESET_ERROR",
-                                 "error": type(e).__name__}))
+                                 "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao resetar senha")
 
     logger.info(json.dumps({"event": "PASSWORD_RESET_SUCCESS",
@@ -284,20 +310,27 @@ def get_user(event, context):
     target = _valid_uuid((event.get("pathParameters") or {}).get("userId"))
     if not target:
         return error_response(400, "userId inválido")
-    if target != user["user_id"] and user["role"] != "admin":
-        logger.warning(json.dumps({"event": "RBAC_VIOLATION_ATTEMPT",
-                                   "user_id": user["user_id"], "action": "get_user"}))
-        return error_response(403, "Acesso negado")
     try:
         with simple_tx() as cur:
+            # SEC-04: leitura de PII de terceiros exige papel ATUAL no banco, não o
+            # papel histórico do token (admin revogado não pode mais ler outros).
+            caller_role = load_active_caller(cur, user["user_id"], user["organization_id"])
+            if target != user["user_id"] and caller_role != "admin":
+                logger.warning(json.dumps({"event": "RBAC_VIOLATION_ATTEMPT",
+                                           "user_id": user["user_id"], "action": "get_user"}))
+                return error_response(403, "Acesso negado")
             cur.execute(
                 "SELECT id, email, name, role, status, created_at"
                 " FROM public.users WHERE id = %s AND organization_id = %s",
                 (target, user["organization_id"]),
             )
             row = cur.fetchone()
+    except CallerRevoked:
+        logger.warning(json.dumps({"event": "AUTHZ_REVOKED", "action": "get_user",
+                                   "user_id": user["user_id"]}))
+        return error_response(403, "Acesso negado")
     except Exception as e:
-        logger.error(json.dumps({"event": "USER_GET_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "USER_GET_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao obter usuário")
     if not row:
         return error_response(404, "Usuário não encontrado")
@@ -312,17 +345,24 @@ def list_users(event, context):
     if perr:
         return perr
     page, page_size, offset = pag
+    caller = event["user"]
     try:
         with simple_tx() as cur:
+            # SEC-01: o papel 'admin' precisa valer AGORA no banco (não só no token).
+            assert_active_admin(cur, caller["user_id"], caller["organization_id"])
             cur.execute(
                 "SELECT id, email, name, role, status, created_at FROM public.users"
                 " WHERE organization_id = %s"
                 " ORDER BY created_at DESC LIMIT %s OFFSET %s",
-                (event["user"]["organization_id"], page_size, offset),
+                (caller["organization_id"], page_size, offset),
             )
             rows = cur.fetchall()
+    except CallerRevoked:
+        logger.warning(json.dumps({"event": "AUTHZ_REVOKED", "action": "list_users",
+                                   "user_id": caller["user_id"]}))
+        return error_response(403, "Acesso negado")
     except Exception as e:
-        logger.error(json.dumps({"event": "USER_LIST_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "USER_LIST_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao listar usuários")
     return success_response(200, f"{len(rows)} usuários encontrados",
                             [_serialize(r) for r in rows])
@@ -334,10 +374,6 @@ def update_user(event, context):
     target = _valid_uuid((event.get("pathParameters") or {}).get("userId"))
     if not target:
         return error_response(400, "userId inválido")
-    if target != user["user_id"] and user["role"] != "admin":
-        logger.warning(json.dumps({"event": "RBAC_VIOLATION_ATTEMPT",
-                                   "user_id": user["user_id"], "action": "update_user"}))
-        return error_response(403, "Acesso negado")
     body, err = _parse_body(event)
     if err:
         return err
@@ -346,27 +382,36 @@ def update_user(event, context):
     except ValidationError as e:
         return error_response(400, f"Validação falhou: {_fmt(e)}")
 
-    fields, values = [], []
-    if data.name is not None:
-        fields.append("name = %s")
-        values.append(data.name)
-    # role/status só por admin (silenciosamente ignorados para não-admin).
-    if user["role"] == "admin":
-        if data.role is not None:
-            fields.append("role = %s")
-            values.append(data.role)
-        if data.status is not None:
-            fields.append("status = %s")
-            values.append(data.status)
-    if not fields:
-        return error_response(400, "Nenhum campo para atualizar")
-    fields.append("updated_at = NOW()")
-    values.append(target)
-
-    demoting = user["role"] == "admin" and data.role is not None and data.role != "admin"
-    deactivating = user["role"] == "admin" and data.status == "inactive"
     try:
         with simple_tx() as cur:
+            # SEC-02: quem pode escrever (e alterar role/status) é decidido pelo papel
+            # ATUAL do caller no banco, nunca pelo role do token. Um admin rebaixado
+            # com JWT antigo não elava a si mesmo nem edita terceiros.
+            caller_role = load_active_caller(cur, user["user_id"], user["organization_id"])
+            if target != user["user_id"] and caller_role != "admin":
+                logger.warning(json.dumps({"event": "RBAC_VIOLATION_ATTEMPT",
+                                           "user_id": user["user_id"], "action": "update_user"}))
+                return error_response(403, "Acesso negado")
+
+            fields, values = [], []
+            if data.name is not None:
+                fields.append("name = %s")
+                values.append(data.name)
+            # role/status só por admin ATUAL (ignorados p/ não-admin do banco).
+            if caller_role == "admin":
+                if data.role is not None:
+                    fields.append("role = %s")
+                    values.append(data.role)
+                if data.status is not None:
+                    fields.append("status = %s")
+                    values.append(data.status)
+            if not fields:
+                return error_response(400, "Nenhum campo para atualizar")
+            fields.append("updated_at = NOW()")
+            values.append(target)
+
+            demoting = caller_role == "admin" and data.role is not None and data.role != "admin"
+            deactivating = caller_role == "admin" and data.status == "inactive"
             if (demoting or deactivating) and _is_last_active_admin(
                 cur, target, user["organization_id"]
             ):
@@ -377,10 +422,14 @@ def update_user(event, context):
                 (*values, user["organization_id"]),
             )
             updated = cur.rowcount
+    except CallerRevoked:
+        logger.warning(json.dumps({"event": "AUTHZ_REVOKED", "action": "update_user",
+                                   "user_id": user["user_id"]}))
+        return error_response(403, "Acesso negado")
     except _LastAdmin:
         return error_response(409, "não é possível rebaixar/desativar o último administrador")
     except Exception as e:
-        logger.error(json.dumps({"event": "USER_UPDATE_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "USER_UPDATE_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao atualizar usuário")
     if not updated:
         return error_response(404, "Usuário não encontrado")
@@ -398,6 +447,8 @@ def delete_user(event, context):
         return error_response(400, "userId inválido")
     try:
         with simple_tx() as cur:
+            # SEC-03: mutação administrativa exige papel admin ATUAL no banco.
+            assert_active_admin(cur, user["user_id"], user["organization_id"])
             if _is_last_active_admin(cur, target, user["organization_id"]):
                 raise _LastAdmin()
             cur.execute(
@@ -406,10 +457,14 @@ def delete_user(event, context):
                 (target, user["organization_id"]),
             )
             updated = cur.rowcount
+    except CallerRevoked:
+        logger.warning(json.dumps({"event": "AUTHZ_REVOKED", "action": "delete_user",
+                                   "user_id": user["user_id"]}))
+        return error_response(403, "Acesso negado")
     except _LastAdmin:
         return error_response(409, "não é possível desativar o último administrador")
     except Exception as e:
-        logger.error(json.dumps({"event": "USER_DELETE_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "USER_DELETE_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao deletar usuário")
     if not updated:
         return error_response(404, "Usuário não encontrado")

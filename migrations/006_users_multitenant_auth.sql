@@ -22,6 +22,10 @@ ALTER TABLE public.users ADD COLUMN IF NOT EXISTS organization_id uuid;
 UPDATE public.users SET organization_id = '00000000-0000-0000-0000-000000000001'
  WHERE organization_id IS NULL;
 ALTER TABLE public.users ALTER COLUMN organization_id SET NOT NULL;
+
+-- Garante que a constraint antiga seja removida antes de tentar criá-la
+ALTER TABLE public.users
+  DROP CONSTRAINT IF EXISTS users_organization_id_fkey;
 ALTER TABLE public.users
   ADD CONSTRAINT users_organization_id_fkey
   FOREIGN KEY (organization_id) REFERENCES public.organizations(id);

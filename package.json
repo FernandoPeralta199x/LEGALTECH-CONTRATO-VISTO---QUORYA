@@ -1,5 +1,7 @@
 {
+  "comment": "DEP-06: CLI e plugin PINADOS (sem caret) p/ reprodutibilidade do deploy. serverless 3.x é compatível com serverless-python-requirements 6.x.",
   "devDependencies": {
-    "serverless-python-requirements": "^6.1.2"
+    "serverless": "3.40.0",
+    "serverless-python-requirements": "6.1.2"
   }
 }

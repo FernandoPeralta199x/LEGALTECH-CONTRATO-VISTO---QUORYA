@@ -41,8 +41,41 @@ def _reset_and_seed_client() -> str:
     return str(cid)
 
 
+def _seed_admin(org=SYSTEM_ORG) -> str:
+    """user_id de um admin ATIVO no banco. O PUT /pricing/config reconsulta o papel
+    ATUAL (assert_active_admin, SEC-02) — um user_id sintético levaria 403."""
+    uid = str(uuid.uuid4())
+    conn = _admin_conn()
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO public.users (id, email, password_hash, name, role, status, organization_id)"
+            " VALUES (%s,%s,'x','Test','admin','active',%s)"
+            " ON CONFLICT (id) DO UPDATE SET role='admin', status='active'",
+            (uid, f"u_{uid}@t.c", org))
+    conn.close()
+    return uid
+
+
+def _seed_writer(user_id, role, org=SYSTEM_ORG):
+    """Semeia o user do token no banco com o papel dado. As rotas de escrita reconsultam
+    o papel ATUAL (assert_active_writer, SEC-01), então um user_id não-semeado seria 403.
+    ON CONFLICT DO NOTHING: não pisa num user já semeado (ex.: _seed_admin) com o mesmo id."""
+    conn = _admin_conn()
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO public.users (id, email, password_hash, name, role, status, organization_id)"
+            " VALUES (%s,%s,'x','Test',%s,'active',%s) ON CONFLICT (id) DO NOTHING",
+            (user_id, f"u_{user_id}@t.c", role, org))
+    conn.close()
+
+
 def _event(user_id, role="analyst", body=None, path=None, query=None, org_id=SYSTEM_ORG):
     # Shape REAL do REST API: claims do authorizer ACHATADOS em `authorizer.<key>`.
+    # O user do token existe no banco com o papel do teste (senão o recheck de escrita
+    # do SEC-01 recusaria antes de exercitar o comportamento sob teste).
+    _seed_writer(user_id, role, org_id)
     return {
         "requestContext": {
             "authorizer": {"user_id": user_id, "email": "u@t.c", "role": role, "organization_id": org_id}
@@ -51,6 +84,26 @@ def _event(user_id, role="analyst", body=None, path=None, query=None, org_id=SYS
         "pathParameters": path or {},
         "queryStringParameters": query or {},
     }
+
+
+def _event_only(user_id, role="analyst", body=None, path=None, org_id=SYSTEM_ORG):
+    """Como _event, mas NÃO semeia — para exercitar o recheck de revogação depois que o
+    banco já foi alterado por _revoga (senão o _seed reativaria o user)."""
+    return {
+        "requestContext": {
+            "authorizer": {"user_id": user_id, "email": "u@t.c", "role": role, "organization_id": org_id}
+        },
+        "body": json.dumps(body) if body is not None else None,
+        "pathParameters": path or {},
+        "queryStringParameters": {},
+    }
+
+
+def _make_case_only(user_id, client_id, role="analyst"):
+    """Como _make_case, mas sem re-semear o user (para o teste de revogação)."""
+    return cases_h.create_case(
+        _event_only(user_id, role, body={"client_id": client_id, "case_type": "contract_analysis"}),
+        None)
 
 
 def _data(resp):
@@ -114,8 +167,8 @@ def test_cases_limit_bloqueia_criacao_server_side(client_id):
     # Varredura-qualidade #5 (MEDIO): com cases_limit definido, a criação de caso é bloqueada
     # server-side (402) — não só no endpoint informativo /pricing/config/limit-check.
     from src.handlers import pricing as pr_h
-    a = str(uuid.uuid4())
-    # define limite=1 (config PUT exige admin)
+    a = _seed_admin()
+    # define limite=1 (config PUT exige admin ATUAL no banco, não só no token)
     assert pr_h.update_pricing_config(
         _event(a, role="admin", body={"cases_limit": 1}), None)["statusCode"] == 200
     assert _make_case(a, client_id)["statusCode"] == 201   # 1o caso ok
@@ -127,6 +180,36 @@ def test_cases_limit_nulo_nao_bloqueia(client_id):
     a = str(uuid.uuid4())
     assert _make_case(a, client_id)["statusCode"] == 201
     assert _make_case(a, client_id)["statusCode"] == 201
+
+
+def _revoga(user_id, role="viewer", status="active"):
+    """Rebaixa/desativa um user já existente (simula revogação depois da emissão do token)."""
+    conn = _admin_conn()
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute("UPDATE public.users SET role=%s, status=%s WHERE id=%s",
+                    (role, status, user_id))
+    conn.close()
+
+
+def test_escritor_revogado_no_banco_bloqueado(client_id):
+    """SEC-01: um analyst com token válido (~2h) mas já rebaixado/desativado no banco
+    não pode mais criar/editar/arquivar casos. Antes da correção, gravava até o token expirar."""
+    a = str(uuid.uuid4())
+    case_id = _data(_make_case(a, client_id))["id"]  # ok enquanto writer ativo
+
+    # (a) rebaixado a viewer — token ainda diz analyst
+    _revoga(a, role="viewer", status="active")
+    assert _make_case(a, client_id)["statusCode"] == 403
+    assert cases_h.update_case(
+        _event_only(a, "analyst", path={"caseId": case_id}, body={"status": "completed"}),
+        None)["statusCode"] == 403
+    assert cases_h.delete_case(
+        _event_only(a, "analyst", path={"caseId": case_id}), None)["statusCode"] == 403
+
+    # (b) conta desativada — papel ainda analyst
+    _revoga(a, role="analyst", status="inactive")
+    assert _make_case_only(a, client_id)["statusCode"] == 403
 
 
 def test_case_isolation_and_admin(client_id):
@@ -222,6 +305,7 @@ def test_viewer_can_read(client_id):
 def test_nested_authorizer_shape_still_works(client_id):
     # Compat: shape aninhado (authorizer.context) — HTTP API / testes legados.
     a = str(uuid.uuid4())
+    _seed_writer(a, "analyst")  # writer ATIVO no banco (SEC-01: create reconsulta o papel)
     ev = {
         "requestContext": {"authorizer": {"context": {
             "user_id": a, "email": "u@t.c", "role": "analyst",

@@ -31,6 +31,30 @@ _REC_TEXT = {
     "human_review_required": "Evidências insuficientes; revisão humana obrigatória antes de decidir.",
 }
 
+# SEC-13: marcador de PROVENIÊNCIA simulada. Enquanto a geração for mock-only, todo
+# parecer carrega este marcador em `limitations`; a revisão recusa APROVAR/concluir um
+# parecer simulado (sem confiar no frontend). A geração REAL (Fase 7) não emite o
+# marcador -> o parecer torna-se aprovável. É defesa server-side por conteúdo
+# persistido; a versão durável (coluna `case_reports.is_simulated`) fica p/ migration.
+_SIMULATED_MARKER = "modo simulado (mock)"
+_SIMULATED_LIMITATION = (
+    "Parecer gerado em " + _SIMULATED_MARKER + "; não substitui análise jurídica real."
+)
+
+
+class ReportNotApprovable(Exception):
+    """Tentativa de APROVAR/concluir um parecer simulado (mock). Estado jurídico final
+    exige parecer de proveniência real (SEC-13)."""
+
+
+def _report_is_simulated(cur, case_id) -> bool:
+    """True se o parecer do caso carrega o marcador de proveniência simulada."""
+    cur.execute("SELECT limitations FROM public.case_reports WHERE case_id = %s", (case_id,))
+    row = cur.fetchone()
+    if not row:
+        return False
+    return any(_SIMULATED_MARKER in (lim or "") for lim in (row["limitations"] or []))
+
 
 def serialize_report(row, org) -> dict:
     return {
@@ -63,9 +87,12 @@ def generate_report(cur, org, case_id, user_id) -> dict:
     cur.execute("SELECT module_key, provider FROM public.triage_modules"
                 " WHERE case_id = %s ORDER BY created_at, id", (case_id,))
     modules = cur.fetchall()
-    cur.execute("SELECT provider, summary, risk_signals, confidence"
+    cur.execute("SELECT provider, summary, risk_signals, confidence, status"
                 " FROM public.provider_results WHERE case_id = %s", (case_id,))
     results = cur.fetchall()
+    # TRIAGE-02: módulos que FALHARAM (status='error') contam em results mas não
+    # emitem sinais — sem isto, uma triagem parcial produziria recomendação otimista.
+    failed = [r["provider"] for r in results if r.get("status") == "error"]
 
     findings = [r["summary"] for r in results if r["summary"]]
     signals: list[str] = []
@@ -84,15 +111,28 @@ def generate_report(cur, org, case_id, user_id) -> dict:
     confs = [r["confidence"] for r in results if r["confidence"] is not None]
     confidence = round(sum(confs) / len(confs), 2) if confs else None
     risk = classify_risk(signals)
-    # sem evidências -> revisão humana obrigatória; senão deriva do nível de risco
-    recommendation = "human_review_required" if not results else _REC_CODE[risk]
-    missing = [] if results else ["Triagem ainda não executada — execute a triagem antes de gerar o relatório."]
+    # TRIAGE-02: espelha o piso do runner (triage_runner.run_case_triage) — um módulo
+    # em falha não pode resultar em risco 'low' no parecer nem no badge do caso, senão
+    # cases.risk_level e o texto do summary regridiriam para 'low' apesar da recomendação
+    # de revisão humana (o canal otimista que esta correção fecha).
+    if failed and risk == "low":
+        risk = "medium"
+    # sem evidências OU com módulo em falha -> revisão humana obrigatória (TRIAGE-02);
+    # senão deriva do nível de risco.
+    recommendation = "human_review_required" if (not results or failed) else _REC_CODE[risk]
+    if not results:
+        missing = ["Triagem ainda não executada — execute a triagem antes de gerar o relatório."]
+    elif failed:
+        missing = [f"Triagem incompleta: {len(failed)} módulo(s) falharam "
+                   f"({', '.join(sorted(set(failed)))}) — exige revisão humana antes de concluir."]
+    else:
+        missing = []
     summary = (f"Parecer consolidado a partir de {len(modules)} módulos de triagem"
                f" ({len(results)} resultados). Nível de risco estimado: {risk}."
                f" {_REC_TEXT[recommendation]}")
     source_refs = [{"type": "triage_module", "module_key": m["module_key"],
                     "provider": m["provider"]} for m in modules]
-    limitations = ["Parecer gerado em modo simulado (mock); não substitui análise jurídica real."]
+    limitations = [_SIMULATED_LIMITATION]
 
     cur.execute(
         "INSERT INTO public.case_reports"
@@ -135,6 +175,10 @@ def review_report(cur, org, case_id, user_id, status, notes=None,
     O status do relatório segue o enum da referência: 'ready' (gerado). Só 'approved'
     promove o estado (FE-válido); 'reviewed' apenas registra o revisor sem regredir o status.
     """
+    # SEC-13: 'reviewed' é permitido (registra o revisor), mas 'approved' (estado
+    # jurídico final que conclui o caso) NÃO pode incidir sobre um parecer simulado.
+    if status == "approved" and _report_is_simulated(cur, case_id):
+        raise ReportNotApprovable()
     fields = ["reviewed_by = %s", "reviewed_at = now()", "updated_at = now()"]
     values: list = [user_id]
     if status == "approved":

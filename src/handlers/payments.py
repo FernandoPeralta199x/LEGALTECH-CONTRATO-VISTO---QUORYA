@@ -14,7 +14,8 @@ from src.schemas.pricing_schemas import PaymentSelectionSchema
 from src.services.database import tenant_tx
 from src.services.pricing.installments import compute_installment_options
 from src.services.pricing.org_config import read_installment_config
-from src.utils.context import require_user, require_writer
+from src.utils.context import (CallerRevoked, assert_active_writer, require_user,
+                               require_writer)
 from src.utils.helpers import error_response, success_response
 from src.utils.lambda_io import (fmt_validation_error as _fmt, parse_json_body as _parse_body,
                                  valid_uuid)
@@ -56,6 +57,8 @@ def create_case_payment(event, context):
     try:
         # ── TX 1 (curta): ler caso/plano/config e validar. Nenhum I/O externo aqui. ──
         with tenant_tx(user["user_id"], user["role"], org) as cur:
+            # SEC-01: fecha a janela de revogação (~2h) do token antes de registrar pagamento.
+            assert_active_writer(cur, user["user_id"], org)
             cur.execute(
                 "SELECT r.id AS request_id, r.total_price_cents, r.installment_plan,"
                 " r.payment_status"
@@ -93,6 +96,15 @@ def create_case_payment(event, context):
             # soft (spec §7): recalcula com a config vigente; só registra a divergência
             logger.info(json.dumps({"event": "PAYMENT_CONFIG_VERSION_DIVERGED",
                                     "sent": sel.pricing_config_version, "current": iver}))
+        # PRC-02: consentimento por VALOR. Se a tela mandou o total que exibiu e ele não
+        # bate com o recalculado, NÃO cobra silenciosamente um valor diferente do
+        # confirmado — pede revisão (409). Não emite cobrança (falha antes da reserva).
+        if (sel.expected_total_cents is not None
+                and sel.expected_total_cents != opt["valor_total_cents"]):
+            logger.info(json.dumps({"event": "PAYMENT_TOTAL_DIVERGED",
+                                    "expected": sel.expected_total_cents,
+                                    "current": opt["valor_total_cents"]}))
+            return error_response(409, "Os valores foram atualizados. Revise o novo total antes de confirmar.")
 
         # ── Reserva atômica (anti-dupla-cobrança): só um request passa de pending->processing.
         #    Fecha a janela entre "checar" e "cobrar": quem perde a corrida recebe 409.
@@ -105,10 +117,17 @@ def create_case_payment(event, context):
                 " WHERE id = %s AND installment_plan IS NULL"
                 "   AND (payment_status = 'pending'"
                 "        OR (payment_status = 'processing'"
-                "            AND updated_at < now() - make_interval(mins => %s)))",
+                "            AND updated_at < now() - make_interval(mins => %s)))"
+                " RETURNING updated_at",
                 (request_id, _RESERVE_STALE_MIN))
-            if cur.rowcount == 0:
+            reserved = cur.fetchone()
+            if reserved is None:
                 return error_response(409, "Pagamento já em processamento ou registrado")
+            # M4: token da tentativa = o updated_at desta reserva. O rollback e o
+            # finalize abaixo casam por esse token, então esta tentativa só reverte/
+            # finaliza a PRÓPRIA reserva. Se um concorrente reclamar a órfã no meio
+            # (updated_at muda), o rowcount vem 0 e não sequestramos a reserva dele.
+            reserved_at = reserved["updated_at"]
 
         # ── Provider FORA de transação (gateway real fará I/O de rede — NEW-1).
         #    Envia só token + hints (nunca número/CVV). Falha => libera a reserva. ──
@@ -124,7 +143,8 @@ def create_case_payment(event, context):
             with tenant_tx(user["user_id"], user["role"], org) as cur:  # rollback processing->pending
                 cur.execute(
                     "UPDATE public.requests SET payment_status = 'pending', updated_at = now()"
-                    " WHERE id = %s AND payment_status = 'processing'", (request_id,))
+                    " WHERE id = %s AND payment_status = 'processing' AND updated_at = %s",
+                    (request_id, reserved_at))
             raise
 
         payment = result.to_public()  # allowlisted; NÃO inclui card_token/holder do cliente cru
@@ -147,12 +167,16 @@ def create_case_payment(event, context):
             cur.execute(
                 "UPDATE public.requests SET installment_plan = %s, payment_status = %s,"
                 " pricing_config_version = %s, updated_at = now()"
-                " WHERE id = %s AND payment_status = 'processing'",
-                (Json(snapshot), result.status, iver, request_id))
+                " WHERE id = %s AND payment_status = 'processing' AND updated_at = %s",
+                (Json(snapshot), result.status, iver, request_id, reserved_at))
             if cur.rowcount == 0:
                 return error_response(409, "Pagamento já registrado (concorrência)")
+    except CallerRevoked:
+        # Precede o `except Exception` — senão a revogação viraria 500 em vez de 403.
+        logger.warning(json.dumps({"event": "AUTHZ_REVOKED", "action": "create_case_payment"}))
+        return error_response(403, "Permissão de escrita revogada")
     except Exception as e:
-        logger.error(json.dumps({"event": "CASE_PAYMENT_ERROR", "error": type(e).__name__}))
+        logger.error(json.dumps({"event": "CASE_PAYMENT_ERROR", "error": type(e).__name__}), exc_info=True)
         return error_response(500, "Erro ao registrar pagamento")
 
     return success_response(201, "Pagamento registrado",

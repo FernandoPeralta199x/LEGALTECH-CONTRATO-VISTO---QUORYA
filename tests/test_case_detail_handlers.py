@@ -37,7 +37,24 @@ def _reset():
     conn.close()
 
 
+def _seed_writer(user_id, role, org=SYSTEM_ORG):
+    """Semeia o user do token no banco com o papel dado. As rotas de escrita reconsultam
+    o papel ATUAL (assert_active_writer, SEC-01), então um user_id não-semeado seria 403.
+    ON CONFLICT DO NOTHING: não pisa num user já semeado com o mesmo id."""
+    conn = _admin_conn()
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO public.users (id, email, password_hash, name, role, status, organization_id)"
+            " VALUES (%s,%s,'x','Test',%s,'active',%s) ON CONFLICT (id) DO NOTHING",
+            (user_id, f"u_{user_id}@t.c", role, org))
+    conn.close()
+
+
 def _event(user_id, role="admin", path=None, org_id=SYSTEM_ORG, body=None):
+    # O user do token existe no banco com o papel do teste (senão o recheck de escrita
+    # do SEC-01 recusaria antes de exercitar o comportamento sob teste).
+    _seed_writer(user_id, role, org_id)
     return {
         "requestContext": {"authorizer": {"user_id": user_id, "email": "u@t.c",
                                           "role": role, "organization_id": org_id}},
@@ -58,7 +75,7 @@ def _wizard_payload():
         "title": "Contrato de prestação",
         "parties": [
             {"name": "Empresa X LTDA", "role": "contratante", "person_type": "company",
-             "document": "12345678000199", "document_type": "cnpj",
+             "document": "11222333000181", "document_type": "cnpj",
              "email": "contato@empresax.com", "phone": "11987654321"},
             {"name": "João Silva", "role": "contratado", "person_type": "individual",
              "document": "12345678909"},
@@ -83,7 +100,7 @@ def test_parties_com_pii_mascarada(case_id):
     empresa = next(p for p in parties if p["party_type"] == "contratante")
     # PII nunca crua; só mascarada
     assert empresa["document"] is None
-    assert empresa["document_masked"] == "**.***.***/****-99"  # CNPJ
+    assert empresa["document_masked"] == "**.***.***/****-81"  # CNPJ
     assert empresa["email"] is None
     assert empresa["email_masked"] == "c******@empresax.com"
     assert empresa["phone_masked"] == "(11) ****-**21"
@@ -160,7 +177,7 @@ def test_get_case_aggregate(case_id):
     assert len(agg["parties"]) == 2
     # PII nunca crua no agregado: o shape só expõe *_masked (sem campos crus)
     empresa = next(p for p in agg["parties"] if p["role"] == "contratante")
-    assert "document" not in empresa and empresa["document_masked"] == "**.***.***/****-99"
+    assert "document" not in empresa and empresa["document_masked"] == "**.***.***/****-81"
     assert empresa["email"] is None and empresa["email_masked"] == "c******@empresax.com"
     assert len(agg["documents"]) == 1
     assert len(agg["timeline"]) == 7
@@ -217,12 +234,176 @@ def test_run_triage_executa_modulos_e_evidencias(case_id):
         cur.execute("SELECT count(*) FROM public.external_queries_cache WHERE case_id=%s", (case_id,))
         assert cur.fetchone()[0] == 5
     conn.close()
+
+
+def test_m13_evidencia_persistida_mascara_pii(case_id, monkeypatch):
+    """M13/LGPD: a evidência gravada em provider_results NÃO pode conter PII crua —
+    documento/contato são mascarados antes de persistir (interpretação usa o cru)."""
+    from src.adapters.base import AdapterResult
+    from src.services import triage_runner as tr
+
+    def _pii(provider, ctx=None):
+        return AdapterResult(success=True, source="real",
+                             data={"cpf_cnpj": "12345678909", "score": 300, "pendencies": 2})
+
+    monkeypatch.setattr(tr, "query_provider", _pii)
+    a = str(uuid.uuid4())
+    assert tr_h.run_triage(_event(a, path={"caseId": case_id}), None)["statusCode"] == 200
+    conn = _admin_conn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT normalized_result FROM public.provider_results"
+                    " WHERE case_id=%s LIMIT 1", (case_id,))
+        ev = cur.fetchone()[0]  # jsonb -> dict
+        assert ev.get("cpf_cnpj") == "***.***.***-09"  # mascarado, nunca cru
+        assert ev.get("score") == 300                   # não-PII preservado
+    conn.close()
+
+
+def test_run_triage_falha_de_provider_marca_error(case_id, monkeypatch):
+    """A3: quando o adapter (real) FALHA (success=False), o módulo NÃO pode virar
+    'done'/source_mode='mock'/ok=True — deve registrar 'error' honesto, preservar
+    a mensagem do adapter e não forjar evidência mock."""
+    from src.adapters.base import AdapterResult
+    from src.services import triage_runner as tr
+
+    def _falha(provider, ctx=None):
+        return AdapterResult(success=False, error="timeout do bureau", source="real")
+
+    monkeypatch.setattr(tr, "query_provider", _falha)
+    a = str(uuid.uuid4())
+    assert tr_h.run_triage(_event(a, path={"caseId": case_id}), None)["statusCode"] == 200
+
+    conn = _admin_conn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT status, source_mode, error_message FROM public.provider_results"
+                    " WHERE case_id=%s", (case_id,))
+        rows = cur.fetchall()
+        assert rows, "nenhum provider_result gravado"
+        assert all(r[0] == "error" for r in rows), [r[0] for r in rows]     # nunca 'done'
+        assert all(r[1] != "mock" for r in rows), [r[1] for r in rows]      # não forja mock
+        assert all(r[2] == "timeout do bureau" for r in rows), [r[2] for r in rows]
+        cur.execute("SELECT DISTINCT status FROM public.triage_modules WHERE case_id=%s", (case_id,))
+        assert [r[0] for r in cur.fetchall()] == ["error"]
+        # cache também marca erro (não 'done')
+        cur.execute("SELECT DISTINCT status FROM public.external_queries_cache WHERE case_id=%s",
+                    (case_id,))
+        assert [r[0] for r in cur.fetchall()] == ["error"]
+    conn.close()
     # idempotente: re-executar não duplica provider_results
     _data(tr_h.run_triage(_event(a, path={"caseId": case_id}), None))
     conn = _admin_conn()
     with conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM public.provider_results WHERE case_id=%s", (case_id,))
         assert cur.fetchone()[0] == 5
+    conn.close()
+
+
+def test_triage01_provider_none_nao_local_vira_error(case_id, monkeypatch):
+    """TRIAGE-01: query_provider retorna None para provider NÃO-local (wiring ausente/typo).
+    Antes virava 'done'/ok=True (no-op silencioso); agora deve ser 'error' (fail-closed)."""
+    from src.services import triage_runner as tr
+    monkeypatch.setattr(tr, "query_provider", lambda provider, ctx=None: None)
+    a = str(uuid.uuid4())
+    result = _data(tr_h.run_triage(_event(a, path={"caseId": case_id}), None))
+    assert result["modules_failed"] >= 1
+    conn = _admin_conn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT DISTINCT status FROM public.provider_results WHERE case_id=%s", (case_id,))
+        assert "error" in [r[0] for r in cur.fetchall()]
+    conn.close()
+
+
+def test_triage03_falha_nao_reporta_risco_baixo(case_id, monkeypatch):
+    """TRIAGE-03: triagem com falhas não pode virar risk_level='low' por ausência de
+    sinais — 'sem sinal por resultado limpo' != 'sem sinal porque não executou'."""
+    from src.adapters.base import AdapterResult
+    from src.services import triage_runner as tr
+    monkeypatch.setattr(tr, "query_provider",
+                        lambda provider, ctx=None: AdapterResult(success=False, error="down", source="real"))
+    a = str(uuid.uuid4())
+    result = _data(tr_h.run_triage(_event(a, path={"caseId": case_id}), None))
+    assert result["modules_failed"] >= 1
+    assert result["risk_level"] != "low"
+    conn = _admin_conn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT risk_level FROM public.cases WHERE id=%s", (case_id,))
+        assert cur.fetchone()[0] != "low"
+    conn.close()
+
+
+def test_triage02_relatorio_com_falha_exige_revisao(case_id, monkeypatch):
+    """TRIAGE-02: relatório gerado sobre triagem PARCIAL (um módulo em falha, os demais
+    concluídos) -> human_review_required e a lacuna listada em missing_information — não
+    recomenda 'prosseguir' com base só nos módulos bem-sucedidos."""
+    from src.adapters.base import AdapterResult
+    from src.services import triage_runner as tr
+
+    calls = {"n": 0}
+
+    def _parcial(provider, ctx=None):
+        calls["n"] += 1
+        if calls["n"] == 1:  # só o 1º módulo falha; os demais concluem (há módulos 'done')
+            return AdapterResult(success=False, error="down", source="real")
+        return AdapterResult(success=True, data={"module_key": provider, "ok": True}, source="mock")
+
+    monkeypatch.setattr(tr, "query_provider", _parcial)
+    a = str(uuid.uuid4())
+    tr_h.run_triage(_event(a, path={"caseId": case_id}), None)
+    rep = _data(rep_h.generate_case_report(_event(a, path={"caseId": case_id}), None))
+    assert rep["recommendation"] == "human_review_required"
+    assert rep.get("missing_information"), "deve listar a triagem incompleta"
+
+
+def test_triage02_risco_nao_regride_para_low(case_id, monkeypatch):
+    """TRIAGE-02: generate_report reavalia o risco e SOBRESCREVE cases.risk_level. Sobre uma
+    triagem PARCIAL (um módulo em falha, os demais 'done' sem sinais), o piso low->medium do
+    runner NÃO pode regredir — sem ele, o badge do caso e o texto do parecer voltariam a 'low'
+    apesar da recomendação de revisão humana."""
+    from src.adapters.base import AdapterResult
+    from src.services import triage_runner as tr
+
+    calls = {"n": 0}
+
+    def _parcial(provider, ctx=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return AdapterResult(success=False, error="down", source="real")
+        return AdapterResult(success=True, data={"module_key": provider, "ok": True}, source="mock")
+
+    monkeypatch.setattr(tr, "query_provider", _parcial)
+    a = str(uuid.uuid4())
+    tr_h.run_triage(_event(a, path={"caseId": case_id}), None)
+    rep = _data(rep_h.generate_case_report(_event(a, path={"caseId": case_id}), None))
+    assert "estimado: low" not in rep.get("summary", "")   # o parecer não afirma risco baixo
+    conn = _admin_conn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT risk_level FROM public.cases WHERE id=%s", (case_id,))
+        assert cur.fetchone()[0] == "medium"               # piso mantido, não regrediu a 'low'
+    conn.close()
+
+
+def test_triage03_excecao_de_adapter_vira_error_nao_500(case_id, monkeypatch):
+    """TRIAGE-03 (Fase 7): uma EXCEÇÃO do provider real (timeout/NotImplementedError) vira erro
+    DESTE módulo — a triagem não retorna 500 (rollback total dos demais) e a mensagem persistida
+    carrega só o TIPO da exceção, nunca o corpo (que pode ecoar PII)."""
+    from src.services import triage_runner as tr
+
+    def _boom(provider, ctx=None):
+        raise TimeoutError("bureau devolveu 123.456.789-00 no corpo")   # corpo não pode vazar
+
+    monkeypatch.setattr(tr, "query_provider", _boom)
+    a = str(uuid.uuid4())
+    result = _data(tr_h.run_triage(_event(a, path={"caseId": case_id}), None))   # não 500
+    assert result["modules_failed"] >= 1
+    assert result["risk_level"] != "low"
+    conn = _admin_conn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT DISTINCT status FROM public.provider_results WHERE case_id=%s", (case_id,))
+        assert [r[0] for r in cur.fetchall()] == ["error"]
+        cur.execute("SELECT error_message FROM public.provider_results WHERE case_id=%s LIMIT 1", (case_id,))
+        msg = cur.fetchone()[0] or ""
+        assert "TimeoutError" in msg               # tipo presente (honesto)
+        assert "123.456.789-00" not in msg         # corpo/PII NÃO vaza
     conn.close()
 
 
@@ -248,10 +429,22 @@ def test_gerar_revisar_relatorio_e_aggregate(case_id):
     assert agg["summary"]["report_status"] == "ready"
     # regerar -> version 2 (idempotente por caso)
     assert _data(rep_h.generate_case_report(_event(a, path={"caseId": case_id}), None))["version"] == 2
-    # revisão humana -> approved fecha o caso
+    # SEC-13: aprovar um parecer SIMULADO (mock) é bloqueado (409)...
+    assert rep_h.review_case_report(
+        _event(a, path={"caseId": case_id}, body={"status": "approved"}), None)["statusCode"] == 409
+    # ...mas 'reviewed' é permitido (registra o revisor sem concluir o caso)
     rev = _data(rep_h.review_case_report(
+        _event(a, path={"caseId": case_id}, body={"status": "reviewed", "review_notes": "ok"}), None))
+    assert rev["status"] == "ready" and rev["reviewed_by"]  # 'reviewed' não promove o status
+    # simula um parecer de proveniência REAL (remove o marcador de simulação) -> aprovável
+    conn = _admin_conn(); conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute("UPDATE public.case_reports SET limitations = %s::jsonb WHERE case_id = %s",
+                    (json.dumps(["Parecer definitivo (proveniência real)."]), case_id))
+    conn.close()
+    rev2 = _data(rep_h.review_case_report(
         _event(a, path={"caseId": case_id}, body={"status": "approved", "review_notes": "ok"}), None))
-    assert rev["status"] == "approved" and rev["reviewed_by"]
+    assert rev2["status"] == "approved" and rev2["reviewed_by"]  # parecer real fecha o caso
     case = _data(cases_h.get_case(_event(a, path={"caseId": case_id}), None))
     assert case["status"] == "completed"
     # CVS-007: caso concluído não aceita nova triagem nem regeneração de relatório (409)

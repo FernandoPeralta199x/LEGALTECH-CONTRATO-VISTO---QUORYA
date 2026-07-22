@@ -1,4 +1,4 @@
--- migrations/018_pix_charges.sql
+-- migrations/026_pix_charges.sql
 -- Cobranças Pix dinâmicas (prepare — atrás do seam mock). Estado AUTORITATIVO da cobrança
 -- (máquina de estados em src/services/pix/states.py), projetado em requests.payment_status
 -- na confirmação. Tabela de SISTEMA sem RLS (precedente: users/password_resets via
@@ -10,7 +10,7 @@ BEGIN;
 
 CREATE TABLE IF NOT EXISTS public.pix_charges (
   id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  request_id       uuid NOT NULL REFERENCES public.requests(id),
+  request_id       uuid NOT NULL,
   organization_id  uuid NOT NULL,
   provider         text NOT NULL DEFAULT 'mock',
   payment_id       text NOT NULL,            -- id/txid da cobrança no provider
@@ -25,6 +25,9 @@ CREATE TABLE IF NOT EXISTS public.pix_charges (
   paid_at          timestamptz,
   created_at       timestamptz NOT NULL DEFAULT now(),
   updated_at       timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT pix_charges_request_org_fkey
+    FOREIGN KEY (organization_id, request_id)
+    REFERENCES public.requests(organization_id, id),
   CONSTRAINT pix_charges_status_chk CHECK (status IN
     ('PENDING_PAYMENT', 'PAID', 'EXPIRED', 'CANCELLED', 'REFUNDED', 'PAYMENT_FAILED'))
 );

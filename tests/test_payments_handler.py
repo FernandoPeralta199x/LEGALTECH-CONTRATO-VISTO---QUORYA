@@ -8,6 +8,7 @@ import pytest
 
 from src.handlers import payments as pay_h
 from src.handlers import pricing as pr_h
+from src.handlers import reports as rep_h
 from src.handlers import requests as req_h
 from src.handlers import triage as tri_h
 from src.schemas.pricing_schemas import PaymentSelectionSchema
@@ -48,6 +49,26 @@ def _reset():
     conn.close()
 
 
+def _seed_user(user_id, org=SYSTEM_ORG, role="admin", status="active"):
+    """Semeia public.users — o PUT /pricing/config reconsulta o papel ATUAL no banco
+    (assert_active_admin, SEC-02), então um user_id sintético seria recusado com 403."""
+    conn = _admin_conn(); conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO public.users (id, email, password_hash, name, role, status, organization_id)"
+            " VALUES (%s,%s,'x','Test',%s,%s,%s)"
+            " ON CONFLICT (id) DO UPDATE SET role=EXCLUDED.role, status=EXCLUDED.status",
+            (user_id, f"u_{user_id}@t.c", role, status, org))
+    conn.close()
+
+
+def _admin(org=SYSTEM_ORG):
+    """user_id de um admin ATIVO e existente no banco."""
+    uid = str(uuid.uuid4())
+    _seed_user(uid, org=org, role="admin", status="active")
+    return uid
+
+
 def _event(user_id, role="admin", body=None, path=None, org_id=SYSTEM_ORG):
     return {"requestContext": {"authorizer": {"user_id": user_id, "email": "u@t.c",
                                               "role": role, "organization_id": org_id}},
@@ -69,11 +90,14 @@ def _clean():
 @pytest.fixture
 def seed_case_and_config():
     """Caso pending + parcelamento habilitado (6x, 3 sem juros, cartão até 6x)."""
-    admin = str(uuid.uuid4())
-    pr_h.update_pricing_config(_event(admin, body={"installment_config": {
+    admin = _admin()
+    # O retorno é conferido de propósito: um setup que falha calado (ex.: 403 do
+    # assert_active_admin) só apareceria 40 linhas adiante como "parcelas não ofertadas".
+    _cfg = pr_h.update_pricing_config(_event(admin, body={"installment_config": {
         "enabled": True, "max_parcelas": 6, "sem_juros_ate": 3, "juros_mensal_bps": 299,
         "valor_minimo_parcela_cents": 0, "primeiro_vencimento_dias": 30, "dia_vencimento": 10,
         "allowed_methods": {"cartao": {"enabled": True, "max_parcelas": 6}}}}), None)
+    assert _cfg["statusCode"] in (200, 201), f"setup do parcelamento falhou: {_cfg}"
     resp = req_h.create_request(_event(admin, body={
         "product_type": "analise_contratual",
         "title": "Contrato de teste de pagamento",
@@ -101,7 +125,7 @@ def _insert_case_without_request():
 
 
 def test_pagamento_case_inexistente_retorna_404():
-    admin = str(uuid.uuid4())
+    admin = _admin()
     resp = pay_h.create_case_payment(_event(admin, body={
         "parcelas": 1, "method": "pix", "idempotency_key": "missing-case"},
         path={"caseId": str(uuid.uuid4())}), None)
@@ -111,7 +135,7 @@ def test_pagamento_case_inexistente_retorna_404():
 
 
 def test_pagamento_case_sem_pedido_retorna_409():
-    admin = str(uuid.uuid4())
+    admin = _admin()
     case_id = _insert_case_without_request()
     resp = pay_h.create_case_payment(_event(admin, body={
         "parcelas": 1, "method": "pix", "idempotency_key": "sem-pedido"},
@@ -130,6 +154,35 @@ def test_pagamento_grava_plano_e_status(seed_case_and_config):
     assert data["payment_status"] == "simulated"
     assert data["installment_plan"]["parcelas"] == 3
     assert "raw" not in data["installment_plan"]["payment"]
+
+def test_pagamento_expected_total_divergente_retorna_409_sem_cobrar(seed_case_and_config):
+    # PRC-02: o total confirmado na tela (expected_total_cents) != o recalculado com a
+    # config vigente -> 409 pedindo revisão, e NENHUMA cobrança emitida (request segue
+    # pending, sem plano). Prova o consentimento por valor.
+    case_id, admin = seed_case_and_config
+    resp = pay_h.create_case_payment(_event(admin, body={
+        "parcelas": 1, "method": "cartao", "idempotency_key": "prc02-diverge",
+        "card_token": "tok_mock_x", "expected_total_cents": 9999},  # valor que a tela "viu", errado
+        path={"caseId": case_id}), None)
+    assert resp["statusCode"] == 409, resp
+    conn = _admin_conn()  # dbadmin bypassa RLS
+    with conn.cursor() as cur:
+        cur.execute("SELECT payment_status, installment_plan FROM public.requests WHERE case_id=%s",
+                    (case_id,))
+        ps, plan = cur.fetchone()
+    conn.close()
+    assert ps == "pending" and plan is None  # nada foi cobrado
+
+
+def test_pagamento_expected_total_correto_prossegue(seed_case_and_config):
+    # PRC-02 não-regressão: expected batendo com o recalculado (1x = total, sem juros) -> segue.
+    case_id, admin = seed_case_and_config
+    resp = pay_h.create_case_payment(_event(admin, body={
+        "parcelas": 1, "method": "cartao", "idempotency_key": "prc02-ok",
+        "card_token": "tok_mock_x", "expected_total_cents": 2900 + 7900},
+        path={"caseId": case_id}), None)
+    assert resp["statusCode"] in (200, 201), resp
+
 
 def test_pagamento_rejeita_parcela_nao_ofertada(seed_case_and_config):
     case_id, admin = seed_case_and_config
@@ -270,6 +323,7 @@ def test_viewer_nao_paga_403(seed_case_and_config):
 def test_analyst_pode_pagar(seed_case_and_config):
     case_id, _admin = seed_case_and_config
     analyst = str(uuid.uuid4())
+    _seed_user(analyst, role="analyst", status="active")  # writer ativo no banco (SEC-01)
     resp = pay_h.create_case_payment(_event(analyst, role="analyst", body={
         "parcelas": 1, "method": "cartao", "idempotency_key": "an-1",
         "card_token": "tok_mock_an"}, path={"caseId": case_id}), None)
@@ -304,3 +358,88 @@ def test_processing_recente_bloqueia_concorrencia(seed_case_and_config):
         "parcelas": 1, "method": "cartao", "idempotency_key": "rec-2",
         "card_token": "tok_mock_rec2"}, path={"caseId": case_id}), None)
     assert resp["statusCode"] == 409, resp
+
+
+# ── SEC-10: reembolso não conta como pago (gate bloqueia novas operações) ──────
+
+def _set_payment_status(case_id, status):
+    conn = _admin_conn(); conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute("UPDATE public.requests SET payment_status=%s WHERE case_id=%s",
+                    (status, case_id))
+    conn.close()
+
+
+def test_sec10_reembolso_bloqueia_triagem_e_relatorio(seed_case_and_config, monkeypatch):
+    case_id, admin = seed_case_and_config
+    monkeypatch.setenv("PAYMENT_GATE", "hard")
+    _set_payment_status(case_id, "refunded")  # allowlist _PAID_STATUSES não inclui refunded
+    assert tri_h.run_triage(_event(admin, path={"caseId": case_id}), None)["statusCode"] == 402
+    assert rep_h.generate_case_report(
+        _event(admin, path={"caseId": case_id}), None)["statusCode"] == 402
+    # contraprova: um estado pago (simulated) libera a triagem
+    _set_payment_status(case_id, "simulated")
+    assert tri_h.run_triage(_event(admin, path={"caseId": case_id}), None)["statusCode"] == 200
+
+
+# ── _PAID_STATUSES env-sensível: 'simulated' (mock) não libera em produção ────
+
+def test_gate_prod_simulated_nao_libera(seed_case_and_config, monkeypatch):
+    # Em PRODUÇÃO, uma linha 'simulated' (resíduo de dados migrados de dev) NÃO pode
+    # destravar trabalho pago — só 'paid' (dinheiro real). Defesa em profundidade
+    # (mesmo espírito do PRC-01/A2: mock nunca tem efeito de dinheiro real fora de dev).
+    case_id, admin = seed_case_and_config
+    monkeypatch.setenv("PAYMENT_GATE", "hard")
+    monkeypatch.setenv("ENVIRONMENT", "prod")
+    _set_payment_status(case_id, "simulated")
+    assert tri_h.run_triage(_event(admin, path={"caseId": case_id}), None)["statusCode"] == 402
+    # contraprova: pagamento REAL libera
+    _set_payment_status(case_id, "paid")
+    assert tri_h.run_triage(_event(admin, path={"caseId": case_id}), None)["statusCode"] == 200
+
+
+def test_gate_dev_simulated_ainda_libera(seed_case_and_config, monkeypatch):
+    # Não-regressão: em dev/test (ENVIRONMENT local), 'simulated' AINDA libera o gate
+    # hard — o mock precisa exercitar o fluxo pós-pagamento sem um gateway real.
+    case_id, admin = seed_case_and_config
+    monkeypatch.setenv("PAYMENT_GATE", "hard")
+    monkeypatch.setenv("ENVIRONMENT", "local")
+    _set_payment_status(case_id, "simulated")
+    assert tri_h.run_triage(_event(admin, path={"caseId": case_id}), None)["statusCode"] == 200
+
+
+# ── M4: rollback/finalize escopados à própria reserva (anti-clobber) ──────────
+
+def test_m4_rollback_nao_reverte_reserva_de_concorrente(seed_case_and_config):
+    """Uma tentativa A (reserved_at antigo) NÃO pode reverter/sequestrar a reserva
+    RECÉM-criada por um concorrente B — o guard `AND updated_at = reserved_at` casa
+    apenas a própria reserva."""
+    case_id, _admin = seed_case_and_config
+    conn = _admin_conn(); conn.autocommit = True
+    with conn.cursor() as cur:
+        # A reservou (órfã, 10 min atrás) -> token t_a
+        cur.execute("UPDATE public.requests SET payment_status='processing',"
+                    " updated_at = now() - interval '10 minutes' WHERE case_id=%s"
+                    " RETURNING updated_at", (case_id,))
+        t_a = cur.fetchone()[0]
+        # B reclama a órfã -> nova reserva com token t_b
+        cur.execute("UPDATE public.requests SET payment_status='processing', updated_at=now()"
+                    " WHERE case_id=%s AND payment_status='processing'"
+                    " AND updated_at < now() - interval '5 minutes' RETURNING updated_at", (case_id,))
+        t_b = cur.fetchone()[0]
+        assert t_b != t_a
+        # A (tardio) tenta o rollback com o token ANTIGO -> não toca a reserva de B
+        cur.execute("UPDATE public.requests SET payment_status='pending', updated_at=now()"
+                    " WHERE case_id=%s AND payment_status='processing' AND updated_at=%s",
+                    (case_id, t_a))
+        assert cur.rowcount == 0  # guard impediu o clobber
+        cur.execute("SELECT payment_status, updated_at FROM public.requests WHERE case_id=%s",
+                    (case_id,))
+        st, ua = cur.fetchone()
+        assert st == "processing" and ua == t_b  # reserva de B intacta
+        # contraprova: com o token correto (t_b), o rollback reverte a própria reserva
+        cur.execute("UPDATE public.requests SET payment_status='pending', updated_at=now()"
+                    " WHERE case_id=%s AND payment_status='processing' AND updated_at=%s",
+                    (case_id, t_b))
+        assert cur.rowcount == 1
+    conn.close()
