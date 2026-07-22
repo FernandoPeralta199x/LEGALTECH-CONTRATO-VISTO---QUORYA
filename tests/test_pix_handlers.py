@@ -30,7 +30,24 @@ def _reset():
     conn.close()
 
 
+def _seed_user(user_id, role, org_id):
+    """Semeia o usuário do token com papel/status atuais.
+
+    As rotas de escrita revalidam o caller no banco; um UUID presente apenas no
+    evento deve ser recusado com 403 e não representa uma sessão válida.
+    """
+    conn = _admin_conn(); conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO public.users (id, email, password_hash, name, role, status,"
+            " organization_id) VALUES (%s,%s,'x','Test',%s,'active',%s)"
+            " ON CONFLICT (id) DO UPDATE SET role=EXCLUDED.role, status='active'",
+            (user_id, f"u_{user_id}@t.c", role, org_id))
+    conn.close()
+
+
 def _event(user_id, role="admin", body=None, path=None, org_id=SYSTEM_ORG):
+    _seed_user(user_id, role, org_id)
     return {"requestContext": {"authorizer": {"user_id": user_id, "email": "u@t.c",
                                               "role": role, "organization_id": org_id}},
             "body": json.dumps(body) if body is not None else None,
