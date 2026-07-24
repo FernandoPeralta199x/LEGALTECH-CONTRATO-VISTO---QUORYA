@@ -333,6 +333,18 @@ functions:
           cors: true
           authorizer: ${self:custom.jwtAuthorizer}
 
+  # TIER 1 - Financeiro / Recebíveis (vendas pendentes = a receber; vencimento derivado do prazo da org)
+  getFinancialReceivables:
+    handler: src/handlers/financial_receivables.list_receivables
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: financial/receivables
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
   # TIER 1 - Financeiro / Gastos com APIs (custos de APIs externas por organização)
   getFinancialApiCosts:
     handler: src/handlers/financial_api_costs.list_api_costs
