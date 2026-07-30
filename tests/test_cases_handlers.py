@@ -78,7 +78,7 @@ def _event(user_id, role="analyst", body=None, path=None, query=None, org_id=SYS
     _seed_writer(user_id, role, org_id)
     return {
         "requestContext": {
-            "authorizer": {"user_id": user_id, "email": "u@t.c", "role": role, "organization_id": org_id}
+            "authorizer": {"user_id": user_id, "email": "u@t.c", "role": role, "perfil": "administrador", "organization_id": org_id}
         },
         "body": json.dumps(body) if body is not None else None,
         "pathParameters": path or {},
@@ -91,7 +91,7 @@ def _event_only(user_id, role="analyst", body=None, path=None, org_id=SYSTEM_ORG
     banco já foi alterado por _revoga (senão o _seed reativaria o user)."""
     return {
         "requestContext": {
-            "authorizer": {"user_id": user_id, "email": "u@t.c", "role": role, "organization_id": org_id}
+            "authorizer": {"user_id": user_id, "email": "u@t.c", "role": role, "perfil": "administrador", "organization_id": org_id}
         },
         "body": json.dumps(body) if body is not None else None,
         "pathParameters": path or {},

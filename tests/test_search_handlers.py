@@ -64,7 +64,7 @@ def _event(user_id, role="analyst", body=None, org_id=SYSTEM_ORG):
     # do SEC-01 recusaria antes de exercitar o comportamento sob teste — ex.: upload/case).
     _seed_writer(user_id, role, org_id)
     return {
-        "requestContext": {"authorizer": {"user_id": user_id, "email": "u@t.c", "role": role, "organization_id": org_id}},
+        "requestContext": {"authorizer": {"user_id": user_id, "email": "u@t.c", "role": role, "perfil": "administrador", "organization_id": org_id}},
         "body": json.dumps(body) if body is not None else None,
         "pathParameters": {}, "queryStringParameters": {},
     }

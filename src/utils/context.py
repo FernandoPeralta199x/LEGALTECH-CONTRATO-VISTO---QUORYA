@@ -14,6 +14,55 @@ VALID_ROLES = {"admin", "analyst", "viewer"}
 # Papéis autorizados a escrever (create/update/delete). `viewer` é somente leitura.
 WRITE_ROLES = {"admin", "analyst"}
 
+# ── Perfis de acesso (eixo ORTOGONAL ao role; ver docs/PERFIS_ACESSO_SPEC.md) ──────
+# `role` decide ESCRITA; `perfil` decide QUAIS TELAS; `organization_id` decide o
+# ISOLAMENTO de dados (RLS). Um cliente externo é uma organização própria.
+VALID_PERFIS = {"administrador", "empresarial", "cliente_comum"}
+
+# Mapa perfil -> telas/rotas permitidas. Fonte ÚNICA da verdade: a sidebar do frontend
+# apenas espelha isto (a autorização é server-side, nunca só na UI). Analista (fila
+# interna) e Clientes (roster da firma) são ferramentas de OPERADOR — fora do Empresarial.
+PERFIL_TELAS = {
+    "administrador": frozenset({
+        "dashboard", "novo_pedido", "casos", "documentos", "analista",
+        "relatorios", "clientes", "administracao", "financeiro", "configuracoes",
+    }),
+    "empresarial": frozenset({
+        "dashboard", "novo_pedido", "casos", "documentos", "relatorios", "configuracoes",
+    }),
+    "cliente_comum": frozenset({
+        "novo_pedido", "casos", "relatorios", "configuracoes",
+    }),
+}
+
+# Modelo B (PERFIS_ACESSO_SPEC §8): abas que o ADMINISTRADOR pode LIBERAR por usuário
+# (admin-only). As telas efetivas = base do perfil ∪ telas_extra. Administração/
+# Financeiro/Analista/Clientes NUNCA são liberáveis (ferramentas de operador — ficam
+# só para o perfil administrador). Evoluível sem migration (não é CHECK no banco).
+LIBERATABLE_TELAS = frozenset({"dashboard", "documentos"})
+
+
+def clean_telas_extra(raw):
+    """Normaliza ``telas_extra`` (do banco/token/API) para um ``frozenset`` ⊆
+    LIBERATABLE. Aceita lista (banco/local_server) ou string ``'a,b'`` (contexto do
+    API Gateway, que serializa tudo como string). Descarta silenciosamente telas
+    desconhecidas ou não-liberáveis (fail-safe: nunca amplia acesso indevidamente)."""
+    if not raw:
+        return frozenset()
+    items = raw.split(",") if isinstance(raw, str) else raw
+    return frozenset(
+        tela for tela in (str(item).strip() for item in items)
+        if tela in LIBERATABLE_TELAS
+    )
+
+
+def effective_telas(perfil, telas_extra=None):
+    """Telas efetivas do usuário = base do perfil (PERFIL_TELAS) ∪ extras liberadas
+    (já limitadas às liberáveis). Perfil ausente/None => só as extras (fail-closed no
+    que é sensível, pois administracao/financeiro nunca estão nas liberáveis)."""
+    base = PERFIL_TELAS.get(perfil) or frozenset()
+    return base | clean_telas_extra(telas_extra)
+
 # AUTH-02: iat (epoch seg) do token do request corrente. Setado 1x por request em
 # require_user (ANTES do handler) e lido em load_active_caller — evita threadar o iat
 # por ~60 call sites. Escopo por request: require_user sempre re-seta o valor da
@@ -55,8 +104,14 @@ def get_user_from_event(event):
         role = ctx["role"]
         if role not in VALID_ROLES:
             return None
+        # perfil é opcional no token (retrocompat com tokens legados); ausente ou
+        # inválido -> None, que require_perfil trata como negado (fail-closed).
+        perfil = ctx.get("perfil")
+        if perfil not in VALID_PERFIS:
+            perfil = None
         return {"user_id": user_id, "organization_id": organization_id,
-                "email": ctx.get("email", ""), "role": role,
+                "email": ctx.get("email", ""), "role": role, "perfil": perfil,
+                "telas_extra": clean_telas_extra(ctx.get("telas_extra")),  # Modelo B
                 "token_iat": _parse_iat(ctx.get("iat"))}  # AUTH-02
     except (KeyError, ValueError, TypeError):
         return None
@@ -107,6 +162,54 @@ def require_role(*allowed_roles):
             user = event.get("user") or {}
             if user.get("role") not in allowed_roles:
                 return error_response(403, "Acesso negado")
+            return handler_func(event, context)
+
+        return wrapper
+
+    return decorator
+
+
+def require_perfil(*allowed_perfis):
+    """Decorator: exige que ``event['user']['perfil']`` esteja em ``allowed_perfis``.
+
+    Eixo ORTOGONAL ao role: gate por TELA/rota, não por permissão de escrita. Deve ser
+    aplicado ABAIXO de ``require_user`` (que popula ``event['user']``). **Fail-closed**:
+    perfil ausente/None (token legado) ou fora da lista => 403. Ex.: telas só-firma
+    usam ``@require_perfil("administrador")``.
+
+    Segurança: NÃO confiar só no ``role`` para telas de operador — um usuário externo
+    (empresarial) pode ser 'admin' da PRÓPRIA org; o perfil é que separa firma de cliente.
+    """
+
+    def decorator(handler_func):
+        def wrapper(event, context):
+            user = event.get("user") or {}
+            if user.get("perfil") not in allowed_perfis:
+                return error_response(403, "Acesso negado para este perfil")
+            return handler_func(event, context)
+
+        return wrapper
+
+    return decorator
+
+
+def require_tela(*required_telas):
+    """Decorator: exige que a(s) tela(s) estejam nas TELAS EFETIVAS do usuário —
+    base do perfil ∪ extras liberadas pelo admin (Modelo B). **Fail-closed**. Deve ser
+    aplicado ABAIXO de ``require_user``. Ex.: ``@require_tela("documentos")``.
+
+    Diferente de ``require_perfil`` (gate pelo perfil inteiro), gateia por TELA: permite
+    ao admin liberar abas específicas a um ``cliente_comum`` sem trocar seu perfil. Telas
+    só-firma (``administracao``/``financeiro``) continuam com ``require_perfil`` — elas
+    NÃO estão em LIBERATABLE_TELAS, então nunca entram nas telas efetivas de um cliente.
+    """
+
+    def decorator(handler_func):
+        def wrapper(event, context):
+            user = event.get("user") or {}
+            allowed = effective_telas(user.get("perfil"), user.get("telas_extra"))
+            if not all(tela in allowed for tela in required_telas):
+                return error_response(403, "Acesso negado para esta tela")
             return handler_func(event, context)
 
         return wrapper

@@ -31,7 +31,7 @@ from src.services.pricing.estimate import (
 from src.services.pricing.installments import InstallmentConfig, compute_installment_options
 from src.services.pricing.org_config import read_installment_config, read_module_overrides
 from src.services.case_lifecycle import cases_limit_status
-from src.utils.context import (CallerRevoked, assert_active_admin, require_role,
+from src.utils.context import (CallerRevoked, assert_active_admin, require_perfil, require_role,
                                require_user)
 from src.utils.helpers import error_response, success_response
 from src.utils.lambda_io import fmt_validation_error as _fmt, parse_json_body as _parse_body
@@ -155,6 +155,7 @@ def get_pricing_config(event, context):
 
 @require_user
 @require_role("admin")
+@require_perfil("administrador")
 def update_pricing_config(event, context):
     """Atualiza (parcialmente) a config de pricing da org. Admin only. Bump de version."""
     user = event["user"]

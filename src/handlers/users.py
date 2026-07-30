@@ -30,7 +30,9 @@ from src.utils.auth import TOKEN_TTL_SECONDS, create_access_token
 from src.utils.context import (
     CallerRevoked,
     assert_active_admin,
+    effective_telas,
     load_active_caller,
+    require_perfil,
     require_role,
     require_user,
 )
@@ -89,7 +91,10 @@ def _is_last_active_admin(cur, target_id, organization_id) -> bool:
 
 # ── rotas públicas ───────────────────────────────────────────────────────────
 def create_user(event, context):
-    """Signup PÚBLICO: cria uma organização nova e o usuário como admin dela."""
+    """Signup PÚBLICO: cria uma organização INDIVIDUAL nova e o usuário como
+    `cliente_comum` (Modelo B — todo cadastro público nasce cliente comum, org solo;
+    admin/empresarial são criados manualmente). `role='admin'` da PRÓPRIA org (ele
+    escreve os próprios pedidos); o `perfil` é que restringe as telas."""
     body, err = _parse_body(event)
     if err:
         return err
@@ -106,13 +111,14 @@ def create_user(event, context):
             if cur.fetchone():
                 return error_response(409, "Email já cadastrado")
             cur.execute(
-                "INSERT INTO public.organizations (id, name) VALUES (%s, %s)",
+                "INSERT INTO public.organizations (id, name, type)"
+                " VALUES (%s, %s, 'individual')",
                 (org_id, f"Org de {data.name}"),
             )
             cur.execute(
                 "INSERT INTO public.users"
-                " (id, email, password_hash, name, role, status, organization_id)"
-                " VALUES (%s, %s, %s, %s, 'admin', 'active', %s)",
+                " (id, email, password_hash, name, role, status, organization_id, perfil)"
+                " VALUES (%s, %s, %s, %s, 'admin', 'active', %s, 'cliente_comum')",
                 (user_id, data.email, hash_password(data.password), data.name, org_id),
             )
     except psycopg2.errors.UniqueViolation:
@@ -124,10 +130,11 @@ def create_user(event, context):
                                  "pgcode": getattr(e, "pgcode", None)}), exc_info=True)
         return error_response(500, "Erro ao criar usuário")
 
-    logger.info(json.dumps({"event": "USER_CREATED", "user_id": user_id, "role": "admin"}))
+    logger.info(json.dumps({"event": "USER_CREATED", "user_id": user_id,
+                            "role": "admin", "perfil": "cliente_comum"}))
     return success_response(201, "Usuário criado com sucesso",
                             {"user_id": user_id, "role": "admin",
-                             "organization_id": org_id})
+                             "perfil": "cliente_comum", "organization_id": org_id})
 
 
 def login(event, context):
@@ -143,8 +150,8 @@ def login(event, context):
     try:
         with simple_tx() as cur:
             cur.execute(
-                "SELECT id, email, name, password_hash, role, organization_id"
-                " FROM public.users WHERE email = %s AND status = 'active'",
+                "SELECT id, email, name, password_hash, role, organization_id, perfil,"
+                " telas_extra FROM public.users WHERE email = %s AND status = 'active'",
                 (data.email,),
             )
             user = cur.fetchone()
@@ -163,6 +170,8 @@ def login(event, context):
     token = create_access_token({  # sem email no token (menos PII)
         "user_id": str(user["id"]), "role": user["role"],
         "organization_id": str(user["organization_id"]),
+        "perfil": user["perfil"],  # perfil de acesso (telas) — eixo separado do role
+        "telas_extra": list(user["telas_extra"] or []),  # Modelo B: abas liberadas
         # claims exigidos pelo frontend (sessão local): sub + token_use
         "sub": str(user["id"]), "token_use": "dev",
     })
@@ -177,6 +186,8 @@ def login(event, context):
             "email": user["email"],
             "name": user["name"],
             "role": user["role"],
+            "perfil": user["perfil"],
+            "telas": sorted(effective_telas(user["perfil"], user["telas_extra"])),
             "organization_id": str(user["organization_id"]),
         },
     })
@@ -189,8 +200,8 @@ def me(event, context):
     try:
         with simple_tx() as cur:
             cur.execute(
-                "SELECT id, email, name, role, organization_id FROM public.users"
-                " WHERE id = %s AND status = 'active'",
+                "SELECT id, email, name, role, organization_id, perfil, telas_extra"
+                " FROM public.users WHERE id = %s AND status = 'active'",
                 (user["user_id"],),
             )
             row = cur.fetchone()
@@ -204,6 +215,8 @@ def me(event, context):
         "email": row["email"],
         "name": row["name"],
         "role": row["role"],
+        "perfil": row["perfil"],
+        "telas": sorted(effective_telas(row["perfil"], row["telas_extra"])),
         "organization_id": str(row["organization_id"]),
     })
 
@@ -339,6 +352,7 @@ def get_user(event, context):
 
 @require_user
 @require_role("admin")
+@require_perfil("administrador")
 def list_users(event, context):
     params = event.get("queryStringParameters") or {}
     pag, perr = _paginate(params)
@@ -440,6 +454,7 @@ def update_user(event, context):
 
 @require_user
 @require_role("admin")
+@require_perfil("administrador")
 def delete_user(event, context):
     user = event["user"]
     target = _valid_uuid((event.get("pathParameters") or {}).get("userId"))

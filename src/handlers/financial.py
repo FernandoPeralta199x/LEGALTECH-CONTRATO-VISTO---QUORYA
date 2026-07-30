@@ -10,7 +10,7 @@ import logging
 from src.services.database import tenant_tx
 from src.services.financial.overview import compute_overview
 from src.services.financial.period import resolve_range
-from src.utils.context import (CallerRevoked, assert_active_admin, require_role,
+from src.utils.context import (CallerRevoked, assert_active_admin, require_perfil, require_role,
                                require_user)
 from src.utils.helpers import error_response, success_response
 from src.utils.safety import enforce_production_safety
@@ -21,6 +21,7 @@ logger = logging.getLogger()
 
 @require_user
 @require_role("admin")
+@require_perfil("administrador")
 def get_overview(event, context):
     """KPIs financeiros agregados da organização autenticada, no período."""
     user = event["user"]

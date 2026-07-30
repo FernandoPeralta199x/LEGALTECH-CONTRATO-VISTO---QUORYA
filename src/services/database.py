@@ -113,6 +113,42 @@ def tenant_tx(user_id, role, organization_id):
 
 
 @contextmanager
+def operator_tx(user_id, role, target_org_id, endpoint=None):
+    """Transação de "operar como org": a firma (operador) lê/processa os dados de
+    uma org-CLIENTE, escopada pela RLS ao ``target_org_id`` — nunca um bypass.
+
+    Igual a ``tenant_tx``, mas com ``app.organization_id = target_org_id`` (a org
+    ALVO) e, como PRIMEIRA instrução, a função SECURITY DEFINER
+    ``audit.begin_operator_impersonation`` (migration 029), que:
+      - exige que ``user_id`` seja admin ATIVO de uma org ``operador`` — a autoridade
+        vem do BANCO, não do claim ``role``/``perfil`` (levanta 42501 -> 403);
+      - valida que o alvo é org-cliente ``empresarial``/``individual`` (senão 22023 -> 400);
+      - grava ``OPERATOR_IMPERSONATION`` na trilha da org-alvo (transparência LGPD).
+    Falha em qualquer etapa => rollback: sem acesso sem auditoria. O cursor cedido
+    enxerga os dados da org-alvo (RLS). ``user_id``/``role`` seguem os do operador
+    (escrita e auditoria atribuídas a ele)."""
+    conn = get_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute(
+            "SELECT set_config('app.user_id', %s, true),"
+            "       set_config('app.user_role', %s, true),"
+            "       set_config('app.organization_id', %s, true)",
+            (str(user_id), str(role), str(target_org_id)),
+        )
+        # Gate + auditoria ANTES de qualquer leitura do alvo (raise => rollback).
+        cur.execute("SELECT audit.begin_operator_impersonation(%s, %s)",
+                    (str(target_org_id), endpoint))
+        yield cur
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+
+
+@contextmanager
 def signup_tx(organization_id, role="admin"):
     """Transação de onboarding: seta app.organization_id ANTES dos INSERTs para
     satisfazer a RLS de ``organizations`` (id = app.organization_id). ``users``

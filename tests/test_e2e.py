@@ -58,8 +58,8 @@ def _seed_user(email, password, role="viewer", org_id=ORG_ID):
     with conn.cursor() as cur:
         cur.execute(
             "INSERT INTO public.users"
-            " (id, email, password_hash, name, role, status, organization_id)"
-            " VALUES (%s, %s, %s, 'User', %s, 'active', %s)",
+            " (id, email, password_hash, name, role, status, organization_id, perfil)"
+            " VALUES (%s, %s, %s, 'User', %s, 'active', %s, 'administrador')",
             (uid, email, users_h.hash_password(password), role, org_id))
     conn.close()
     return uid
