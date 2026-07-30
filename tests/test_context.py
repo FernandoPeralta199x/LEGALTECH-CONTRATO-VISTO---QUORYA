@@ -17,7 +17,8 @@ def test_valid_user_is_canonicalized():
                 "organization_id": ORG})
     )
     assert user == {"user_id": str(uid), "organization_id": ORG,
-                    "email": "a@b.c", "role": "analyst", "token_iat": None}
+                    "email": "a@b.c", "role": "analyst", "perfil": None,
+                    "telas_extra": frozenset(), "token_iat": None}
 
 
 def test_invalid_uuid_rejected():
@@ -47,7 +48,7 @@ def test_flat_authorizer_shape_is_read():
         "organization_id": ORG}}}
     assert get_user_from_event(event) == {
         "user_id": str(uid), "organization_id": ORG, "email": "a@b.c", "role": "viewer",
-        "token_iat": None}
+        "perfil": None, "telas_extra": frozenset(), "token_iat": None}
 
 
 def test_token_iat_parsed_from_context_int_and_str():

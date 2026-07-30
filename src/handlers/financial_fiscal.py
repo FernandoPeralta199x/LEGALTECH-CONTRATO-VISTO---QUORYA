@@ -22,7 +22,7 @@ from src.schemas.financial_schemas import (CreateFiscalDocumentRequest,
 from src.services.database import tenant_tx
 from src.services.financial import fiscal_documents as fdoc
 from src.services.financial import taxes as tax
-from src.utils.context import (CallerRevoked, assert_active_admin, require_role,
+from src.utils.context import (CallerRevoked, assert_active_admin, require_perfil, require_role,
                                require_user)
 from src.utils.helpers import error_response, success_response
 from src.utils.lambda_io import (fmt_validation_error, parse_json_body,
@@ -58,6 +58,7 @@ def _parse_dt(value):
 # ── Tributos ────────────────────────────────────────────────────────────────
 @require_user
 @require_role("admin")
+@require_perfil("administrador")
 def list_taxes(event, context):
     user = event["user"]
     params = event.get("queryStringParameters") or {}
@@ -100,6 +101,7 @@ def list_taxes(event, context):
 
 @require_user
 @require_role("admin")
+@require_perfil("administrador")
 def create_tax(event, context):
     user = event["user"]
     body, err = parse_json_body(event)
@@ -137,6 +139,7 @@ def create_tax(event, context):
 # ── Notas fiscais ─────────────────────────────────────────────────────────────
 @require_user
 @require_role("admin")
+@require_perfil("administrador")
 def list_fiscal_documents(event, context):
     user = event["user"]
     params = event.get("queryStringParameters") or {}
@@ -179,6 +182,7 @@ def list_fiscal_documents(event, context):
 
 @require_user
 @require_role("admin")
+@require_perfil("administrador")
 def create_fiscal_document(event, context):
     user = event["user"]
     body, err = parse_json_body(event)

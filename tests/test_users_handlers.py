@@ -50,7 +50,7 @@ def _seed_user(email, password, role="viewer", status="active"):
 def _event(user_id, role="viewer", body=None, path=None, org_id=SYSTEM_ORG_ID):
     return {
         "requestContext": {"authorizer": {
-            "user_id": user_id, "email": "u@t.c", "role": role, "organization_id": org_id}},
+            "user_id": user_id, "email": "u@t.c", "role": role, "perfil": "administrador", "organization_id": org_id}},
         "body": json.dumps(body) if body is not None else None,
         "pathParameters": path or {},
         "queryStringParameters": {},

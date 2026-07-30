@@ -13,7 +13,7 @@ from src.services.database import tenant_tx
 from src.services.financial import receivables as rec_svc
 from src.services.financial.period import resolve_range
 from src.services.pricing.org_config import read_installment_config
-from src.utils.context import (CallerRevoked, assert_active_admin, require_role,
+from src.utils.context import (CallerRevoked, assert_active_admin, require_perfil, require_role,
                                require_user)
 from src.utils.helpers import error_response, success_response
 from src.utils.lambda_io import parse_pagination
@@ -25,6 +25,7 @@ logger = logging.getLogger()
 
 @require_user
 @require_role("admin")
+@require_perfil("administrador")
 def list_receivables(event, context):
     """Recebíveis do período (paginados), com KPIs e busca por venda/cliente."""
     user = event["user"]

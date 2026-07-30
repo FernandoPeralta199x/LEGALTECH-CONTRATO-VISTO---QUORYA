@@ -87,6 +87,12 @@ def authorize(event, context):
                 'user_id': payload['user_id'],
                 'role': payload['role'],
                 'organization_id': organization_id,
+                # perfil de acesso (telas). Opcional em tokens legados -> get_user_from_event
+                # trata ausente/None como negado (fail-closed em require_perfil).
+                'perfil': payload.get('perfil'),
+                # Modelo B: abas liberadas por usuário. Lista no JWT; serializada como
+                # string 'a,b' aqui pois o API Gateway exige valores de context string.
+                'telas_extra': ','.join(payload.get('telas_extra') or []),
                 # AUTH-02: propaga o iat (epoch) p/ load_active_caller revogar tokens
                 # anteriores ao último reset de senha. API Gateway serializa como string.
                 'iat': payload.get('iat')

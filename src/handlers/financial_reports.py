@@ -16,7 +16,7 @@ from src.services.financial.fiscal_documents import (compute_fiscal_documents,
                                                      fiscal_by_status)
 from src.services.financial.overview import compute_overview
 from src.services.financial.taxes import compute_taxes, taxes_by_type
-from src.utils.context import (CallerRevoked, assert_active_admin, require_role,
+from src.utils.context import (CallerRevoked, assert_active_admin, require_perfil, require_role,
                                require_user)
 from src.utils.helpers import error_response, success_response
 from src.utils.safety import enforce_production_safety
@@ -39,6 +39,7 @@ _REPORT_DISCLAIMERS = [
 
 @require_user
 @require_role("admin")
+@require_perfil("administrador")
 def get_executive_report(event, context):
     """DTO consolidado do relatório executivo da organização, no período."""
     user = event["user"]

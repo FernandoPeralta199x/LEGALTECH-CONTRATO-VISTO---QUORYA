@@ -8,7 +8,7 @@ import json
 import logging
 
 from src.services.database import tenant_tx
-from src.utils.context import require_user
+from src.utils.context import require_tela, require_user
 from src.utils.helpers import error_response, success_response
 from src.utils.safety import enforce_production_safety
 
@@ -17,8 +17,11 @@ logger = logging.getLogger()
 
 
 @require_user
+@require_tela("dashboard")
 def get_stats(event, context):
-    """Métricas do dashboard da organização autenticada."""
+    """Métricas do dashboard da organização autenticada. Modelo B: a tela Dashboard
+    não é base do cliente_comum — só administrador/empresarial ou quem teve a aba
+    liberada; require_tela reflete isso server-side (os dados já são RLS por org)."""
     user = event["user"]
     try:
         with tenant_tx(user["user_id"], user["role"], user["organization_id"]) as cur:

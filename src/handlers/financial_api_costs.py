@@ -17,7 +17,7 @@ from src.services.financial.period import BR_TZ, resolve_range
 from src.schemas.financial_schemas import CreateApiCostRequest
 from src.services.database import tenant_tx
 from src.services.financial import api_costs as svc
-from src.utils.context import (CallerRevoked, assert_active_admin, require_role,
+from src.utils.context import (CallerRevoked, assert_active_admin, require_perfil, require_role,
                                require_user)
 from src.utils.helpers import error_response, success_response
 from src.utils.lambda_io import (fmt_validation_error, parse_json_body,
@@ -32,6 +32,7 @@ _VALID_STATUS = {"previsto", "processado"}
 
 @require_user
 @require_role("admin")
+@require_perfil("administrador")
 def list_api_costs(event, context):
     """Lista + agrega custos de API da organização, no período."""
     user = event["user"]
@@ -87,6 +88,7 @@ def list_api_costs(event, context):
 
 @require_user
 @require_role("admin")
+@require_perfil("administrador")
 def create_api_cost(event, context):
     """Registra um custo de API manual (admin-only, re-check de revogação no banco)."""
     user = event["user"]

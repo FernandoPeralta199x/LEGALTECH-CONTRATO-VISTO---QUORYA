@@ -149,6 +149,51 @@ functions:
           cors: true
           authorizer: ${self:custom.jwtAuthorizer}
 
+  # ── "Operar como org" (Fase 2): firma processa casos de orgs-cliente (auditado) ──
+  listClientOrgs:
+    handler: src/handlers/organizations.list_client_orgs
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: organizations/clients
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  listOrgCases:
+    handler: src/handlers/organizations.list_org_cases
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: organizations/{orgId}/cases
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  listOrgUsers:
+    handler: src/handlers/organizations.list_org_users
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: organizations/{orgId}/users
+          method: get
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
+  updateOrgUserTelas:
+    handler: src/handlers/organizations.update_org_user_telas
+    timeout: 10
+    memorySize: 256
+    events:
+      - http:
+          path: organizations/{orgId}/users/{userId}/telas
+          method: patch
+          cors: true
+          authorizer: ${self:custom.jwtAuthorizer}
+
   # TIER 1 - Requests (wizard "Novo Pedido" -> orquestra case/partes/doc/triagem)
   createRequest:
     handler: src/handlers/requests.create_request

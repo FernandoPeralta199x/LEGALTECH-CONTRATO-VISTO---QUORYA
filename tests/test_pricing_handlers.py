@@ -53,7 +53,7 @@ def _admin(org=SYSTEM_ORG):
 def _event(user_id, role="admin", body=None, path=None, org_id=SYSTEM_ORG):
     return {
         "requestContext": {"authorizer": {"user_id": user_id, "email": "u@t.c",
-                                          "role": role, "organization_id": org_id}},
+                                          "role": role, "perfil": "administrador", "organization_id": org_id}},
         "body": json.dumps(body) if body is not None else None,
         "pathParameters": path or {},
         "queryStringParameters": {},

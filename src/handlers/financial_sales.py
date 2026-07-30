@@ -10,7 +10,7 @@ import logging
 from src.services.database import tenant_tx
 from src.services.financial import sales as sales_svc
 from src.services.financial.period import resolve_range
-from src.utils.context import (CallerRevoked, assert_active_admin, require_role,
+from src.utils.context import (CallerRevoked, assert_active_admin, require_perfil, require_role,
                                require_user)
 from src.utils.helpers import error_response, success_response
 from src.utils.lambda_io import parse_pagination
@@ -22,6 +22,7 @@ logger = logging.getLogger()
 
 @require_user
 @require_role("admin")
+@require_perfil("administrador")
 def list_sales(event, context):
     """Vendas do período (paginadas), com KPIs do conjunto e busca por código/serviço/cliente."""
     user = event["user"]

@@ -59,7 +59,7 @@ def _event_same(user_id, role, body=None, path=None, org_id=SYSTEM_ORG):
     depois que o banco já foi alterado por _seed_user_status."""
     return {
         "requestContext": {"authorizer": {"user_id": user_id, "email": "u@t.c",
-                                          "role": role, "organization_id": org_id}},
+                                          "role": role, "perfil": "administrador", "organization_id": org_id}},
         "body": json.dumps(body) if body is not None else None,
         "pathParameters": path or {},
         "queryStringParameters": {},
@@ -73,7 +73,7 @@ def _event(role="analyst", body=None, path=None, query=None, org_id=SYSTEM_ORG):
     _seed_user(uid, role, org_id)
     return {
         "requestContext": {"authorizer": {"user_id": uid,
-                                          "email": "u@t.c", "role": role, "organization_id": org_id}},
+                                          "email": "u@t.c", "role": role, "perfil": "administrador", "organization_id": org_id}},
         "body": json.dumps(body) if body is not None else None,
         "pathParameters": path or {},
         "queryStringParameters": query or {},
